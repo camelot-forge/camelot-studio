@@ -3,11 +3,11 @@
 An **open-source** tool suite for editing DAoC client content (models,
 textures, animations) — built for the private-server community.
 
-> **Status: M0 → M0.5 delivered** — core v0.1: NIF/KFA reading, glTF export
-> (bind pose), write round-trip, batch validation, and a **100% legacy
-> reader** for the NetImmerse 4.x meshed files pyffi cannot parse
-> (5087/5089 client NIFs). State: `docs/status.md`. Format reference:
-> `docs/formats.md`.
+> **Status: M0 → M1 delivered** — core v0.1 (NIF/KFA reading, glTF export,
+> round-trip, batch validation, a **100% legacy reader** for NetImmerse 4.x),
+> MPAK reader/writer, canonical bone index table (0..53), and a **SvelteKit
+> + three.js figure viewer** (`web/`). State: `docs/status.md`. Format
+> reference: `docs/formats.md`.
 
 ## Why this project?
 
