@@ -106,6 +106,64 @@ def test_kfa_10x(client_dir):
     assert len(s["bone_indices"]) >= 20
 
 
+def test_gltf_boar_export_is_upright(client_dir, tmp_path):
+    """The exported Boar must stand on its feet (height along Y, feet low).
+
+    Regresses the double axis-rotation bug: positions stay in NIF (Z-up)
+    space and the root node applies the axis conversion once, so the model's
+    height ends up along the glTF Y-up axis.
+    """
+    import json
+
+    import numpy as np
+
+    from camelot.gltf import export_gltf
+
+    prefix = str(tmp_path / "boar")
+    export_gltf(_path(client_dir, "figures/Boar.NIF"), prefix, verbose=False)
+    with open(prefix + ".gltf") as fh:
+        gltf = json.load(fh)
+    with open(prefix + ".bin", "rb") as fh:
+        binb = fh.read()
+
+    nodes = gltf["nodes"]
+    parent = {}
+    for i, n in enumerate(nodes):
+        for c in n.get("children", []):
+            parent[c] = i
+
+    def mat(n):
+        m = n.get("matrix")
+        return np.array(m, dtype=float).reshape(4, 4).T if m else np.eye(4)
+
+    def world(idx):
+        ms = []
+        while idx in parent:
+            idx = parent[idx]
+            ms.append(mat(nodes[idx]))
+        acc = np.eye(4)
+        for m in reversed(ms):
+            acc = acc @ m
+        return acc
+
+    mins, maxs = None, None
+    for i, n in enumerate(nodes):
+        if "mesh" not in n:
+            continue
+        acc = gltf["accessors"][0]
+        bv = gltf["bufferViews"][acc["bufferView"]]
+        off = bv["byteOffset"] + acc.get("byteOffset", 0)
+        pos = np.frombuffer(binb, dtype=np.float32, count=acc["count"] * 3, offset=off).reshape(-1, 3)
+        w = pos @ world(i)[:3, :3].T + world(i)[:3, 3]
+        mins = w.min(0) if mins is None else np.minimum(mins, w.min(0))
+        maxs = w.max(0) if maxs is None else np.maximum(maxs, w.max(0))
+    ext = maxs - mins
+    # Upright quadruped: height (Y) above width (X); feet near the bottom of
+    # Y (the double-rotation bug left the model upside down / lying flat).
+    assert ext[1] > ext[0]
+    assert mins[1] < ext[1] * 0.4
+
+
 def test_gltf_export_boar(client_dir, tmp_path):
     from camelot.gltf import export_gltf
 
@@ -120,6 +178,74 @@ def test_gltf_export_boar(client_dir, tmp_path):
     with open(prefix + ".skin.json") as fh:
         sidecar = json.load(fh)
     assert sidecar["meshes"], "expected mesh sidecar entries"
+
+
+def _mpak_repack_check(client_dir, rel, tmp_path):
+    """Read every entry of a retail archive, repack, and compare all bytes."""
+    from camelot.mpak import MpakArchive, write_mpak
+
+    p = os.path.join(client_dir, rel)
+    if not os.path.exists(p):
+        pytest.skip(f"{rel} not present")
+    a = MpakArchive(p)
+    try:
+        original = {e: a.read(e) for e in a.entries}
+        name = a.name
+    finally:
+        a.close()
+    out = tmp_path / "repack.mpk"
+    write_mpak(str(out), name, original.items())
+    b = MpakArchive(str(out))
+    try:
+        assert b.name == name
+        assert sorted(b.entries) == sorted(original)
+        for e, value in original.items():
+            assert b.read(e) == value
+    finally:
+        b.close()
+
+
+def test_mpak_repack_single(client_dir, tmp_path):
+    _mpak_repack_check(client_dir, "pregame/realmdesc.mpk", tmp_path)
+
+
+def test_mpak_repack_multi(client_dir, tmp_path):
+    _mpak_repack_check(client_dir, "figures/fig3/fig011.mpk", tmp_path)
+
+
+def test_canonical_bone_table_from_skeleton(client_dir):
+    """BONE_INDEX equals the DFS pre-order of skeleton.nif (minus Scene Root)."""
+    from camelot.skeleton import BONE_INDEX
+
+    d = nifutil.load(_path(client_dir, "figures/skeleton.nif"))
+
+    def nm(b):
+        return b.name.decode("latin1") if b.name else ""
+
+    order = []
+
+    def dfs(b):
+        if b is None:
+            return
+        order.append(nm(b))
+        for c in getattr(b, "children", None) or []:
+            dfs(c)
+
+    dfs(d.roots[0])
+    assert order[0] == "Scene Root"
+    order = order[1:]
+    assert {i: n for i, n in enumerate(order)} == BONE_INDEX
+
+
+def test_kfa_indices_land_on_bone_table(client_dir):
+    """The 2HW_idle channels at known indices map to the expected bones."""
+    from camelot.skeleton import bone_name
+
+    anchors = {11: "Bip01 R Forearm", 12: "Bip01 R Hand",
+               23: "Bip01 R Shield", 24: "Bip01 L Clavicle",
+               42: "Bip01 R Thigh", 44: "Bip01 R Foot"}
+    for idx, want in anchors.items():
+        assert bone_name(idx) == want
 
 
 def test_batch_manifest_coverage(client_dir, tmp_path):

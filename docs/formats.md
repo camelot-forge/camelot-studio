@@ -55,9 +55,14 @@ CSV headers span 2-3 lines; files on disk are case-insensitive to the client
 - Skeletons: `%s_skeleton.nif` (game.dll string) + `figures/skeleton.nif` =
   canonical human Bip01, **51 bones** (`Scene Root → Bip01 → Footsteps →
   Pelvis → Spine1/2 → Neck → Head`, full arms/fingers, Held/Shield/Back/
-  Belt, legs). *Open:* the canonical KFA bone index (0..114) is not fully
-  mapped; partial matches (e.g. 11=Forearm R, 22=Finger1R, 23=Shield R) but
-  the master table exceeds the human skeleton.
+  Belt, legs). The KFA bone index of a bone = **DFS pre-order position in
+  this skeleton, excluding `Scene Root`** — *verified* for indices 0..53
+  (`core/camelot/skeleton.py`): the `2HW_idle.kfa` channels land exactly on
+  the expected arm/shield bones (11=R Forearm, 12=R Hand, 23=R Shield, 24=L
+  Clavicle…), and a figure's idle/walk/run share the same channel set (only
+  the keys differ). Indices 54+ are extra shared bones (full-hand fingers,
+  twists, creature appendages) absent from `skeleton.nif` — *open*. The
+  master table (0..114) exceeds the human skeleton.
 - Items: statics (3/60 skinned), textured (58/60), attach nodes
   `BACK`/`BELT`/`GROUND`.
 
@@ -83,10 +88,33 @@ CSV headers span 2-3 lines; files on disk are case-insensitive to the client
 
 Single format: magic `MPAK`; 21-byte header; zlib stream 1 = archive name;
 zlib stream 2 = directory of 0x11c-byte records (NUL-terminated name + u32
-offset); then zlib data streams. Virtual URLs `archive://….mpk:file` in
-`loading.dat`. **Read is implemented (tools + core); write is not** (M2/M3
-for set packaging). Zone archives: `zones/zoneNNN/datNNN.mpk, csvNNN.mpk,
-lodNNN.mpk, terNNN.mpk, texNNN.mpk`; dungeons: `zones/Dnifs/*.npk`.
+offset at 0x110); then zlib data streams. Directory offsets are
+**base-relative** (base = end of the directory stream). **Read and write are
+implemented** (`core/camelot/mpak.py`; write validated by re-reading every
+retail entry and by the workspace reference reader). Virtual URLs
+`archive://….mpk:file` in `loading.dat`. Zone archives:
+`zones/zoneNNN/datNNN.mpk, csvNNN.mpk, lodNNN.mpk, terNNN.mpk, texNNN.mpk`;
+dungeons: `zones/Dnifs/*.npk`.
+
+**Header (17 bytes after `MPAK`), reverse-engineered from the retail corpus:**
+
+| field | value | status |
+|---|---|---|
+| byte 4 | `0x02` | constant |
+| bytes 5..10 | 6-byte checksum | *open* — not decoded |
+| bytes 11,12 | `0x06 0x07` | constant |
+| byte 13 | `len(name_stream_compressed) + 8` | decoded |
+| bytes 14..16 | `0x09 0x0a 0x0b` | constant |
+| byte 17 | checksum byte (deterministic fn of entry count, not a plain count) | *open* |
+| bytes 18..20 | `0x0d 0x0e 0x0f` | constant |
+
+`byte 13` verified across 40+ archives (`.mpk` and `.npk`); `byte 17` and the
+6-byte checksum are deterministic per file but not a simple adler32/crc32 of
+the file or directory — *open research*. Reference readers (mharj's
+dempak.py 2002, our `MpakArchive`) skip the header past the magic, so
+round-trips prove the structural bytes; whether the game validates the
+checksums needs in-game confirmation. `write_mpak` emits deterministic
+placeholders for the two *open* fields.
 
 ## 6. The NetImmerse 4.x legacy reader — block-level facts
 

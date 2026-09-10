@@ -15,6 +15,7 @@ State of Camelot Studio (M0 → M0.5, Sept 2026). Byte-level format facts:
 | `camelot gltf <f> --out <prefix> [--skinned]` | glTF 2.0 export (Z-up→Y-up axis node) + `<prefix>.skin.json` sidecar |
 | `camelot roundtrip <f>` | read → write → read (multiset compare; legacy 4.x = N/A) |
 | `camelot batch <manifest> --out <report> [--read-only] [--limit N]` | bulk validation, live progress; `$DAOC_CLIENT` rewrites `DAOC CLIENT/...` manifest paths |
+| `camelot mpak list <archive>` / `get <archive> <entry>` / `pack <out> <name> <files…>` | MPAK reader/writer (`.mpk`/`.npk`) |
 
 **Coverage**: full client NIF corpus = **5087/5089 parse** (the 2 remaining
 are 10.1.0.0 housing files failing inside pyffi — see `formats.md` §7).
@@ -34,6 +35,12 @@ are 10.1.0.0 housing files failing inside pyffi — see `formats.md` §7).
   computes the bind from the node tree). inverseBind = inv(exported
   worldBind) — glTF standard, correct at the bind pose (diagnostic: 7e-15);
   to be confirmed by real rendering in M1.
+- **glTF axis**: vertices/normals stay in NIF (Z-up) space and the synthetic
+  root node (`__axes__`) applies the axis conversion once (no double
+  rotation). **The DAoC client has no consistent up axis** — modern
+  Gamebryo 10.x figures export upright (Boar, skeleton, BritonM1), but some
+  legacy 4.x figures (Ettin, Zombie) are natively Y-up and export lying flat.
+  The viewer normalises scale to ~5 units and offers a 90° rotate control.
 
 ## Testing
 
@@ -46,19 +53,24 @@ pytest suite in `core/tests/` (AGENTS.md TDD rule):
 DAOC_CLIENT="/path/to/DAoC client" .venv/bin/python -m pytest core/tests -q
 ```
 
-89 tests: matrices/axis/CLI/legacy-reader/gLTF units on synthetic buffers,
-plus corpus tests (parse expectations, kfa summaries, roundtrip, glTF
-export) that auto-skip without `DAOC_CLIENT`.
+97 tests: matrices/axis/CLI/legacy-reader/gLTF/MPAK units on synthetic
+buffers, plus corpus tests (parse expectations, kfa summaries, roundtrip,
+glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
 
 ## Known limits
 
 1. **Write**: pyffi reorders blocks on write (roundtrip validated as
    multisets; worth watching for diff-friendly editing).
 2. **Legacy 4.x write**: not implemented (see above).
-3. **Bone index table**: KFA indices (0..114) not fully mapped to the Bip01
-   skeleton — *open research* (needed before baking animations into glTF).
+3. **Bone index table**: KFA indices **0..53 mapped to the Bip01 skeleton**
+   (index = DFS pre-order of `skeleton.nif` minus `Scene Root`, verified vs
+   `2HW_idle.kfa`; `core/camelot/skeleton.py`). Indices **54..114 still
+   open** — extra shared bones (fingers/twists/creature appendages) absent
+   from `skeleton.nif`; needs a full-skeleton reference or game.dll analysis.
 4. **pyffi 10.1.0.0**: 2 housing files fail (see `formats.md` §7).
-5. **MPAK write**: not implemented.
+5. **MPAK header checksum**: the two *open* header fields (`formats.md` §5)
+   are written as deterministic placeholders; whether the game validates
+   them needs in-game confirmation.
 
 ## Environment gotchas
 
@@ -78,14 +90,20 @@ export) that auto-skip without `DAOC_CLIENT`.
 
 ## Next steps (priority order)
 
-1. ~~pytest suite~~ — **done**: 89 tests (unit + corpus tiers), see
+1. ~~pytest suite~~ — **done**: 97 tests (unit + corpus tiers), see
    `docs/status.md` §Testing.
 2. GitHub: org + repos created, first commits pushed; CI in place
    (`.github/workflows/ci.yml`: ruff lint + pytest on 3.11/3.12).
    Switch `camelot-studio` to public when ready.
-3. MPAK writer (`tools/mpk_list.py` has the read logic).
-4. Bone index table research (KFA indices → Bip01 skeleton).
-5. M1: Svelte + three.js viewer consuming glTF + skin.json.
+3. ~~MPAK writer~~ — **done**: `core/camelot/mpak.py` + `camelot mpak`
+   CLI, unit + corpus repack tests, header `byte 13` decoded; the two
+   *open* header checksums documented (`formats.md` §5).
+4. Bone index table research (KFA indices → Bip01 skeleton): **0..53 done**,
+   indices 54+ open (see Known limits #3).
+5. ~~M1: Svelte + three.js viewer~~ — **initial delivered**: `web/` SvelteKit
+   (Svelte 5 runes, Vite, Vitest) static viewer loading `.gltf`+`.bin`
+   (+`.skin.json`); design system adapted from Pictiúr. Animated `.kfa`
+   playback is future work (needs index table 54+ and a KFA reader here).
 6. M2: Blender addon + server-bridge (artifact injection, in-game testing).
 
 ## Command cheat sheet

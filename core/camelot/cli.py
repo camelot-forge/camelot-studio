@@ -8,6 +8,11 @@ Commands:
   camelot roundtrip <file>        read -> write -> read (diff)
   camelot batch <manifest> --out <report>
                                   bulk validation (roundtrip + info)
+  camelot mpak list <archive>     MPAK: internal name + entries
+  camelot mpak get <archive> <entry>
+                                  decompress one entry to stdout
+  camelot mpak pack <out> <name> <file...>
+                                  build an MPAK archive from files
 
 Paths in the manifest starting with ``DAOC CLIENT/`` are resolved against the
 ``DAOC_CLIENT`` environment variable when set (the manifest format predates
@@ -177,6 +182,37 @@ def cmd_batch(args) -> int:
     return 0 if n_diff == 0 and n_err == 0 else 1
 
 
+def cmd_mpak(args) -> int:
+    from .mpak import MpakArchive, write_mpak
+
+    if args.mpak_cmd == "list":
+        a = MpakArchive(args.archive)
+        try:
+            print(f"# {os.path.basename(args.archive)} (internal name: {a.name!r}) "
+                  f"— {len(a.entries)} entries")
+            for e in sorted(a.entries):
+                print(f"  {e}")
+        finally:
+            a.close()
+        return 0
+    if args.mpak_cmd == "get":
+        a = MpakArchive(args.archive)
+        try:
+            sys.stdout.buffer.write(a.read(args.entry))
+        finally:
+            a.close()
+        return 0
+    if args.mpak_cmd == "pack":
+        entries = []
+        for f in args.files:
+            with open(f, "rb") as fh:
+                entries.append((os.path.basename(f), fh.read()))
+        write_mpak(args.out, args.name, entries)
+        print(f"packed {len(entries)} entries -> {args.out}")
+        return 0
+    return 2
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="camelot",
@@ -212,6 +248,19 @@ def main(argv=None) -> int:
     p.add_argument("--limit", type=int, default=0,
                    help="only validate the first N manifest entries")
     p.set_defaults(func=cmd_batch)
+
+    p = sub.add_parser("mpak", help="MPAK archive tools (.mpk/.npk)")
+    mp = p.add_subparsers(dest="mpak_cmd", required=True)
+    lp = mp.add_parser("list", help="list internal name + entries")
+    lp.add_argument("archive")
+    gp = mp.add_parser("get", help="decompress one entry to stdout")
+    gp.add_argument("archive")
+    gp.add_argument("entry")
+    pp = mp.add_parser("pack", help="build an MPAK archive from files")
+    pp.add_argument("out")
+    pp.add_argument("name", help="internal archive name")
+    pp.add_argument("files", nargs="+")
+    p.set_defaults(func=cmd_mpak)
 
     args = ap.parse_args(argv)
     return args.func(args)
