@@ -1,5 +1,4 @@
 """Unit tests for the CLI helpers (path/env resolution)."""
-import pytest
 
 from camelot.cli import resolve_path
 

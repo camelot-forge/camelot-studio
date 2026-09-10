@@ -80,7 +80,9 @@ export) that auto-skip without `DAOC_CLIENT`.
 
 1. ~~pytest suite~~ — **done**: 89 tests (unit + corpus tiers), see
    `docs/status.md` §Testing.
-2. GitHub: create org, first commit (monorepo), Actions CI.
+2. GitHub: org + repos created, first commits pushed; CI in place
+   (`.github/workflows/ci.yml`: ruff lint + pytest on 3.11/3.12).
+   Switch `camelot-studio` to public when ready.
 3. MPAK writer (`tools/mpk_list.py` has the read logic).
 4. Bone index table research (KFA indices → Bip01 skeleton).
 5. M1: Svelte + three.js viewer consuming glTF + skin.json.

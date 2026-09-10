@@ -3,8 +3,6 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
-
 from camelot.gltf import (
     _apply_axis,
     _fill_partition,
@@ -13,13 +11,15 @@ from camelot.gltf import (
     _weights_to_list,
     export_gltf,
 )
+from numpy.testing import assert_array_equal
 
 
 class TestAxis:
     def test_apply_axis_maps_y_to_neg_z(self):
         pts = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]], dtype=np.float32)
         out = _apply_axis(pts)
-        assert out.tolist() == [[0, 0, -1], [0, 1, 0], [1, 0, 0]]
+        assert_array_equal(out, np.array([[0, 0, -1], [0, 1, 0], [1, 0, 0]],
+                                         dtype=np.float32))
 
 
 class TestVec2:
@@ -80,7 +80,8 @@ class TestExportSynthetic:
         assert stats["vertices"] == 3
         assert stats["triangles"] == 1
 
-        gltf = json.load(open(prefix + ".gltf"))
+        with open(prefix + ".gltf") as fh:
+            gltf = json.load(fh)
         assert gltf["asset"]["version"] == "2.0"
         names = [n["name"] for n in gltf["nodes"]]
         assert "__axes__" in names
@@ -88,9 +89,12 @@ class TestExportSynthetic:
         assert len(gltf["meshes"]) == 1
         prim = gltf["meshes"][0]["primitives"][0]
         assert "POSITION" in prim["attributes"]
-        assert gltf["buffers"][0]["byteLength"] == len(open(prefix + ".bin", "rb").read())
+        with open(prefix + ".bin", "rb") as fh:
+            bin_len = len(fh.read())
+        assert gltf["buffers"][0]["byteLength"] == bin_len
 
-        sidecar = json.load(open(prefix + ".skin.json"))
+        with open(prefix + ".skin.json") as fh:
+            sidecar = json.load(fh)
         assert sidecar["meshes"][0]["name"] == "Mesh"
 
     def test_export_skinned_flag_without_bones(self, nif_path, tmp_path):
@@ -98,7 +102,8 @@ class TestExportSynthetic:
         # not emit JOINTS_0
         prefix = str(tmp_path / "synth2")
         export_gltf(nif_path, prefix, verbose=False, emit_skinned=True)
-        gltf = json.load(open(prefix + ".gltf"))
+        with open(prefix + ".gltf") as fh:
+            gltf = json.load(fh)
         prim = gltf["meshes"][0]["primitives"][0]
         assert "JOINTS_0" not in prim["attributes"]
         assert "skins" not in gltf or gltf["skins"] == []

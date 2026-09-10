@@ -38,7 +38,7 @@ from __future__ import annotations
 import os
 import struct
 
-__all__ = ["LegacyData", "load_legacy", "is_legacy", "LegacyFormatError"]
+__all__ = ["LegacyData", "LegacyFormatError", "is_legacy", "load_legacy"]
 
 NULL_REF = 0xFFFFFFFF
 

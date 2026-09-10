@@ -2,14 +2,12 @@
 import struct
 
 import pytest
-
-from camelot import legacy
 from camelot.legacy import (
     LegacyData,
     LegacyFormatError,
-    _Reader,
     _block_class,
     _read_header,
+    _Reader,
     _strip_triangles,
     is_legacy,
 )
@@ -199,8 +197,9 @@ class TestLegacyData:
         assert is_legacy(d)
 
     def test_walk_whole_file(self, nif_path):
-        buf = open(nif_path, "rb").read()
-        vs, ver, nb, pos = _read_header(buf, "t")
+        with open(nif_path, "rb") as fh:
+            buf = fh.read()
+        _, ver, nb, pos = _read_header(buf, "t")
         r = _Reader(buf[pos:], ver, "t")
         r.read_blocks(nb)
         roots = r.read_footer()

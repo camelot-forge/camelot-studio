@@ -11,20 +11,20 @@ import os
 from pyffi.formats.nif import NifFormat
 
 __all__ = [
-    "load",
-    "store",
-    "block_types",
-    "version_bits",
-    "sniff_version",
-    "CamelotFormatError",
-    "vec3",
-    "mat33_cell",
-    "mat4_cell",
-    "mat4_mul",
-    "mat4_identity",
-    "mat4_axis",
-    "node_local_matrix",
     "AXIS_CONVERSION",
+    "CamelotFormatError",
+    "block_types",
+    "load",
+    "mat4_axis",
+    "mat4_cell",
+    "mat4_identity",
+    "mat4_mul",
+    "mat33_cell",
+    "node_local_matrix",
+    "sniff_version",
+    "store",
+    "vec3",
+    "version_bits",
 ]
 
 
@@ -39,10 +39,9 @@ def load(path: str) -> NifFormat.Data:
 
     err = io.StringIO()
     try:
-        with open(path, "rb") as fh:
-            with contextlib.redirect_stderr(err):
-                data.read(fh)
-    except Exception as e:  # noqa: BLE001
+        with open(path, "rb") as fh, contextlib.redirect_stderr(err):
+            data.read(fh)
+    except Exception as e:
         detail = (err.getvalue().strip().splitlines() or [""])[-1]
         ver = sniff_version(path)
         if "NetImmerse File Format" in ver:
@@ -87,10 +86,6 @@ def block_types(data) -> list[str]:
 
 
 def version_bits(data) -> tuple[int, int]:
-    return data.version, len(data.blocks)
-
-
-def version_bits(data: NifFormat.Data) -> tuple[int, int]:
     return data.version, len(data.blocks)
 
 

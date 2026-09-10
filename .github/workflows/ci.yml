@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "core[dev]"
+
+      # pyffi 2.2.3 predates Python 3.12 (time.clock removal); the venv
+      # bootstrap does the same patch — see bootstrap.sh.
+      - name: Patch pyffi for modern Python
+        run: |
+          SP=$(python -c "import pyffi, os; print(os.path.dirname(pyffi.__file__))")
+          sed -i 's/time\.clock()/time.perf_counter()/g' \
+            "$SP/object_models/xml/__init__.py" \
+            "$SP/object_models/xsd/__init__.py"
+
+      - name: Lint
+        run: ruff check core/camelot core/tests
+
+      - name: Test (unit tier)
+        # Corpus tests skip automatically: DAOC_CLIENT is not set here
+        # (game assets never enter CI).
+        run: python -m pytest core/tests -q

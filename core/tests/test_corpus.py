@@ -9,7 +9,6 @@ import os
 from collections import Counter
 
 import pytest
-
 from camelot import nifutil
 from camelot.kfa import kfa_summary
 from camelot.legacy import is_legacy, load_legacy
@@ -111,11 +110,14 @@ def test_gltf_export_boar(client_dir, tmp_path):
 
     prefix = str(tmp_path / "boar")
     export_gltf(_path(client_dir, "figures/Boar.NIF"), prefix, verbose=False)
-    gltf = json.load(open(prefix + ".gltf"))
+    with open(prefix + ".gltf") as fh:
+        gltf = json.load(fh)
     assert gltf["asset"]["version"] == "2.0"
     assert any(n["name"] == "Bip01" for n in gltf["nodes"])
-    assert gltf["buffers"][0]["byteLength"] == len(open(prefix + ".bin", "rb").read())
-    sidecar = json.load(open(prefix + ".skin.json"))
+    with open(prefix + ".bin", "rb") as fh:
+        assert gltf["buffers"][0]["byteLength"] == len(fh.read())
+    with open(prefix + ".skin.json") as fh:
+        sidecar = json.load(fh)
     assert sidecar["meshes"], "expected mesh sidecar entries"
 
 

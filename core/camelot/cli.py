@@ -21,8 +21,8 @@ import sys
 import tempfile
 import time
 
-from .nifutil import block_types, load, store
 from .kfa import kfa_summary
+from .nifutil import block_types, load, store
 
 SHAPE_TYPES = ("NiTriShape", "NiTriStrips")
 
@@ -85,6 +85,7 @@ def cmd_gltf(args) -> int:
 
 def cmd_roundtrip(args) -> int:
     from collections import Counter
+
     from .legacy import is_legacy
 
     t0 = time.time()
@@ -115,6 +116,7 @@ def cmd_roundtrip(args) -> int:
 
 def cmd_batch(args) -> int:
     from collections import Counter
+
     from .legacy import is_legacy
 
     paths = []
@@ -164,9 +166,9 @@ def cmd_batch(args) -> int:
             el = time.time() - t0
             print(f"[{i}/{len(paths)}] {el:.1f}s elapsed ({el/max(i,1):.2f}s/file) "
                   f"ok={n_ok} err={n_err} absent={n_absent}", flush=True)
-    lines += ["", f"summary: {n_ok} OK, {n_diff} DIFF (reorder), "
-                  f"{n_na} N/A (read-only), {n_absent} absent, "
-                  f"{n_err} parse errors"]
+    lines += ["", (f"summary: {n_ok} OK, {n_diff} DIFF (reorder), "
+                 f"{n_na} N/A (read-only), {n_absent} absent, "
+                 f"{n_err} parse errors")]
     dest = args.out or "work/camelot_batch.txt"
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
     with open(dest, "w", encoding="utf-8") as fh:
