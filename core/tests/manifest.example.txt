@@ -1,0 +1,40 @@
+# Example manifest for `camelot batch`.
+# One line = one path (Windows paths allowed, converted automatically).
+# Paths below are relative to the exploratory workspace root
+# (the folder containing the "DAOC CLIENT" directory), and are rewritten
+# against the $DAOC_CLIENT environment variable when it is set.
+# Adapt for your machine / server.
+
+# ---- figures (Gamebryo 10.1.0.0, skinned) ----
+DAOC CLIENT/figures/Boar.NIF
+DAOC CLIENT/figures/Boar_CATA.NIF
+DAOC CLIENT/figures/2HDragon.NIF
+DAOC CLIENT/figures/BritonM1.NIF
+DAOC CLIENT/figures/albbody01heada.nif
+DAOC CLIENT/figures/skeleton.nif
+
+# ---- old-format figures (NetImmerse 4.2.x, read by the legacy parser) ----
+DAOC CLIENT/figures/Ettin.NIF
+DAOC CLIENT/figures/fox_pet01.NIF
+DAOC CLIENT/figures/ghost.nif
+
+# ---- fig3 parts (extracted from fig001.mpk) ----
+work/fig3_fig001_sample/arms01_bc_m.nif
+work/fig3_fig001_sample/boots01_ae_f.nif
+work/fig3_fig001_sample/arms01_ae_f.nif
+
+# ---- items (mixed formats; the NetImmerse 4.x ones go through legacy) ----
+DAOC CLIENT/items/jackolantern-GROUND.NIF
+DAOC CLIENT/items/epic_wpn_savage_axe_1h.nif
+DAOC CLIENT/items/Catapult_W_attack.NIF
+
+# ---- .kfa animations ----
+DAOC CLIENT/anims/BOAR_idle.kfa
+DAOC CLIENT/anims/BOAR_attack.kfa
+DAOC CLIENT/anims/2HDragon_idle.kfa
+DAOC CLIENT/anims/2HDragon_attack.kfa
+DAOC CLIENT/anims/2HW_idle.kfa
+DAOC CLIENT/anims/2HW_cidle.kfa
+DAOC CLIENT/anims/wolf_find.kfa
+DAOC CLIENT/anims/wolf_dragon_mount_nod.kfa
+DAOC CLIENT/anims/2headed_Wolf_idle.kfa

@@ -1,0 +1,137 @@
+"""Corpus tests — validated against the real DAoC client.
+
+Every test here is skipped automatically unless the DAOC_CLIENT environment
+variable points at the installed client folder. Game assets are read at
+runtime only and never committed.
+"""
+import json
+import os
+from collections import Counter
+
+import pytest
+
+from camelot import nifutil
+from camelot.kfa import kfa_summary
+from camelot.legacy import is_legacy, load_legacy
+
+pytestmark = pytest.mark.usefixtures("client_dir")
+
+# (relative path, expected version, expected block count)
+LEGACY_EXPECTATIONS = [
+    ("figures/Ettin.NIF", 0x04020100, 299),
+    ("figures/fox_pet01.NIF", 0x04020200, 175),
+    ("figures/ghost.nif", 0x04020200, 302),
+    ("figures/Zombie.NIF", 0x0401000C, 276),
+    ("items/jackolantern-GROUND.NIF", 0x04020200, 13),
+    ("items/epic_wpn_savage_axe_1h.nif", 0x04020200, 17),
+    ("items/Catapult_W_attack.NIF", 0x04020100, 96),
+    ("items/N_2h_sword01.nif", 0x0401000C, 17),
+    ("effects/AlgaeSlimeBlob.NIF", 0x04020100, None),
+    ("effects/CorrosiveCloud.NIF", 0x04020100, None),
+    ("effects/VFX_Crows01.nif", None, None),
+]
+
+PYFFI_EXPECTATIONS = [
+    ("figures/Boar.NIF", 0x0A010000, 111),
+    ("figures/Boar_CATA.NIF", 0x0A010000, 133),
+    ("figures/BritonM1.NIF", 0x0A010000, None),
+    ("figures/skeleton.nif", None, 143),
+    ("figures/2HDragon.NIF", 0x0A010000, None),
+    ("items/hceltmerwepn.nif", 0x04020100, 115),  # NiLODNode, via legacy
+]
+
+
+def _path(client_dir, rel):
+    return os.path.join(client_dir, rel)
+
+
+@pytest.mark.parametrize("rel,version,blocks", LEGACY_EXPECTATIONS)
+def test_legacy_parse(client_dir, rel, version, blocks):
+    p = _path(client_dir, rel)
+    d = load_legacy(p)
+    assert is_legacy(d)
+    if version is not None:
+        assert d.version == version
+    if blocks is not None:
+        assert len(d.blocks) == blocks
+    assert len(d.roots) >= 1
+
+
+@pytest.mark.parametrize("rel,version,blocks", PYFFI_EXPECTATIONS)
+def test_general_parse(client_dir, rel, version, blocks):
+    d = nifutil.load(_path(client_dir, rel))
+    if version is not None:
+        assert d.version == version
+    if blocks is not None:
+        assert len(d.blocks) == blocks
+
+
+def test_legacy_skin_resolution(client_dir):
+    """fox_pet01 is a skinned 4.2.2.0 classic: skin refs must resolve."""
+    d = load_legacy(_path(client_dir, "figures/fox_pet01.NIF"))
+    skinned = [b for b in d.blocks if type(b).__name__ == "NiSkinInstance"]
+    assert skinned, "expected at least one NiSkinInstance"
+    si = skinned[0]
+    assert si.skin_data is not None
+    assert si.bones, "expected resolved bone nodes"
+    names = [b.name.decode("latin1") for b in si.bones if b.name]
+    assert names, "bones should carry names"
+
+
+def test_roundtrip_pyffi_file(client_dir, tmp_path):
+    """Read→write→read equals (version, block count, type multiset, roots)."""
+    d = nifutil.load(_path(client_dir, "figures/Boar.NIF"))
+    before = (d.version, len(d.blocks), Counter(nifutil.block_types(d)))
+    roots_b = sorted(str(getattr(r, "name", None)) for r in d.roots)
+    tmp = tmp_path / "rt.nif"
+    nifutil.store(d, str(tmp))
+    d2 = nifutil.load(str(tmp))
+    after = (d2.version, len(d2.blocks), Counter(nifutil.block_types(d2)))
+    roots_a = sorted(str(getattr(r, "name", None)) for r in d2.roots)
+    assert before == after
+    assert roots_b == roots_a
+
+
+def test_kfa_summary(client_dir):
+    s = kfa_summary(_path(client_dir, "anims/BOAR_idle.kfa"))
+    assert s["version"] == "0x4020100"
+    assert len(s["bone_indices"]) >= 20
+    assert s["index_order"] == sorted(s["bone_indices"])
+    assert s["max_keys"] > 0
+
+
+def test_kfa_10x(client_dir):
+    s = kfa_summary(_path(client_dir, "anims/wolf_dragon_mount_nod.kfa"))
+    assert s["version"] == "0xa010000"
+    assert len(s["bone_indices"]) >= 20
+
+
+def test_gltf_export_boar(client_dir, tmp_path):
+    from camelot.gltf import export_gltf
+
+    prefix = str(tmp_path / "boar")
+    export_gltf(_path(client_dir, "figures/Boar.NIF"), prefix, verbose=False)
+    gltf = json.load(open(prefix + ".gltf"))
+    assert gltf["asset"]["version"] == "2.0"
+    assert any(n["name"] == "Bip01" for n in gltf["nodes"])
+    assert gltf["buffers"][0]["byteLength"] == len(open(prefix + ".bin", "rb").read())
+    sidecar = json.load(open(prefix + ".skin.json"))
+    assert sidecar["meshes"], "expected mesh sidecar entries"
+
+
+def test_batch_manifest_coverage(client_dir, tmp_path):
+    """Every manifest path must resolve and parse (paths already exist)."""
+    manifest = "core/tests/manifest.example.txt"
+    if not os.path.exists(manifest):
+        pytest.skip("manifest not present")
+    with open(manifest, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            rel = line.removeprefix("DAOC CLIENT/")
+            p = _path(client_dir, rel)
+            if not os.path.exists(p):
+                continue  # sample files may be absent locally
+            d = nifutil.load(p)
+            assert len(d.blocks) > 0
