@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import numpy as np
@@ -29,7 +30,6 @@ F32 = 5126
 U16 = 5123
 
 A_AXIS = mat4_axis()
-A_AXIS_T = [[A_AXIS[j][i] for j in range(4)] for i in range(4)]
 
 
 def _vec2(v) -> tuple[float, float]:
@@ -178,7 +178,7 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
             partition = getattr(si, "skin_partition", None)
             if partition is None and skin_data is not None:
                 partition = getattr(skin_data, "skin_partition", None)
-        skinned = partition is not None
+        skinned = si is not None and bool(getattr(si, "bones", []) or [])
 
         joints: list[int] = []
         joint_names: list[str] = []
@@ -188,9 +188,13 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
             for bn in list(getattr(si, "bones", []) or []):
                 joints.append(index_of.get(id(bn), -1))
                 joint_names.append(bn.name.decode("latin1") if bn.name else "?")
-            for part in (getattr(partition, "skin_partition_blocks", None)
-                         or getattr(partition, "partitions", [])):
-                _fill_partition(part, weights_global)
+            if partition is not None:
+                for part in (getattr(partition, "skin_partition_blocks", None)
+                             or getattr(partition, "partitions", [])):
+                    _fill_partition(part, weights_global)
+            elif skin_data is not None:
+                # legacy 4.1.0.12: weights live in bone_list, no partition
+                _fill_weights_from_bonelist(skin_data, joints, weights_global)
             stats["joints"] = max(stats["joints"], len(joints))
 
         num_v = len(verts)
@@ -204,10 +208,15 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
                     joint_arr[gv, k] = max(j, 0)
                     weight_arr[gv, k] = w / tot
 
-        acc_pos = buf.add(_apply_axis(verts).tobytes(), F32, num_v, "VEC3",
-                          mn=_apply_axis(verts).min(axis=0).round(6).tolist(),
-                          mx=_apply_axis(verts).max(axis=0).round(6).tolist())
-        acc_nrm = buf.add(_apply_axis(norms).tobytes(), F32, num_v, "VEC3") if norms else None
+        # Vertices/normals stay in the NIF (Z-up) space; the axis conversion
+        # (Z-up -> glTF Y-up) is applied once by the synthetic root node's
+        # matrix below, so the whole model (mesh + skeleton) rotates together.
+        verts_np = np.array(verts, dtype=np.float32)
+        norms_np = np.array(norms, dtype=np.float32) if norms is not None else None
+        acc_pos = buf.add(verts_np.tobytes(), F32, num_v, "VEC3",
+                          mn=verts_np.min(axis=0).round(6).tolist(),
+                          mx=verts_np.max(axis=0).round(6).tolist())
+        acc_nrm = buf.add(norms_np.tobytes(), F32, num_v, "VEC3") if norms_np is not None else None
         acc_uv = buf.add(np.array(uvs, dtype=np.float32).reshape(-1).tobytes(), F32, num_v, "VEC2") if uvs else None
         acc_j = buf.add(joint_arr.tobytes(), U16, num_v, "VEC4") if (skinned and emit_skinned) else None
         acc_w = buf.add(weight_arr.tobytes(), F32, num_v, "VEC4") if (skinned and emit_skinned) else None
@@ -218,21 +227,18 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
             prim["attributes"]["NORMAL"] = acc_nrm
         if acc_uv is not None:
             prim["attributes"]["TEXCOORD_0"] = acc_uv
-        if skinned:
-            prim["attributes"]["JOINTS_0"] = acc_j
-            prim["attributes"]["WEIGHTS_0"] = acc_w
-
         if skinned and emit_skinned:
             prim["attributes"]["JOINTS_0"] = acc_j
             prim["attributes"]["WEIGHTS_0"] = acc_w
 
         meshes.append({"node": i, "name": names[i], "prim": prim})
         if skinned and emit_skinned:
-            # inverseBind = inv(exported bone world) * A^T  (glTF standard)
+            # inverseBind = inv(bone world) in the skeleton-root (Z-up) space;
+            # the root node's A_AXIS rotates the whole skeleton to Y-up.
             ib = []
             for jn in joints:
                 w = world.get(jn, mat4_identity())
-                ib.append(mat4_mul(np.linalg.inv(np.asarray(w, dtype=float)).tolist(), A_AXIS_T))
+                ib.append(np.linalg.inv(np.asarray(w, dtype=float)).tolist())
             ib_arr = np.array([_flatten_colmajor(m) for m in ib], dtype=np.float32)
             acc_ib = buf.add(ib_arr.tobytes(), F32, len(ib), "MAT4")
             skins.append({"node": i, "joints": joints, "invbind": acc_ib, "joint_names": joint_names})
@@ -273,6 +279,9 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
     for k, mesh in enumerate(meshes):
         mesh_index_by_node[mesh["node"]] = k
 
+    for k, mesh in enumerate(meshes):
+        gltf_nodes[mesh["node"]]["mesh"] = k
+
     for k, skin in enumerate(skins):
         gltf_nodes[skin["node"]]["skin"] = k
 
@@ -287,7 +296,7 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
             {"joints": s["joints"], "inverseBindMatrices": s["invbind"], "skeleton": synth}
             for s in skins
         ],
-        "buffers": [{"byteLength": len(b)}],
+        "buffers": [{"byteLength": len(b), "uri": os.path.basename(out_prefix) + ".bin"}],
         "bufferViews": buf.views,
         "accessors": buf.accessors,
     }
@@ -359,3 +368,17 @@ def _fill_partition(part, weights_global: dict[int, list[tuple[int, float]]]) ->
         for bj, w in zip(bi, wts):
             jg = part_bones[bj] if bj < len(part_bones) else bj
             wl.append((jg, w))
+
+
+def _fill_weights_from_bonelist(skin_data, joints, weights_global) -> None:
+    """Legacy 4.1.0.12 skins store per-vertex weights in bone_list (no partition).
+
+    Each bone_list entry's weights are (vertex_index, weight) for that bone;
+    the bone's canonical index is its position in the skin's bone list.
+    """
+    bl = getattr(skin_data, "bone_list", []) or []
+    for k, entry in enumerate(bl):
+        jg = joints[k] if k < len(joints) else k
+        wts = entry["weights"] if isinstance(entry, dict) else getattr(entry, "weights", None)
+        for vi, w in wts or []:
+            weights_global.setdefault(int(vi), []).append((jg, w))

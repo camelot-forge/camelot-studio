@@ -90,9 +90,14 @@ class TestExportSynthetic:
         assert len(gltf["meshes"]) == 1
         prim = gltf["meshes"][0]["primitives"][0]
         assert "POSITION" in prim["attributes"]
+        # a node must reference the mesh (else GLTFLoader renders nothing)
+        assert any("mesh" in n for n in gltf["nodes"])
+        # no attribute accessor may be null
+        assert all(v is not None for v in prim["attributes"].values())
         with open(prefix + ".bin", "rb") as fh:
             bin_len = len(fh.read())
         assert gltf["buffers"][0]["byteLength"] == bin_len
+        assert gltf["buffers"][0]["uri"] == "synth.bin"
 
         with open(prefix + ".skin.json") as fh:
             sidecar = json.load(fh)
