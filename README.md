@@ -60,6 +60,27 @@ Examples:
 Set `DAOC_CLIENT` to your client directory to validate against the real
 corpus (`camelot batch` rewrites `DAOC CLIENT/...` manifest paths from it).
 
+## Setting up a new machine (Linux/macOS)
+
+```sh
+# 1. Python ≥ 3.11 (macOS: `brew install python@3.12` or python.org installer)
+# 2. SSH key + git identity (add the public key to GitHub > Settings > SSH keys)
+ssh-keygen -t ed25519 -C "you@machine"
+git config --global user.name "Your Name"
+git config --global user.email "you@users.noreply.github.com"
+
+# 3. Clone, bootstrap, test (corpus tests skip without DAOC_CLIENT)
+git clone git@github.com:camelot-forge/camelot-studio.git
+cd camelot-studio && ./bootstrap.sh
+.venv/bin/python -m pytest core/tests -q
+
+# 4. Point at your local DAoC client copy (synced separately — not in git)
+export DAOC_CLIENT="/path/to/DAoC client"   # add to ~/.zshrc / ~/.bashrc
+```
+
+The game client itself is never in git — sync it between your machines with
+your usual tool (Syncthing, NAS, external drive).
+
 ## Documentation
 
 - `docs/formats.md` — DAoC client format reference (tables, NIF versions,

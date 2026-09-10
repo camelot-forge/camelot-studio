@@ -25,7 +25,8 @@ echo ">> installing dependencies (pyffi, setuptools, numpy, pytest, ruff)…"
 SP=.venv/lib/python3.*/site-packages/pyffi
 if grep -q "time.clock()" $SP/object_models/xml/__init__.py; then
     echo ">> patching pyffi: time.clock -> time.perf_counter (Python >= 3.12)…"
-    sed -i 's/time\.clock()/time.perf_counter()/g' \
+    # perl -pi instead of sed -i: works on both GNU (Linux) and BSD (macOS)
+    perl -pi -e 's/time\.clock\(\)/time.perf_counter()/g' \
         $SP/object_models/xml/__init__.py \
         $SP/object_models/xsd/__init__.py
 fi
