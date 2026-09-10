@@ -9,6 +9,7 @@ import os
 from collections import Counter
 
 import pytest
+
 from camelot import nifutil
 from camelot.kfa import kfa_summary
 from camelot.legacy import is_legacy, load_legacy

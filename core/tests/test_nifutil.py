@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 
 import pytest
+
 from camelot import nifutil
 
 

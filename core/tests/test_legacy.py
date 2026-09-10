@@ -2,6 +2,7 @@
 import struct
 
 import pytest
+
 from camelot.legacy import (
     LegacyData,
     LegacyFormatError,

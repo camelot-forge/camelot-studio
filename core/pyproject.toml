@@ -26,6 +26,9 @@ pythonpath = ["core"]
 target-version = "py311"
 line-length = 100
 
+[tool.ruff.lint.isort]
+known-first-party = ["camelot"]
+
 [project.scripts]
 camelot = "camelot.cli:main"
 
