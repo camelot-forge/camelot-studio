@@ -13,6 +13,7 @@ Commands:
                                   decompress one entry to stdout
   camelot mpak pack <out> <name> <file...>
                                   build an MPAK archive from files
+  camelot serve [--root DIR]      local daemon: asset library + viewer
 
 Paths in the manifest starting with ``DAOC CLIENT/`` are resolved against the
 ``DAOC_CLIENT`` environment variable when set (the manifest format predates
@@ -223,6 +224,73 @@ def cmd_mpak(args) -> int:
     return 2
 
 
+def _default_static_dir() -> str | None:
+    """The built SvelteKit viewer, if present next to the core package."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    build = os.path.join(os.path.dirname(os.path.dirname(here)), "web", "build")
+    return build if os.path.exists(os.path.join(build, "index.html")) else None
+
+
+def cmd_serve(args) -> int:
+    from .serve.config import (
+        DEFAULT_HOST,
+        DEFAULT_PORT,
+        ServeConfig,
+        client_root_from_env,
+        default_cache_dir,
+    )
+
+    root = args.root or client_root_from_env()
+    if not root:
+        print("error: no client root; pass --root or set $DAOC_CLIENT", file=sys.stderr)
+        return 2
+    if not os.path.isdir(root):
+        print(f"error: not a directory: {root}", file=sys.stderr)
+        return 2
+
+    host = args.host or DEFAULT_HOST
+    port = args.port or DEFAULT_PORT
+    if host not in ("127.0.0.1", "localhost", "::1") and not args.allow_remote:
+        print(f"refusing to bind {host}: pass --allow-remote to expose the daemon",
+              file=sys.stderr)
+        return 2
+
+    static_dir = args.static or _default_static_dir()
+    if static_dir is None:
+        print("note: no built viewer found (run `pnpm build` in web/); API only",
+              file=sys.stderr)
+
+    from .serve.app import create_app
+
+    cfg = ServeConfig(
+        root=root,
+        cache_dir=args.cache_dir or default_cache_dir(),
+        host=host,
+        port=port,
+        open_browser=not args.no_open,
+        watch=not args.no_watch,
+        static_dir=static_dir,
+    )
+    app = create_app(cfg)
+
+    url = f"http://{'localhost' if cfg.is_loopback else host}:{port}/"
+    print(f"camelot serve: root={cfg.root}")
+    print(f"  viewer: {url}")
+    print(f"  api:    {url}api/v1/health  (docs at {url}api/docs)")
+    if not static_dir:
+        print("  (no viewer build; the API alone is served)")
+    if cfg.open_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
+    import uvicorn
+
+    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level=args.log_level)
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="camelot",
@@ -274,6 +342,19 @@ def main(argv=None) -> int:
     pp.add_argument("name", help="internal archive name")
     pp.add_argument("files", nargs="+")
     p.set_defaults(func=cmd_mpak)
+
+    p = sub.add_parser("serve", help="local daemon: asset library + viewer")
+    p.add_argument("--root", help="client directory (default: $DAOC_CLIENT)")
+    p.add_argument("--cache-dir", help="cache directory (default: platform cache)")
+    p.add_argument("--host", help="bind address (default 127.0.0.1)")
+    p.add_argument("--port", type=int, help="port (default 8760)")
+    p.add_argument("--static", help="built viewer directory (default: web/build)")
+    p.add_argument("--no-open", action="store_true", help="do not open the browser")
+    p.add_argument("--no-watch", action="store_true", help="disable filesystem watching")
+    p.add_argument("--allow-remote", action="store_true",
+                   help="allow binding a non-loopback host (unsafe)")
+    p.add_argument("--log-level", default="info")
+    p.set_defaults(func=cmd_serve)
 
     args = ap.parse_args(argv)
     return args.func(args)

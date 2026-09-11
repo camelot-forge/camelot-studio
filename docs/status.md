@@ -16,6 +16,7 @@ State of Camelot Studio (M0 → M0.5, Sept 2026). Byte-level format facts:
 | `camelot roundtrip <f>` | read → write → read (multiset compare; legacy 4.x = N/A) |
 | `camelot batch <manifest> --out <report> [--read-only] [--limit N]` | bulk validation, live progress; `$DAOC_CLIENT` rewrites `DAOC CLIENT/...` manifest paths |
 | `camelot mpak list <archive>` / `get <archive> <entry>` / `pack <out> <name> <files…>` | MPAK reader/writer (`.mpk`/`.npk`) |
+| `camelot serve [--root DIR] [--port N] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn) |
 
 **Coverage**: full client NIF corpus = **5087/5089 parse** (the 2 remaining
 are 10.1.0.0 housing files failing inside pyffi — see `formats.md` §7).
@@ -28,6 +29,13 @@ are 10.1.0.0 housing files failing inside pyffi — see `formats.md` §7).
   viewer (M1) + Python Blender addon (M2) + artifacts bridge to the C#
   OpenDAoC server (M2). C# never touches binaries — it consumes our
   glTF/JSON artifacts.
+- **Local daemon (`camelot serve`)**: FastAPI/uvicorn owns the API *and*
+  serves the static SvelteKit build on one loopback origin (no CORS). It is a
+  facade over the format layer: `serve/index.py` enumerates loose files +
+  MPAK entries (never parses payloads at scan time), `serve/api.py` exports
+  `.glb` on demand with a disk cache, `serve/watcher.py` rescans on change and
+  pushes SSE. Host/Origin allowlists guard loopback. `core/` remains the only
+  layer that knows binary formats.
 - **Layer contract**: `core/` owns all binary formats; `web/`, `addon/`,
   `server-bridge/` only consume glTF/JSON sidecars.
 - **glTF skinning**: `NiSkinData.bone_list` offsets are dead data in DAoC

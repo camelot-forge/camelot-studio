@@ -138,21 +138,60 @@ function bindMeshTextures(
 	return out;
 }
 
+// Split a GLB container into its JSON document and binary chunk. The serve
+// daemon returns GLB (single response) but the CS_camelot_texture extension
+// lives in orphan bufferViews inside the BIN chunk, so we need both parts.
+export function parseGlbContainer(buf: ArrayBuffer): {
+	json: Record<string, unknown>;
+	bin: ArrayBuffer | null;
+} {
+	const dv = new DataView(buf);
+	if (dv.getUint32(0, true) !== 0x46546c67) throw new Error('Not a GLB file');
+	let off = 12;
+	let json: Record<string, unknown> | null = null;
+	let bin: ArrayBuffer | null = null;
+	const decoder = new TextDecoder();
+	while (off + 8 <= buf.byteLength) {
+		const len = dv.getUint32(off, true);
+		const type = dv.getUint32(off + 4, true);
+		off += 8;
+		const slice = buf.slice(off, off + len);
+		if (type === 0x4e4f534a) json = JSON.parse(decoder.decode(slice));
+		else if (type === 0x004e4942) bin = slice;
+		off += len;
+	}
+	if (!json) throw new Error('GLB has no JSON chunk');
+	return { json, bin };
+}
+
+function binNameFor(name: string): string {
+	const i = name.lastIndexOf('.');
+	return `${(i >= 0 ? name.slice(0, i) : name).toLowerCase()}.bin`;
+}
+
+// Load a GLB served by `camelot serve` (or dropped): same pipeline as a
+// .gltf+.bin pair, reading the buffer from the container's BIN chunk.
+export async function loadFromGlb(buf: ArrayBuffer, name: string): Promise<LoadedModel> {
+	const { json, bin } = parseGlbContainer(buf);
+	const bins = new Map<string, ArrayBuffer>();
+	if (bin) bins.set(binNameFor(name), bin);
+	const { scene, parser } = await loadGltfPair(json, name, bins);
+	const raw = bin ? extractMeshTextures(json, bin) : new Map<number, LoadedTexture>();
+	const meshTextures = bindMeshTextures(scene, parser, raw);
+	return {
+		scene,
+		name,
+		meshCount: meshCount(scene),
+		triangleCount: triangleCount(scene),
+		skinJson: null,
+		meshTextures
+	};
+}
+
 export async function loadFromFiles(files: File[]): Promise<LoadedModel> {
 	const glb = files.find((f) => ext(f.name) === 'glb');
 	if (glb) {
-		const buf = await glb.arrayBuffer();
-		const scene = await new Promise<THREE.Group>((resolve, reject) => {
-			new GLTFLoader().parse(buf, '', (gltf) => resolve(gltf.scene), reject);
-		});
-		return {
-			scene,
-			name: glb.name,
-			meshCount: meshCount(scene),
-			triangleCount: triangleCount(scene),
-			skinJson: null,
-			meshTextures: new Map()
-		};
+		return await loadFromGlb(await glb.arrayBuffer(), glb.name);
 	}
 
 	const gltf = files.find((f) => ext(f.name) === 'gltf');

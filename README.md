@@ -55,6 +55,9 @@ Examples:
 
 # bulk validation from a manifest of files
 .venv/bin/camelot batch core/tests/manifest.example.txt --out work/batch.txt
+
+# local asset library + viewer (daemon; serves the built web/ UI + API)
+.venv/bin/camelot serve
 ```
 
 Set `DAOC_CLIENT` to your client directory to validate against the real

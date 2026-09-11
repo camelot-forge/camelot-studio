@@ -17,5 +17,15 @@ export default defineConfig({
 	test: {
 		include: ['src/**/*.{test,spec}.{js,ts}'],
 		environment: 'node'
+	},
+	server: {
+		// `pnpm dev` proxies the daemon API (see `camelot serve`), so the
+		// browser stays same-origin and no CORS/host exceptions are needed.
+		proxy: {
+			'/api': {
+				target: process.env.CAMELOT_API ?? 'http://127.0.0.1:8760',
+				changeOrigin: true
+			}
+		}
 	}
 });
