@@ -278,16 +278,6 @@ def test_gamedata_nif_name_fallback(client_dir):
     assert skins[0][2][:4] == b"DDS "
 
 
-def test_gamedata_player_fallback(client_dir):
-    """Player figures get a best-effort base body skin (BritonM1 -> male body)."""
-    from camelot.gamedata import resolve_figure_skins
-
-    skins = resolve_figure_skins(client_dir, _path(client_dir, "figures/BritonM1.NIF"))
-    assert skins, "expected a base body skin for BritonM1"
-    assert "body1m" in skins[0][1].lower()
-    assert skins[0][2][:4] == b"DDS "
-
-
 def test_batch_manifest_coverage(client_dir, tmp_path):
     """Every manifest path must resolve and parse (paths already exist)."""
     manifest = "core/tests/manifest.example.txt"

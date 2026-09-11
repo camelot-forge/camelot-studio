@@ -71,11 +71,11 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
 5. **MPAK header checksum**: the two *open* header fields (`formats.md` §5)
    are written as deterministic placeholders; whether the game validates
    them needs in-game confirmation.
-6. **Figure textures**: auto-resolved from gamedata for **531/617 figures
-   (86%)** (monster chain + NIF-name and player base-body fallbacks). Skin
-   slots map to meshes by node name (body/head/arms…). Still unresolved:
-   class figures whose name does not match a race, creatures/pets absent from
-   `monsters.csv`, Cata/LOD variants (`formats.md` §3).
+6. **Figure textures**: auto-resolved from gamedata for **525/617 figures
+   (85%)** (monster chain + NIF-name fallback). Skin slots map to meshes by
+   node name (body/head/arms…). Still unresolved: player/class figures (the
+   figure is a base mesh; skin/armour is per-character), creatures/pets
+   absent from `monsters.csv`, Cata/LOD variants (`formats.md` §3).
 
 ## Environment gotchas
 

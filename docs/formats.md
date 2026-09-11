@@ -88,18 +88,20 @@ fall back to the NIF's own `NiSourceTexture` names searched across the skin
 archives (e.g. `fox_pet01` → `Fox_red01.dds` → `skin193.mpk`).
 
 **Measured coverage** (617 figures, `notes`):
-458 monster + 67 NIF-name fallback + 6 player base-body = **531 resolved
-(86%)**, 86 unresolved (14%): player/class figures whose name does not match
-a race (BCasterM, FElf_new…), creatures/pets absent from `monsters.csv`
-(2headed_Wolf, Dragon01…), Catacombs variants, LOD/utility nodes.
+458 monster + 67 NIF-name fallback = **525 resolved (85%)**, 92 unresolved
+(15%): player/class figures (customisable — the texture depends on the
+character's chosen skin, not the figure), creatures/pets absent from
+`monsters.csv` (2headed_Wolf, Dragon01…), Catacombs variants, LOD/utility
+nodes.
 
 **Multi-slot mapping**: a monster's skin slots map to meshes by the mesh's
 node name (body/head/arms/limbs…), so the 2-headed dragon gets its
 body/head/wing textures on the right meshes (`_slot_for_name` in `gltf.py`).
 
 Improvement leads: (1) a pets/summons table for the creatures without a
-monster row; (2) the class-figure naming → race/skin map; (3) the fig3 wear
-pipeline for player equipment.
+monster row; (2) the player chain — the figure is only a base mesh, the
+skin/armour is per-character (fig3 + `pskins`), needs a cleaner model;
+(3) the fig3 wear pipeline.
 
 ## 4. KFA animation files (= NetImmerse NIFs, not EMotion FX)
 - `anims/` = 4060 `.kfa` (154 MB), fully covered by `animnifs.csv`.
