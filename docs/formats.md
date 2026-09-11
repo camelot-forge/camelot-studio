@@ -35,6 +35,27 @@ CSV headers span 2-3 lines; files on disk are case-insensitive to the client
 | NetImmerse 4.2.1.0 / 4.2.2.0 | old figures (Ettin, fox_pet01, ghost, siegetower…), old items/effects, KFA (236/400) | pyffi for KFA only; meshes need the built-in `legacy.py` reader |
 | NetImmerse 4.1.0.12 | the oldest items (3/60 sampled) | `legacy.py` |
 
+### Up axis (verified on the corpus)
+
+The figures' **geometry** is authored in different frames depending on the
+exporting era; the mesh container node (`Scene Root > Body`) also carries a
+local rotation (e.g. +90° X) for many 10.x meshes. Composing the node tree
+already places 10.x meshes Z-up, so the rule that reproduces the game's
+orientation is:
+
+| NIF version | Geometry up | glTF conversion |
+|---|---|---|
+| **4.1.0.12**, **4.2.1.0** | **X-down** (feet at +X, head at −X) | `(x,y,z) → (y, −x, z)` |
+| 4.2.2.0, 10.1.0.0 (all others) | **Z-up** | `(x,y,z) → (x, z, −y)` |
+
+Evidence: the early-4.x meshes (Ettin, Ogre, Fomor, Zombie) have their largest
+extent along X and the skeleton feet at +X; without the X→Y conversion they
+exported lying down. 4.2.2.0 and 10.x meshes have their height along Z (Boar,
+BritonM1, skeleton, fox_pet01…). `nifutil.XUP_VERSIONS` /`mat4_axis_for_version`
+encode this. Open: `Rat.NIF` (10.x) still renders with its length along Z and
+a short Y, which needs a render-based confirmation (its tail dominates the
+bbox, so geometry-only detection is ambiguous).
+
 ## 3. Figures & fig3 architecture
 
 - Figures (humans AND creatures) are **vertex-skinned** (`NiSkinInstance`/

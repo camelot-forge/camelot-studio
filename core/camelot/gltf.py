@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 
 from .nifutil import (
-    mat4_axis,
+    mat4_axis_for_version,
     mat4_cell,
     mat4_identity,
     mat4_mul,
@@ -28,8 +28,6 @@ __all__ = ["export_gltf"]
 I32 = 5125
 F32 = 5126
 U16 = 5123
-
-A_AXIS = mat4_axis()
 
 
 def _vec2(v) -> tuple[float, float]:
@@ -116,6 +114,9 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
     from .nifutil import load
 
     data = load(nif_path)
+    # Up axis depends on the exporting era: early 4.x figures are X-down,
+    # later 4.x and all 10.x are Z-up (see nifutil.XUP_VERSIONS).
+    axis_matrix = mat4_axis_for_version(data.version)
 
     # ---------- node tree (DFS) ----------
     objs: list = []
@@ -252,8 +253,8 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
 
         meshes.append({"node": i, "name": names[i], "prim": prim})
         if skinned and emit_skinned:
-            # inverseBind = inv(bone world) in the skeleton-root (Z-up) space;
-            # the root node's A_AXIS rotates the whole skeleton to Y-up.
+            # inverseBind = inv(bone world) in the skeleton-root space;
+            # the root node's axis matrix rotates the whole skeleton to Y-up.
             ib = []
             for jn in joints:
                 w = world.get(jn, mat4_identity())
@@ -284,7 +285,7 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
         if children[i]:
             n["children"] = children[i]
         if i == synth:
-            n["matrix"] = _flatten_colmajor(A_AXIS)
+            n["matrix"] = _flatten_colmajor(axis_matrix)
         else:
             m = node_local_matrix(objs[i])
             if m is not None and any(

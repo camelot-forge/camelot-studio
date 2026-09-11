@@ -43,12 +43,13 @@ are 10.1.0.0 housing files failing inside pyffi — see `formats.md` §7).
   computes the bind from the node tree). inverseBind = inv(exported
   worldBind) — glTF standard, correct at the bind pose (diagnostic: 7e-15);
   to be confirmed by real rendering in M1.
-- **glTF axis**: vertices/normals stay in NIF (Z-up) space and the synthetic
-  root node (`__axes__`) applies the axis conversion once (no double
-  rotation). **The DAoC client has no consistent up axis** — modern
-  Gamebryo 10.x figures export upright (Boar, skeleton, BritonM1), but some
-  legacy 4.x figures (Ettin, Zombie) are natively Y-up and export lying flat.
-  The viewer normalises scale to ~5 units and offers a 90° rotate control.
+- **glTF axis**: vertices/normals stay in NIF space and the synthetic root
+  node (`__axes__`) applies the axis conversion once (no double rotation).
+  The up axis is **version-based** (see `formats.md` §2 "Up axis"): early
+  NetImmerse **4.1.0.12 / 4.2.1.0 figures are X-down** (Ettin, Ogre, Zombie)
+  and get `(x,y,z)→(y,−x,z)`; 4.2.2.0 and 10.x are Z-up and get
+  `(x,y,z)→(x,z,−y)`. The viewer normalises scale to ~5 units and keeps a 90°
+  rotate control. Open: `Rat.NIF` (10.x) orientation needs visual confirmation.
 
 ## Testing
 

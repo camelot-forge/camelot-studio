@@ -14,8 +14,10 @@ __all__ = [
     "AXIS_CONVERSION",
     "CamelotFormatError",
     "block_types",
+    "is_xup_version",
     "load",
     "mat4_axis",
+    "mat4_axis_for_version",
     "mat4_cell",
     "mat4_identity",
     "mat4_mul",
@@ -97,6 +99,17 @@ AXIS_CONVERSION = (
     (0.0, -1.0, 0.0),
 )
 
+# Some early DAoC figures (NetImmerse 4.1.0.12 and 4.2.1.0) are authored
+# X-down: the head/feet lie along X (the skeleton's feet are at +X, the head
+# at -X). Their mesh bbox is tallest along X. Bring them to glTF Y-up with
+# (x, y, z) -> (y, -x, z). See docs/formats.md (axis section).
+XUP_VERSIONS = frozenset({0x0401000C, 0x04020100})
+AXIS_CONVERSION_XUP = (
+    (0.0, 1.0, 0.0),
+    (-1.0, 0.0, 0.0),
+    (0.0, 0.0, 1.0),
+)
+
 
 def vec3(v) -> tuple[float, float, float]:
     """Vecteur 3 (pyffi Vector3 ou tuple) -> tuple de floats."""
@@ -143,11 +156,27 @@ def mat4_identity() -> list[list[float]]:
 
 def mat4_axis() -> list[list[float]]:
     """Matrice 4x4 de la conversion d'axes (rotation pure)."""
+    return _mat4_from3(AXIS_CONVERSION)
+
+
+def _mat4_from3(conv) -> list[list[float]]:
     m = mat4_identity()
     for i in range(3):
         for j in range(3):
-            m[i][j] = AXIS_CONVERSION[i][j]
+            m[i][j] = conv[i][j]
     return m
+
+
+def is_xup_version(version: int) -> bool:
+    """True when the NIF's up axis is X (early DAoC exporters)."""
+    return version in XUP_VERSIONS
+
+
+def mat4_axis_for_version(version: int) -> list[list[float]]:
+    """Axis conversion to glTF Y-up for a given NIF version."""
+    if is_xup_version(version):
+        return _mat4_from3(AXIS_CONVERSION_XUP)
+    return mat4_axis()
 
 
 def node_local_matrix(node) -> list[list[float]] | None:

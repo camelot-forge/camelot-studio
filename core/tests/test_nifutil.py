@@ -88,6 +88,24 @@ class TestMatrixMath:
             assert out == list(want)
 
 
+class TestAxisForVersion:
+    def test_xup_versions_are_early_4x(self):
+        assert nifutil.is_xup_version(0x0401000C)
+        assert nifutil.is_xup_version(0x04020100)
+        assert not nifutil.is_xup_version(0x04020200)
+        assert not nifutil.is_xup_version(0x0A010000)
+
+    def test_xup_maps_up_minus_x_to_plus_y(self):
+        m = nifutil.mat4_axis_for_version(0x04020100)
+        # mesh up is -X -> glTF +Y
+        out = [sum(m[i][j] * ([-1, 0, 0, 1][j]) for j in range(4)) for i in range(4)]
+        assert out == [0.0, 1.0, 0.0, 1.0]
+
+    def test_zup_falls_back_to_standard_conversion(self):
+        assert nifutil.mat4_axis_for_version(0x0A010000) == nifutil.mat4_axis()
+        assert nifutil.mat4_axis_for_version(0x04020200) == nifutil.mat4_axis()
+
+
 class TestNodeLocalMatrix:
     @pytest.fixture(autouse=True)
     def _legacy_classes(self):
