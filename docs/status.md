@@ -104,6 +104,10 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
    (Svelte 5 runes, Vite, Vitest) static viewer loading `.gltf`+`.bin`
    (+`.skin.json`); design system adapted from Pictiúr. Animated `.kfa`
    playback is future work (needs index table 54+ and a KFA reader here).
+   **Textures**: `camelot gltf` resolves the figure's DDS from gamedata
+   (`core/camelot/gamedata.py`) and embeds it (`CS_camelot_texture`); the
+   viewer loads it with three.js `DDSLoader`. Multi-slot → per-mesh mapping
+   is open.
 6. M2: Blender addon + server-bridge (artifact injection, in-game testing).
 
 ## Command cheat sheet

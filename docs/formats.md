@@ -66,8 +66,27 @@ CSV headers span 2-3 lines; files on disk are case-insensitive to the client
 - Items: statics (3/60 skinned), textured (58/60), attach nodes
   `BACK`/`BELT`/`GROUND`.
 
-## 4. KFA animation files (= NetImmerse NIFs, not EMotion FX)
+### Figure textures (resolved from gamedata, not the NIF)
 
+Figures carry **no texture in the NIF** (a few have embedded/writable names,
+rarely usable); the texture is resolved at runtime from `gamedata.mpk`:
+
+```
+figure NIF  ->  monnifs.csv (Name = NIF basename, lower-case, no ext)
+            ->  monsters.csv (# = monnifs ID)  ->  skin IDs per slot
+                (Body/Head/Arms/Gloves/Lbody/Legs/Boots/Cloak/Helm)
+            ->  skins/mskins/pskins.csv (skin ID) -> texture name + Num
+            ->  figures/skins/skinNNN.mpk (NNN = Num, 3 digits) -> the .dds
+```
+
+Texture names in the tables are `.tga` while the archive entry is `.dds`
+(match on basename). Example: Boar `Body` skin 109 → `Num=3` →
+`figures/skins/skin003.mpk` → `boar.dds` (512×256, DXT1). Implemented in
+`core/camelot/gamedata.py`; `camelot gltf` embeds the resolved DDS via the
+`CS_camelot_texture` extension. Multi-slot → per-mesh mapping is *open* (M1
+applies the Body/first slot to every mesh).
+
+## 4. KFA animation files (= NetImmerse NIFs, not EMotion FX)
 - `anims/` = 4060 `.kfa` (154 MB), fully covered by `animnifs.csv`.
 - Same architecture in all 3 versions (4.2.1.0, 4.2.2.0, 10.1.0.0): a list
   of channels, one per animated bone:

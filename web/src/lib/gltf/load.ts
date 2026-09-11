@@ -11,12 +11,18 @@ export interface SkinJson {
 	meshes: SkinMesh[];
 }
 
+export interface LoadedTexture {
+	name: string;
+	bytes: ArrayBuffer;
+}
+
 export interface LoadedModel {
 	scene: THREE.Group;
 	name: string;
 	meshCount: number;
 	triangleCount: number;
 	skinJson: SkinJson | null;
+	textures: LoadedTexture[];
 }
 
 function ext(name: string): string {
@@ -72,15 +78,37 @@ export function embedBuffers(
 
 // Parse a .gltf JSON + its .bin blobs with three.js, returning the scene.
 async function loadGltfPair(
+	json: Record<string, unknown>,
 	name: string,
-	gltfJson: string,
 	bins: Map<string, ArrayBuffer>
 ): Promise<THREE.Group> {
-	const json = JSON.parse(gltfJson) as { buffers?: Array<{ uri?: string }> };
-	embedBuffers(json, name, bins);
+	embedBuffers(json as { buffers?: Array<{ uri?: string }> }, name, bins);
 	return await new Promise<THREE.Group>((resolve, reject) => {
 		new GLTFLoader().parse(JSON.stringify(json), '', (gltf) => resolve(gltf.scene), reject);
 	});
+}
+
+// Extract the CS_camelot_texture DDS blobs referenced by mesh nodes. Each is a
+// bufferView into the .bin; GLTFLoader ignores those orphan bufferViews.
+export function extractTextures(
+	json: {
+		nodes?: Array<Record<string, unknown>>;
+		bufferViews?: Array<{ byteOffset?: number; byteLength: number }>;
+	},
+	binBytes: ArrayBuffer
+): LoadedTexture[] {
+	const out: LoadedTexture[] = [];
+	for (const node of json.nodes ?? []) {
+		const ext = (node.extensions as Record<string, { bufferView: number; name?: string }>)
+			?.CS_camelot_texture;
+		if (!ext) continue;
+		const bv = json.bufferViews?.[ext.bufferView];
+		if (!bv) continue;
+		const off = bv.byteOffset ?? 0;
+		const bytes = binBytes.slice(off, off + bv.byteLength);
+		out.push({ name: ext.name ?? 'texture', bytes });
+	}
+	return out;
 }
 
 export async function loadFromFiles(files: File[]): Promise<LoadedModel> {
@@ -95,18 +123,25 @@ export async function loadFromFiles(files: File[]): Promise<LoadedModel> {
 			name: glb.name,
 			meshCount: meshCount(scene),
 			triangleCount: triangleCount(scene),
-			skinJson: null
+			skinJson: null,
+			textures: []
 		};
 	}
 
 	const gltf = files.find((f) => ext(f.name) === 'gltf');
 	if (!gltf) throw new Error('No .glb or .gltf file provided');
-	const json = await gltf.text();
+	const json = JSON.parse(await gltf.text()) as {
+		nodes?: Array<Record<string, unknown>>;
+		bufferViews?: Array<{ byteOffset?: number; byteLength: number }>;
+		buffers?: Array<{ uri?: string }>;
+	};
 	const bins = new Map<string, ArrayBuffer>();
 	for (const f of files) {
 		if (ext(f.name) === 'bin') bins.set(f.name.toLowerCase(), await f.arrayBuffer());
 	}
-	const scene = await loadGltfPair(gltf.name, json, bins);
+	const scene = await loadGltfPair(json, gltf.name, bins);
+	const binBytes = bins.get(`${gltf.name.slice(0, gltf.name.lastIndexOf('.')).toLowerCase()}.bin`);
+	const textures = binBytes ? extractTextures(json, binBytes) : [];
 
 	let skinJson: SkinJson | null = null;
 	const skin = files.find((f) => ext(f.name) === 'json');
@@ -122,6 +157,7 @@ export async function loadFromFiles(files: File[]): Promise<LoadedModel> {
 		name: gltf.name,
 		meshCount: meshCount(scene),
 		triangleCount: triangleCount(scene),
-		skinJson
+		skinJson,
+		textures
 	};
 }

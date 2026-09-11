@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as THREE from 'three';
 	import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+	import { DDSLoader } from 'three/addons/loaders/DDSLoader.js';
 	import { Axis3d, Grid3x3, Maximize2, Rotate3d, RotateCw } from '@lucide/svelte';
 	import type { LoadedModel } from '$lib/gltf/load';
 
@@ -88,6 +89,34 @@
 				});
 			}
 		});
+
+		// Apply embedded DAoC textures (DDS via DDSLoader) to the meshes.
+		if (model.textures.length) {
+			const sceneRoot = model.scene;
+			const dds = new DDSLoader();
+			for (const tex of model.textures) {
+				const data = dds.parse(tex.bytes, true);
+				const dt = new THREE.CompressedTexture(
+					data.mipmaps,
+					data.width,
+					data.height,
+					data.format as THREE.CompressedPixelFormat,
+					THREE.UnsignedByteType
+				);
+				dt.colorSpace = THREE.SRGBColorSpace;
+				dt.anisotropy = 4;
+				dt.needsUpdate = true;
+				sceneRoot.traverse((obj) => {
+					const mesh = obj as THREE.Mesh;
+					if (mesh.isMesh && mesh.material) {
+						const mat = mesh.material as THREE.MeshStandardMaterial;
+						mat.map = dt;
+						mat.color = new THREE.Color(0xffffff);
+						mat.needsUpdate = true;
+					}
+				});
+			}
+		}
 
 		// DAoC uses its own unit scale (figures can span ~80 units) and offsets
 		// the model far from the origin. Normalise every figure to a consistent

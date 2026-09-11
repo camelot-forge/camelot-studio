@@ -86,7 +86,8 @@ class Buffer:
 
 
 def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
-                emit_skinned: bool = False) -> dict:
+                emit_skinned: bool = False, texture: str | None = None,
+                texture_data: tuple[str, bytes] | None = None) -> dict:
     """
     emit_skinned=False (default): bind-pose geometry + skeleton, plus a
     <prefix>.skin.json sidecar (bone names + per-vertex weights) for later.
@@ -279,8 +280,33 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
     for k, mesh in enumerate(meshes):
         mesh_index_by_node[mesh["node"]] = k
 
+    # ---- texture (CS_camelot_texture extension) ----
+    # DAoC figure textures are DDS (DXT) resolved from gamedata archives, not
+    # standard glTF images. Embed the DDS as an extra bufferView and reference
+    # it on each mesh node via a custom extension; the viewer loads it with
+    # three.js DDSLoader. GLTFLoader ignores the orphan bufferView.
+    texture_view = None
+    texture_name = None
+    tex_bytes = None
+    if texture:
+        with open(texture, "rb") as fh:
+            tex_bytes = fh.read()
+        texture_name = os.path.basename(texture)
+    elif texture_data is not None:
+        texture_name, tex_bytes = texture_data
+    if tex_bytes is not None:
+        buf._pad()
+        texture_view = len(buf.views)
+        buf.views.append({"buffer": 0, "byteOffset": buf.size, "byteLength": len(tex_bytes)})
+        buf.chunks.append(tex_bytes)
+        buf.size += len(tex_bytes)
+
     for k, mesh in enumerate(meshes):
         gltf_nodes[mesh["node"]]["mesh"] = k
+        if texture_view is not None:
+            gltf_nodes[mesh["node"]]["extensions"] = {
+                "CS_camelot_texture": {"bufferView": texture_view, "name": texture_name}
+            }
 
     for k, skin in enumerate(skins):
         gltf_nodes[skin["node"]]["skin"] = k
@@ -300,6 +326,8 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
         "bufferViews": buf.views,
         "accessors": buf.accessors,
     }
+    if texture_view is not None:
+        gltf["extensionsUsed"] = ["CS_camelot_texture"]
     with open(out_prefix + ".bin", "wb") as fh:
         fh.write(b)
     with open(out_prefix + ".gltf", "w") as fh:

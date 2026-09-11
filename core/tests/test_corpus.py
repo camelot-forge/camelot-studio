@@ -248,6 +248,27 @@ def test_kfa_indices_land_on_bone_table(client_dir):
         assert bone_name(idx) == want
 
 
+def test_gamedata_resolves_boar_texture(client_dir):
+    """The Boar's fig texture resolves from gamedata to a real DDS (DXT)."""
+    from camelot.gamedata import resolve_figure_skins
+
+    skins = resolve_figure_skins(client_dir, _path(client_dir, "figures/Boar.NIF"))
+    assert skins, "expected at least one skin texture for the Boar"
+    slot, _name, data = skins[0]
+    assert slot == "Body"
+    assert data[:4] == b"DDS "
+
+
+def test_gamedata_resolves_multi_slot(client_dir):
+    """The 2-headed dragon resolves Body/Head/Arms skin slots."""
+    from camelot.gamedata import resolve_figure_skins
+
+    skins = resolve_figure_skins(client_dir, _path(client_dir, "figures/2HDragon.NIF"))
+    slots = {s for s, _, _ in skins}
+    assert {"Body", "Head", "Arms"} <= slots
+    assert all(d[:4] == b"DDS " for _, _, d in skins)
+
+
 def test_batch_manifest_coverage(client_dir, tmp_path):
     """Every manifest path must resolve and parse (paths already exist)."""
     manifest = "core/tests/manifest.example.txt"

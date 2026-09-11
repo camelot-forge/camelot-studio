@@ -84,7 +84,18 @@ def cmd_gltf(args) -> int:
     from .gltf import export_gltf
 
     out = args.out or args.path.rsplit(".", 1)[0]
-    export_gltf(args.path, out, verbose=not args.quiet, emit_skinned=args.skinned)
+    texture_data = None
+    if args.texture is None and not args.no_texture:
+        client = os.environ.get("DAOC_CLIENT")
+        if client:
+            from .gamedata import resolve_figure_skins
+
+            skins = resolve_figure_skins(client, args.path)
+            if skins:
+                _slot, name, data = skins[0]
+                texture_data = (name, data)
+    export_gltf(args.path, out, verbose=not args.quiet, emit_skinned=args.skinned,
+                texture=args.texture, texture_data=texture_data)
     return 0
 
 
@@ -233,6 +244,9 @@ def main(argv=None) -> int:
     p.add_argument("--out", help="output prefix (default: input basename)")
     p.add_argument("--skinned", action="store_true",
                    help="experimental: emit JOINTS/WEIGHTS (inverseBind = inv(worldBind))")
+    p.add_argument("--texture", help="embed a .dds texture (CS_camelot_texture extension)")
+    p.add_argument("--no-texture", action="store_true",
+                   help="skip automatic gamedata texture resolution")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_gltf)
 
