@@ -90,11 +90,10 @@
 			}
 		});
 
-		// Apply embedded DAoC textures (DDS via DDSLoader) to the meshes.
-		if (model.textures.length) {
-			const sceneRoot = model.scene;
+		// Apply embedded DAoC textures (DDS via DDSLoader), one per mesh (skin slot).
+		if (model.meshTextures.size) {
 			const dds = new DDSLoader();
-			for (const tex of model.textures) {
+			for (const [mesh, tex] of model.meshTextures) {
 				const data = dds.parse(tex.bytes, true);
 				const dt = new THREE.CompressedTexture(
 					data.mipmaps,
@@ -106,15 +105,10 @@
 				dt.colorSpace = THREE.SRGBColorSpace;
 				dt.anisotropy = 4;
 				dt.needsUpdate = true;
-				sceneRoot.traverse((obj) => {
-					const mesh = obj as THREE.Mesh;
-					if (mesh.isMesh && mesh.material) {
-						const mat = mesh.material as THREE.MeshStandardMaterial;
-						mat.map = dt;
-						mat.color = new THREE.Color(0xffffff);
-						mat.needsUpdate = true;
-					}
-				});
+				const mat = mesh.material as THREE.MeshStandardMaterial;
+				mat.map = dt;
+				mat.color = new THREE.Color(0xffffff);
+				mat.needsUpdate = true;
 			}
 		}
 

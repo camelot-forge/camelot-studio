@@ -22,7 +22,7 @@ export interface LoadedModel {
 	meshCount: number;
 	triangleCount: number;
 	skinJson: SkinJson | null;
-	textures: LoadedTexture[];
+	meshTextures: Map<THREE.Mesh, LoadedTexture>;
 }
 
 function ext(name: string): string {
@@ -76,38 +76,65 @@ export function embedBuffers(
 	}
 }
 
-// Parse a .gltf JSON + its .bin blobs with three.js, returning the scene.
+// Parse a .gltf JSON + its .bin blobs with three.js.
+interface GltfResult {
+	scene: THREE.Group;
+	parser: { associations: Map<object, { meshes?: number }> };
+}
+
 async function loadGltfPair(
 	json: Record<string, unknown>,
 	name: string,
 	bins: Map<string, ArrayBuffer>
-): Promise<THREE.Group> {
+): Promise<GltfResult> {
 	embedBuffers(json as { buffers?: Array<{ uri?: string }> }, name, bins);
-	return await new Promise<THREE.Group>((resolve, reject) => {
-		new GLTFLoader().parse(JSON.stringify(json), '', (gltf) => resolve(gltf.scene), reject);
+	return await new Promise<GltfResult>((resolve, reject) => {
+		new GLTFLoader().parse(
+			JSON.stringify(json),
+			'',
+			(gltf) => resolve({ scene: gltf.scene, parser: gltf.parser }),
+			reject
+		);
 	});
 }
 
-// Extract the CS_camelot_texture DDS blobs referenced by mesh nodes. Each is a
-// bufferView into the .bin; GLTFLoader ignores those orphan bufferViews.
-export function extractTextures(
+// Extract the CS_camelot_texture DDS blobs per glTF mesh. Each is a bufferView
+// into the .bin; GLTFLoader ignores those orphan bufferViews. The mesh index
+// lets the viewer map each THREE.Mesh to its own skin-slot texture.
+export function extractMeshTextures(
 	json: {
-		nodes?: Array<Record<string, unknown>>;
+		meshes?: Array<Record<string, unknown>>;
 		bufferViews?: Array<{ byteOffset?: number; byteLength: number }>;
 	},
 	binBytes: ArrayBuffer
-): LoadedTexture[] {
-	const out: LoadedTexture[] = [];
-	for (const node of json.nodes ?? []) {
-		const ext = (node.extensions as Record<string, { bufferView: number; name?: string }>)
+): Map<number, LoadedTexture> {
+	const out = new Map<number, LoadedTexture>();
+	json.meshes?.forEach((mesh, mi) => {
+		const ext = (mesh.extensions as Record<string, { bufferView: number; name?: string }>)
 			?.CS_camelot_texture;
-		if (!ext) continue;
+		if (!ext) return;
 		const bv = json.bufferViews?.[ext.bufferView];
-		if (!bv) continue;
+		if (!bv) return;
 		const off = bv.byteOffset ?? 0;
-		const bytes = binBytes.slice(off, off + bv.byteLength);
-		out.push({ name: ext.name ?? 'texture', bytes });
-	}
+		out.set(mi, { name: ext.name ?? 'texture', bytes: binBytes.slice(off, off + bv.byteLength) });
+	});
+	return out;
+}
+
+// Map each THREE.Mesh in the scene to its glTF mesh index via the parser.
+function bindMeshTextures(
+	scene: THREE.Object3D,
+	parser: GltfResult['parser'],
+	meshTextures: Map<number, LoadedTexture>
+): Map<THREE.Mesh, LoadedTexture> {
+	const out = new Map<THREE.Mesh, LoadedTexture>();
+	scene.traverse((obj) => {
+		const mesh = obj as THREE.Mesh;
+		if (!mesh.isMesh) return;
+		const mi = parser.associations.get(mesh)?.meshes;
+		const tex = mi !== undefined ? meshTextures.get(mi) : undefined;
+		if (tex) out.set(mesh, tex);
+	});
 	return out;
 }
 
@@ -124,7 +151,7 @@ export async function loadFromFiles(files: File[]): Promise<LoadedModel> {
 			meshCount: meshCount(scene),
 			triangleCount: triangleCount(scene),
 			skinJson: null,
-			textures: []
+			meshTextures: new Map()
 		};
 	}
 
@@ -139,9 +166,10 @@ export async function loadFromFiles(files: File[]): Promise<LoadedModel> {
 	for (const f of files) {
 		if (ext(f.name) === 'bin') bins.set(f.name.toLowerCase(), await f.arrayBuffer());
 	}
-	const scene = await loadGltfPair(json, gltf.name, bins);
+	const { scene, parser } = await loadGltfPair(json, gltf.name, bins);
 	const binBytes = bins.get(`${gltf.name.slice(0, gltf.name.lastIndexOf('.')).toLowerCase()}.bin`);
-	const textures = binBytes ? extractTextures(json, binBytes) : [];
+	const meshTexturesRaw = binBytes ? extractMeshTextures(json, binBytes) : new Map();
+	const meshTextures = bindMeshTextures(scene, parser, meshTexturesRaw);
 
 	let skinJson: SkinJson | null = null;
 	const skin = files.find((f) => ext(f.name) === 'json');
@@ -158,6 +186,6 @@ export async function loadFromFiles(files: File[]): Promise<LoadedModel> {
 		meshCount: meshCount(scene),
 		triangleCount: triangleCount(scene),
 		skinJson,
-		textures
+		meshTextures
 	};
 }

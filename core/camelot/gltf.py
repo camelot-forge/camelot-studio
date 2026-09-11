@@ -85,9 +85,27 @@ class Buffer:
         return b"".join(self.chunks)
 
 
+def _slot_for_name(name: str) -> str | None:
+    """Map a NIF node name (e.g. 'body', 'head', 'arms') to a skin slot."""
+    n = name.lower()
+    for slot, keys in (
+        ("Head", ("head", "helm")),
+        ("Arms", ("arm", "wing", "hand", "glove")),
+        ("Legs", ("leg",)),
+        ("Boots", ("boot", "foot", "feet", "shoe")),
+        ("Cloak", ("cloak",)),
+        ("Lbody", ("lbody",)),
+        ("Body", ("body", "torso", "chest")),
+    ):
+        if any(k in n for k in keys):
+            return slot
+    return None
+
+
 def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
                 emit_skinned: bool = False, texture: str | None = None,
-                texture_data: tuple[str, bytes] | None = None) -> dict:
+                texture_data: tuple[str, bytes] | None = None,
+                textures: list[tuple[str, str, bytes]] | None = None) -> dict:
     """
     emit_skinned=False (default): bind-pose geometry + skeleton, plus a
     <prefix>.skin.json sidecar (bone names + per-vertex weights) for later.
@@ -280,33 +298,52 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
     for k, mesh in enumerate(meshes):
         mesh_index_by_node[mesh["node"]] = k
 
-    # ---- texture (CS_camelot_texture extension) ----
+    # ---- textures (CS_camelot_texture extension) ----
     # DAoC figure textures are DDS (DXT) resolved from gamedata archives, not
-    # standard glTF images. Embed the DDS as an extra bufferView and reference
-    # it on each mesh node via a custom extension; the viewer loads it with
-    # three.js DDSLoader. GLTFLoader ignores the orphan bufferView.
-    texture_view = None
-    texture_name = None
-    tex_bytes = None
+    # standard glTF images. Embed each skin-slot DDS as a bufferView and map
+    # every mesh node to its slot (by node name: body/head/arms/...); the
+    # viewer loads it with three.js DDSLoader. GLTFLoader ignores the views.
+    tex_list = list(textures or [])
     if texture:
         with open(texture, "rb") as fh:
-            tex_bytes = fh.read()
-        texture_name = os.path.basename(texture)
+            tex_list.append(("Body", os.path.basename(texture), fh.read()))
     elif texture_data is not None:
-        texture_name, tex_bytes = texture_data
-    if tex_bytes is not None:
-        buf._pad()
-        texture_view = len(buf.views)
-        buf.views.append({"buffer": 0, "byteOffset": buf.size, "byteLength": len(tex_bytes)})
-        buf.chunks.append(tex_bytes)
-        buf.size += len(tex_bytes)
+        tex_list.append(("Body", texture_data[0], texture_data[1]))
 
+    slot_views: dict[str, tuple[int, str]] = {}
+    for slot, name, data in tex_list:
+        if slot in slot_views:
+            continue
+        buf._pad()
+        vi = len(buf.views)
+        buf.views.append({"buffer": 0, "byteOffset": buf.size, "byteLength": len(data)})
+        buf.chunks.append(data)
+        buf.size += len(data)
+        slot_views[slot] = (vi, name)
+
+    parent: dict[int, int] = {}
+    for i, ch in enumerate(children):
+        for c in ch:
+            parent[c] = i
+
+    def _mesh_slot(node_idx: int) -> str:
+        j = node_idx
+        while True:
+            s = _slot_for_name(names[j])
+            if s and s in slot_views:
+                return s
+            if j not in parent:
+                break
+            j = parent[j]
+        return "Body" if "Body" in slot_views else next(iter(slot_views))
+
+    mesh_ext: dict[int, dict] = {}
     for k, mesh in enumerate(meshes):
-        gltf_nodes[mesh["node"]]["mesh"] = k
-        if texture_view is not None:
-            gltf_nodes[mesh["node"]]["extensions"] = {
-                "CS_camelot_texture": {"bufferView": texture_view, "name": texture_name}
-            }
+        node = mesh["node"]
+        gltf_nodes[node]["mesh"] = k
+        if slot_views:
+            vi, nm = slot_views[_mesh_slot(node)]
+            mesh_ext[k] = {"CS_camelot_texture": {"bufferView": vi, "name": nm}}
 
     for k, skin in enumerate(skins):
         gltf_nodes[skin["node"]]["skin"] = k
@@ -317,7 +354,11 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
         "scene": 0,
         "scenes": [{"nodes": [synth]}],
         "nodes": gltf_nodes,
-        "meshes": [{"primitives": [m["prim"]], "name": m["name"]} for m in meshes],
+        "meshes": [
+            {"primitives": [m["prim"]], "name": m["name"],
+             **({"extensions": mesh_ext[k]} if k in mesh_ext else {})}
+            for k, m in enumerate(meshes)
+        ],
         "skins": [
             {"joints": s["joints"], "inverseBindMatrices": s["invbind"], "skeleton": synth}
             for s in skins
@@ -326,7 +367,7 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
         "bufferViews": buf.views,
         "accessors": buf.accessors,
     }
-    if texture_view is not None:
+    if slot_views:
         gltf["extensionsUsed"] = ["CS_camelot_texture"]
     with open(out_prefix + ".bin", "wb") as fh:
         fh.write(b)

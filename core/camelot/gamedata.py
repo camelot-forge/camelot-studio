@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import re
 
 from .mpak import MpakArchive
 
@@ -72,7 +73,8 @@ def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str,
     if monnifs_id is None:
         # pets / special figures are not in monnifs: fall back to the NIF's own
         # NiSourceTexture names, searching the skin archives for them.
-        return _resolve_from_nif_names(client_dir, nif_path)
+        return _resolve_from_nif_names(client_dir, nif_path) or _resolve_player_skin(
+            client_dir, nif_path, tables)
 
     monster = None
     for row in tables["monsters.csv"]:
@@ -80,7 +82,8 @@ def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str,
             monster = row
             break
     if monster is None:
-        return _resolve_from_nif_names(client_dir, nif_path)
+        return _resolve_from_nif_names(client_dir, nif_path) or _resolve_player_skin(
+            client_dir, nif_path, tables)
 
     out: list[tuple[str, str, bytes]] = []
     for slot, idx in MONSTERS_SLOTS.items():
@@ -95,6 +98,38 @@ def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str,
         if data is not None:
             out.append((slot, tex_name, data))
     return out or _resolve_from_nif_names(client_dir, nif_path)
+
+
+def _resolve_player_skin(client_dir: str, nif_path: str,
+                         tables: dict[str, list[list[str]]]) -> list[tuple[str, str, bytes]]:
+    """Best-effort base-body skin for a player figure (per-character in game).
+
+    Matches the figure name against a skin table's Textual Name (e.g.
+    ``BritonM1`` -> skin "Briton" -> ``b_cth1_body1m.tga``) and returns the
+    base body texture. Approximate: the real skin is chosen at character
+    creation.
+    """
+    base = os.path.splitext(os.path.basename(nif_path))[0].lower()
+    want_female = bool(re.search(r"f\d", base))
+    best = None
+    for table_name in ("skins.csv", "pskins.csv"):
+        for row in tables.get(table_name, []):
+            if len(row) <= SKINS_ARCHIVE:
+                continue
+            textual = row[1].strip().lower()
+            if len(textual) < 4 or not base.startswith(textual):
+                continue
+            name = row[SKINS_NAME].strip().lower()
+            if "body" not in name or "lbody" in name:
+                continue
+            if want_female != ("1f" in name or "_f" in name):
+                continue
+            if best is None or len(textual) > len(best[0]):
+                best = (textual, row[SKINS_NAME].strip(), row[SKINS_ARCHIVE].strip())
+    if best is None:
+        return []
+    data = _read_skin_archive(client_dir, best[2], best[1])
+    return [("Body", best[1], data)] if data is not None else []
 
 
 def _nif_texture_names(nif_path: str) -> list[str]:

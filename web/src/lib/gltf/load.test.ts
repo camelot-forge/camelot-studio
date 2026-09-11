@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { embedBuffers, extractTextures } from './load';
+import { embedBuffers, extractMeshTextures } from './load';
 
 // Corpus-style: reads the exported Boar artifacts if present (game-derived,
 // never committed). Point CAMELOT_GLTF_DIR at the export directory, or it
@@ -43,11 +43,12 @@ describe.skipIf(!present)('glTF loading', () => {
 			const gltf = JSON.parse(readFileSync(join(DIR, 'model_Boar_tex.gltf'), 'utf8'));
 			expect(gltf.extensionsUsed).toContain('CS_camelot_texture');
 			const binBytes = readFileSync(join(DIR, 'model_Boar_tex.bin'));
-			const texs = extractTextures(gltf, binBytes.buffer);
-			expect(texs.length).toBeGreaterThan(0);
-			expect(texs[0].name).toBe('boar.dds');
+			const texs = extractMeshTextures(gltf, binBytes.buffer);
+			expect(texs.size).toBeGreaterThan(0);
+			const first = [...texs.values()][0];
+			expect(first.name).toMatch(/\.(dds|tga)$/);
 			// starts with the DDS magic
-			expect(new Uint8Array(texs[0].bytes).slice(0, 4)).toEqual(
+			expect(new Uint8Array(first.bytes).slice(0, 4)).toEqual(
 				new Uint8Array([0x44, 0x44, 0x53, 0x20])
 			);
 		});
