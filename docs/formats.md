@@ -85,8 +85,19 @@ Texture names in the tables are `.tga` while the archive entry is `.dds`
 `core/camelot/gamedata.py`; `camelot gltf` embeds the resolved DDS via the
 `CS_camelot_texture` extension. Pets/special figures not in `monnifs.csv`
 fall back to the NIF's own `NiSourceTexture` names searched across the skin
-archives (e.g. `fox_pet01` → `Fox_red01.dds` → `skin193.mpk`). Multi-slot →
-per-mesh mapping is *open* (M1 applies the Body/first slot to every mesh).
+archives (e.g. `fox_pet01` → `Fox_red01.dds` → `skin193.mpk`).
+
+**Measured coverage** (617 figures, `notes`):
+458 monster + 67 NIF-name fallback = **525 resolved (85%)**, 92 unresolved
+(15%): player/class figures (customisable — no single texture by design),
+creatures/pets absent from `monsters.csv` (Bear, Mummy, Stingray, Dragon01…),
+Catacombs variants, LOD/utility nodes. Also, only the **Body/first slot** is
+applied (to every mesh); multi-slot → per-mesh mapping is *open*.
+
+Improvement leads: (1) a pets/summons table or monnifs columns for the
+creatures without a monster row; (2) the player chain (`pskins`/fig3 +
+character-customisation) — inherently per-character; (3) map each monster
+skin slot to the matching mesh (body/head/arms).
 
 ## 4. KFA animation files (= NetImmerse NIFs, not EMotion FX)
 - `anims/` = 4060 `.kfa` (154 MB), fully covered by `animnifs.csv`.
