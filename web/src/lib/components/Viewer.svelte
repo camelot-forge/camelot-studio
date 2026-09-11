@@ -25,14 +25,18 @@
 	let root: THREE.Group | null = null;
 	let frame = 0;
 
-	function fit(scene: THREE.Scene) {
-		const box = new THREE.Box3().setFromObject(scene);
+	function fit() {
+		if (!camera || !controls || !root) return;
+		// Frame the model only: the grid/axes helpers must not drive the
+		// zoom (they span 10 units and were making every figure tiny).
+		const box = new THREE.Box3().setFromObject(root);
 		const center = box.getCenter(new THREE.Vector3());
-		const size = box.getSize(new THREE.Vector3());
-		if (!camera || !controls) return;
-		const dist = Math.max(size.length(), 1) * 2.4;
-		camera.position.set(center.x, center.y + dist * 0.6, center.z + dist);
-		camera.near = dist / 200;
+		const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 0.5);
+		const vFov = THREE.MathUtils.degToRad(camera.fov);
+		const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+		const dist = (radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.1;
+		camera.position.set(center.x, center.y + dist * 0.12, center.z + dist);
+		camera.near = dist / 100;
 		camera.far = dist * 100;
 		camera.updateProjectionMatrix();
 		controls.target.copy(center);
@@ -129,7 +133,7 @@
 		);
 		root.rotation.set(rotX, 0, 0);
 
-		fit(scene);
+		fit();
 
 		// render loop
 		const loop = () => {
@@ -216,7 +220,7 @@
 		>
 			<Grid3x3 size={16} />
 		</button>
-		<button class="btn btn--icon" title="Reset view" onclick={() => scene && fit(scene)}>
+		<button class="btn btn--icon" title="Reset view" onclick={fit}>
 			<Maximize2 size={16} />
 		</button>
 		<button
