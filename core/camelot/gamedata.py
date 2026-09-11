@@ -70,7 +70,9 @@ def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str,
             monnifs_id = row[0].strip()
             break
     if monnifs_id is None:
-        return []
+        # pets / special figures are not in monnifs: fall back to the NIF's own
+        # NiSourceTexture names, searching the skin archives for them.
+        return _resolve_from_nif_names(client_dir, nif_path)
 
     monster = None
     for row in tables["monsters.csv"]:
@@ -78,7 +80,7 @@ def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str,
             monster = row
             break
     if monster is None:
-        return []
+        return _resolve_from_nif_names(client_dir, nif_path)
 
     out: list[tuple[str, str, bytes]] = []
     for slot, idx in MONSTERS_SLOTS.items():
@@ -92,6 +94,48 @@ def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str,
         data = _read_skin_archive(client_dir, archive_num, tex_name)
         if data is not None:
             out.append((slot, tex_name, data))
+    return out or _resolve_from_nif_names(client_dir, nif_path)
+
+
+def _nif_texture_names(nif_path: str) -> list[str]:
+    """The NiSourceTexture file names referenced by a figure (may be empty)."""
+    try:
+        from . import nifutil
+
+        data = nifutil.load(nif_path)
+    except Exception:  # noqa: BLE001
+        return []
+    names = []
+    for block in data.blocks:
+        if type(block).__name__ == "NiSourceTexture":
+            fn = getattr(block, "file_name", None)
+            if fn:
+                names.append(fn.decode("latin1"))
+    return names
+
+
+def _resolve_from_nif_names(client_dir: str, nif_path: str) -> list[tuple[str, str, bytes]]:
+    names = _nif_texture_names(nif_path)
+    if not names:
+        return []
+    skins_dir = os.path.join(client_dir, "figures", "skins")
+    if not os.path.isdir(skins_dir):
+        return []
+    bases = {os.path.splitext(n)[0].lower(): n for n in names}
+    out: list[tuple[str, str, bytes]] = []
+    seen: set[str] = set()
+    for arch in sorted(os.listdir(skins_dir)):
+        if not arch.lower().endswith(".mpk"):
+            continue
+        a = MpakArchive(os.path.join(skins_dir, arch))
+        try:
+            for entry in a.entries:
+                stem = os.path.splitext(entry)[0].lower()
+                if stem in bases and stem not in seen:
+                    seen.add(stem)
+                    out.append(("Body", bases[stem], a.read(entry)))
+        finally:
+            a.close()
     return out
 
 

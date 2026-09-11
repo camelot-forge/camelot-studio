@@ -83,8 +83,10 @@ Texture names in the tables are `.tga` while the archive entry is `.dds`
 (match on basename). Example: Boar `Body` skin 109 → `Num=3` →
 `figures/skins/skin003.mpk` → `boar.dds` (512×256, DXT1). Implemented in
 `core/camelot/gamedata.py`; `camelot gltf` embeds the resolved DDS via the
-`CS_camelot_texture` extension. Multi-slot → per-mesh mapping is *open* (M1
-applies the Body/first slot to every mesh).
+`CS_camelot_texture` extension. Pets/special figures not in `monnifs.csv`
+fall back to the NIF's own `NiSourceTexture` names searched across the skin
+archives (e.g. `fox_pet01` → `Fox_red01.dds` → `skin193.mpk`). Multi-slot →
+per-mesh mapping is *open* (M1 applies the Body/first slot to every mesh).
 
 ## 4. KFA animation files (= NetImmerse NIFs, not EMotion FX)
 - `anims/` = 4060 `.kfa` (154 MB), fully covered by `animnifs.csv`.

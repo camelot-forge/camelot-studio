@@ -269,6 +269,15 @@ def test_gamedata_resolves_multi_slot(client_dir):
     assert all(d[:4] == b"DDS " for _, _, d in skins)
 
 
+def test_gamedata_nif_name_fallback(client_dir):
+    """Pets not in monnifs resolve from the NIF's own texture name."""
+    from camelot.gamedata import resolve_figure_skins
+
+    skins = resolve_figure_skins(client_dir, _path(client_dir, "figures/fox_pet01.NIF"))
+    assert skins, "expected the fox texture via the NIF-name fallback"
+    assert skins[0][2][:4] == b"DDS "
+
+
 def test_batch_manifest_coverage(client_dir, tmp_path):
     """Every manifest path must resolve and parse (paths already exist)."""
     manifest = "core/tests/manifest.example.txt"
