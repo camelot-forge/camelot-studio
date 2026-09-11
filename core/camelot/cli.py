@@ -84,7 +84,7 @@ def cmd_gltf(args) -> int:
     from .gltf import export_gltf
 
     out = args.out or args.path.rsplit(".", 1)[0]
-    texture_data = None
+    textures = None
     if args.texture is None and not args.no_texture:
         client = os.environ.get("DAOC_CLIENT")
         if client:
@@ -92,10 +92,9 @@ def cmd_gltf(args) -> int:
 
             skins = resolve_figure_skins(client, args.path)
             if skins:
-                _slot, name, data = skins[0]
-                texture_data = (name, data)
+                textures = list(skins)
     export_gltf(args.path, out, verbose=not args.quiet, emit_skinned=args.skinned,
-                texture=args.texture, texture_data=texture_data)
+                texture=args.texture, textures=textures)
     return 0
 
 
