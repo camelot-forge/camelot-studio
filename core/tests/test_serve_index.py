@@ -37,7 +37,7 @@ class TestScan:
         n = index.scan(use_cache=False, save_cache=False)
         assert n == 4  # Boar.NIF, BOAR_idle.kfa, boar.dds, readme.txt
         counts = index.counts()
-        assert counts == {"dds": 1, "entry": 1, "kfa": 1, "nif": 1}
+        assert counts == {"dds": 1, "kfa": 1, "nif": 1, "other": 1}
         assert index.archives == 1
         assert index.errors == 0
 
@@ -81,6 +81,13 @@ class TestQuery:
         asset = index.assets[0]
         assert index.get(asset.id) is asset
         assert index.get("does-not-exist") is None
+
+    def test_top_dirs(self, tmp_path):
+        index = AssetIndex(_client(tmp_path), tmp_path / "cache")
+        index.scan(use_cache=False, save_cache=False)
+        dirs = index.top_dirs()
+        assert dirs["figures"] == 3  # Boar.NIF + the two entries in figures/skin001.mpk
+        assert dirs["anims"] == 1
 
 
 class TestCache:

@@ -16,20 +16,30 @@
 	let total = $state(0);
 	let page = $state(1);
 	let limit = 100;
-	let type = $state('');
+	let type = $state('nif');
+	let folder = $state('');
+	let showOther = $state(false);
 	let q = $state('');
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 
 	let events: EventSource | null = null;
 
-	const types = $derived(info ? Object.keys(info.counts).sort() : []);
+	// `other` (unrecognised archive entries) is noise: hidden unless asked for.
+	const types = $derived(
+		info
+			? Object.keys(info.counts)
+					.filter((t) => t !== 'other' || showOther)
+					.sort()
+			: []
+	);
+	const dirs = $derived(info ? Object.entries(info.dirs) : []);
 
 	async function refresh() {
 		loading = true;
 		error = null;
 		try {
-			const res = await api.assets({ type, q, page, limit, sort: 'path' });
+			const res = await api.assets({ type, dir: folder, q, page, limit, sort: 'path' });
 			items = res.items;
 			total = res.total;
 		} catch (e) {
@@ -64,7 +74,13 @@
 		}, 200);
 	}
 
-	function onTypeChange() {
+	function onFilter() {
+		page = 1;
+		void refresh();
+	}
+
+	function onShowOther() {
+		if (!showOther && type === 'other') type = 'nif';
 		page = 1;
 		void refresh();
 	}
@@ -122,10 +138,24 @@
 					oninput={onSearch}
 				/>
 			</div>
-			<select class="input" bind:value={type} onchange={onTypeChange}>
-				<option value="">all types</option>
-				{#each types as t (t)}<option value={t}>{t}</option>{/each}
-			</select>
+			<div class="filters">
+				<select class="input" bind:value={type} onchange={onFilter} aria-label="Asset type">
+					<option value="">all types</option>
+					{#each types as t (t)}
+						<option value={t}>{t} · {(info?.counts[t] ?? 0).toLocaleString()}</option>
+					{/each}
+				</select>
+				<select class="input" bind:value={folder} onchange={onFilter} aria-label="Folder">
+					<option value="">all folders</option>
+					{#each dirs as [name] (name)}
+						<option value={name}>{name}/</option>
+					{/each}
+				</select>
+			</div>
+			<label class="other">
+				<input type="checkbox" bind:checked={showOther} onchange={onShowOther} />
+				include unclassified entries
+			</label>
 		</div>
 
 		<div class="list" class:loading>
@@ -211,6 +241,22 @@
 		gap: 8px;
 		padding: 12px 14px;
 		border-bottom: 1px solid var(--border);
+	}
+	.filters {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 8px;
+	}
+	.other {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		font-size: 11.5px;
+		color: var(--text-4);
+		cursor: pointer;
+	}
+	.other input {
+		accent-color: var(--accent);
 	}
 	.search {
 		position: relative;

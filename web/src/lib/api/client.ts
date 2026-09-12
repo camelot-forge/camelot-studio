@@ -17,6 +17,7 @@ export interface RootInfo {
 	errors: number;
 	scanned_at: number;
 	counts: Record<string, number>;
+	dirs: Record<string, number>;
 }
 
 export interface AssetSummary {

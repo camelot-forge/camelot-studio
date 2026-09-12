@@ -19,6 +19,7 @@ class RootInfo(BaseModel):
     errors: int
     scanned_at: float
     counts: dict[str, int]
+    dirs: dict[str, int] = {}
 
 
 class AssetSummary(BaseModel):

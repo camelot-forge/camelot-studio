@@ -159,6 +159,7 @@ def build_router(config: ServeConfig, index: AssetIndex,
             errors=index.errors,
             scanned_at=index.scanned_at,
             counts=index.counts(),
+            dirs=index.top_dirs(),
         )
 
     @router.get("/assets", response_model=AssetPage)

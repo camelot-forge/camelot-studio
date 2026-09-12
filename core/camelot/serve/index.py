@@ -24,6 +24,9 @@ from ..mpak import MpakArchive, MpakError
 from . import cache
 
 CACHE_NAME = "index.json"
+# Bump when the cached row shape changes (types, fields) so stale caches are
+# rebuilt automatically instead of leaking old values.
+CACHE_SCHEMA = 2
 
 _TYPE_BY_EXT = {".nif": "nif", ".kfa": "kfa", ".dds": "dds", ".tga": "tga"}
 _ARCHIVE_EXT = {".mpk", ".npk"}
@@ -44,7 +47,7 @@ def make_id(origin: str, location: str) -> str:
 
 
 def _type_for(name: str) -> str:
-    return _TYPE_BY_EXT.get(os.path.splitext(name)[1].lower(), "entry")
+    return _TYPE_BY_EXT.get(os.path.splitext(name)[1].lower(), "other")
 
 
 @dataclass(frozen=True)
@@ -162,6 +165,7 @@ class AssetIndex:
             cache.write_json(path, {
                 "root": str(self.root),
                 "version": __version__,
+                "schema": CACHE_SCHEMA,
                 "scanned_at": self.scanned_at,
                 "archives": archives,
                 "errors": errors,
@@ -174,6 +178,7 @@ class AssetIndex:
             isinstance(cached, dict)
             and cached.get("root") == str(self.root)
             and cached.get("version") == __version__
+            and cached.get("schema") == CACHE_SCHEMA
             and isinstance(cached.get("assets"), list)
         )
 
@@ -196,6 +201,20 @@ class AssetIndex:
         for a in self.assets:
             out[a.type] = out.get(a.type, 0) + 1
         return dict(sorted(out.items()))
+
+    def top_dirs(self, limit: int = 24) -> dict[str, int]:
+        """Asset counts per top-level folder (figures, items…) for browsing.
+
+        Counts include archive entries, whose path is ``<archive>!<entry>``
+        under the archive's own folder, so they match what the ``dir`` filter
+        returns.
+        """
+        out: dict[str, int] = {}
+        for a in self.assets:
+            seg = a.path.split("/", 1)[0] if "/" in a.path else "(root)"
+            out[seg] = out.get(seg, 0) + 1
+        ranked = sorted(out.items(), key=lambda kv: -kv[1])
+        return dict(ranked[:limit])
 
     def query(self, *, type: str | None = None, q: str | None = None,
               dir: str | None = None, sort: str = "path",
