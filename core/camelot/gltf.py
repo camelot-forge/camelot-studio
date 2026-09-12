@@ -104,10 +104,45 @@ def _slot_for_name(name: str) -> str | None:
 # applied on top of the version axis. The client's asset frames are genuinely
 # inconsistent and not derivable from the data alone (verified with rendered
 # screenshots), so this curated, tested table is the source of truth.
-ORIENTATION_OVERRIDES: dict[str, tuple[float, float, float]] = {
-    "2hwolf.nif": (0.0, 0.0, 90.0),
-    "2headed_wolf.nif": (0.0, 0.0, 90.0),
+ORIENTATION_OVERRIDES: dict[str, tuple[float, float, float]] = {}
+
+# Corrections by *family*: (version, mesh-container rotation signature) ->
+# XYZ euler degrees. Assets share authoring frames, so ~20 signatures cover the
+# whole figures corpus; this scales far better than per-asset exceptions.
+SIGNATURE_OVERRIDES: dict[tuple[int, tuple[int, ...]], tuple[float, float, float]] = {
+    # vertical canines (2HWolf, 2headed_Wolf, cata_wolf, harpy, anglich…)
+    (0x0A010000, (0, 1, 0, 0, 0, 1, 1, 0, 0)): (0.0, 0.0, 90.0),
+    (0x0A010000, (0, -1, 0, 0, 0, -1, 1, 0, 0)): (0.0, 0.0, 90.0),
 }
+
+
+def _container_signature(objs, children) -> tuple[int, ...] | None:
+    """Rounded 3x3 rotation of the main mesh's ancestor chain (family key)."""
+    parent: dict[int, int] = {}
+    for i, kids in enumerate(children):
+        for c in kids:
+            parent[c] = i
+    best_i, best_v = -1, -1
+    for i, obj in enumerate(objs):
+        if obj is None or type(obj).__name__ not in ("NiTriShape", "NiTriStrips"):
+            continue
+        data = getattr(obj, "data", None)
+        n = len(getattr(data, "vertices", []) or []) if data is not None else 0
+        if n > best_v:
+            best_i, best_v = i, n
+    if best_i < 0:
+        return None
+    chain = []
+    cur = best_i
+    while cur is not None:
+        chain.append(cur)
+        cur = parent.get(cur)
+    r = mat4_identity()
+    for a in reversed(chain[:-1]):
+        m = node_local_matrix(objs[a]) if objs[a] is not None else None
+        if m is not None:
+            r = mat4_mul(r, m)
+    return tuple(round(r[i][j]) for i in range(3) for j in range(3))
 
 
 def _euler_xyz_matrix(degrees: tuple[float, float, float]) -> list[list[float]]:
@@ -149,9 +184,6 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
     # Up axis depends on the exporting era: early 4.x figures are X-down,
     # later 4.x and all 10.x are Z-up (see nifutil.XUP_VERSIONS).
     axis_matrix = mat4_axis_for_version(data.version)
-    override = ORIENTATION_OVERRIDES.get(os.path.basename(nif_path).lower())
-    if override is not None:
-        axis_matrix = mat4_mul(_euler_xyz_matrix(override), axis_matrix)
 
     # ---------- node tree (DFS) ----------
     objs: list = []
@@ -190,6 +222,15 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
     objs.append(None)
     names.append("__axes__")
     children.append(list(root_ids))
+
+    # Orientation overrides: by family signature first, then per-asset.
+    signature = _container_signature(objs, children)
+    for extra in (
+        SIGNATURE_OVERRIDES.get((data.version, signature)) if signature else None,
+        ORIENTATION_OVERRIDES.get(os.path.basename(nif_path).lower()),
+    ):
+        if extra is not None:
+            axis_matrix = mat4_mul(_euler_xyz_matrix(extra), axis_matrix)
 
     # Bind world matrices (diagnostic + inverse bind). The synthetic axis node
     # must be included: the glTF bone nodes carry it, so the inverse bind must
