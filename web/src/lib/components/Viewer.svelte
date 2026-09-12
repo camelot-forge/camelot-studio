@@ -2,7 +2,7 @@
 	import * as THREE from 'three';
 	import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 	import { DDSLoader } from 'three/addons/loaders/DDSLoader.js';
-	import { Axis3d, Grid3x3, Maximize2, Rotate3d, RotateCw } from '@lucide/svelte';
+	import { Axis3d, Grid3x3, Maximize2, Rotate3d } from '@lucide/svelte';
 	import type { LoadedModel } from '$lib/gltf/load';
 
 	interface Props {
@@ -15,6 +15,24 @@
 	let showAxes = $state(true);
 	let showGrid = $state(true);
 	let rotX = $state(0);
+	let rotY = $state(0);
+	let rotZ = $state(0);
+
+	const AXES: Array<{ axis: 'x' | 'y' | 'z'; dir: 1 | -1 }> = [
+		{ axis: 'x', dir: -1 },
+		{ axis: 'x', dir: 1 },
+		{ axis: 'y', dir: -1 },
+		{ axis: 'y', dir: 1 },
+		{ axis: 'z', dir: -1 },
+		{ axis: 'z', dir: 1 }
+	];
+
+	function rotate(axis: 'x' | 'y' | 'z', dir: 1 | -1) {
+		const delta = (dir * Math.PI) / 2;
+		if (axis === 'x') rotX += delta;
+		else if (axis === 'y') rotY += delta;
+		else rotZ += delta;
+	}
 
 	let scene: THREE.Scene | null = null;
 	let camera: THREE.PerspectiveCamera | null = null;
@@ -131,7 +149,7 @@
 			-center.y * scale + (size.y * scale) / 2,
 			-center.z * scale
 		);
-		root.rotation.set(rotX, 0, 0);
+		root.rotation.set(rotX, rotY, rotZ);
 
 		fit();
 
@@ -181,7 +199,7 @@
 	});
 	$effect(() => {
 		if (root) {
-			root.rotation.set(rotX, 0, 0);
+			root.rotation.set(rotX, rotY, rotZ);
 		}
 	});
 	$effect(() => {
@@ -223,13 +241,16 @@
 		<button class="btn btn--icon" title="Reset view" onclick={fit}>
 			<Maximize2 size={16} />
 		</button>
-		<button
-			class="btn btn--icon"
-			title="Rotate 90° (DAoC models have no consistent up axis)"
-			onclick={() => (rotX += Math.PI / 2)}
-		>
-			<RotateCw size={16} />
-		</button>
+		<span class="sep"></span>
+		{#each AXES as { axis, dir } (axis + dir)}
+			<button
+				class="btn btn--icon axis"
+				title={`Rotate ${axis.toUpperCase()} ${dir > 0 ? '+' : '−'}90°`}
+				onclick={() => rotate(axis, dir)}
+			>
+				{axis.toUpperCase()}<span class="arrow">{dir > 0 ? '↻' : '↺'}</span>
+			</button>
+		{/each}
 	</div>
 </div>
 
@@ -259,6 +280,24 @@
 	}
 	.btn.on {
 		background: var(--accent-tint-12);
+		color: var(--accent);
+	}
+	.sep {
+		width: 1px;
+		align-self: stretch;
+		margin: 2px 4px;
+		background: var(--border);
+	}
+	.btn--icon.axis {
+		font-size: 11px;
+		font-weight: 650;
+		font-variant-numeric: tabular-nums;
+		gap: 1px;
+		padding: 6px 7px;
+		line-height: 1;
+	}
+	.arrow {
+		font-size: 12px;
 		color: var(--accent);
 	}
 </style>
