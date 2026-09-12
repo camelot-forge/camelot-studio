@@ -156,11 +156,13 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
     names.append("__axes__")
     children.append(list(root_ids))
 
-    # NIF world matrices (diagnostic only)
+    # Bind world matrices (diagnostic + inverse bind). The synthetic axis node
+    # must be included: the glTF bone nodes carry it, so the inverse bind must
+    # be its inverse, else the skin applies the axis twice.
     world: dict[int, list[list[float]]] = {}
 
     def walk(idx: int, pw: list[list[float]]) -> None:
-        m = node_local_matrix(objs[idx])
+        m = axis_matrix if idx == synth else node_local_matrix(objs[idx])
         w = mat4_mul(pw, m) if m else pw
         world[idx] = w
         for c in children[idx]:

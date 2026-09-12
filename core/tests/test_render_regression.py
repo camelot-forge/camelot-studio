@@ -1,0 +1,51 @@
+"""Golden render regression: the exported glTF's world bbox as three.js shows it.
+
+These tests lock the approved orientation/placement of a fixture set, so a
+change that moves or orients a figure differently fails here instead of
+relying on eyeballing the viewer. Values captured on `main` (commit dd549dd).
+"""
+import os
+
+import pytest
+from _bbox import skinned_world_bbox, world_bbox
+
+from camelot.gltf import export_gltf
+
+GOLDEN: dict[str, dict] = {
+    "7legspider.nif": {"dims": [125.41, 37.217, 118.199], "center": [-6.863, 18.591, 4.397]},
+    "Afanc.NIF": {"dims": [270.81, 187.456, 1007.105], "center": [0.0, 93.722, 0.0]},
+    "Boar.NIF": {"dims": [20.796, 39.489, 81.941], "center": [-0.0, 19.798, 7.791]},
+    "Amazon.nif": {"dims": [85.47, 120.339, 23.422], "center": [-0.005, 60.068, 1.335]},
+    "2HWolf.NIF": {"dims": [53.476, 113.75, 30.153], "center": [0.741, 43.756, -21.041]},
+    "2headed_Wolf.NIF": {"dims": [49.627, 97.548, 24.556], "center": [24.967, 4.396, 0.012]},
+    "Ettin.NIF": {"dims": [82.369, 102.107, 72.547], "center": [1.889, -0.009, 36.274]},
+    "Zombie.NIF": {"dims": [72.047, 77.654, 71.82], "center": [0.0, -0.418, 35.92]},
+    "skeleton.nif": {"dims": [70.126, 68.892, 9.429], "center": [0.001, 34.446, 0.285]},
+    "3head.NIF": {"dims": [127.961, 100.059, 30.814], "center": [-0.0, 46.243, 0.548]},
+}
+
+
+def _export(client_dir, name, tmp_path, **kwargs):
+    prefix = str(tmp_path / "model")
+    export_gltf(os.path.join(client_dir, "figures", name), prefix, verbose=False, **kwargs)
+    return prefix + ".gltf", prefix + ".bin"
+
+
+@pytest.mark.parametrize("name", sorted(GOLDEN))
+def test_world_bbox_matches_golden(client_dir, tmp_path, name):
+    gltf, binary = _export(client_dir, name, tmp_path)
+    dims, center = world_bbox(gltf, binary)
+    assert dims == pytest.approx(GOLDEN[name]["dims"], abs=0.05)
+    assert center == pytest.approx(GOLDEN[name]["center"], abs=0.05)
+
+
+@pytest.mark.parametrize("name", ["Boar.NIF", "Afanc.NIF", "7legspider.nif"])
+def test_skinned_bind_matches_non_skinned(client_dir, tmp_path, name):
+    # The skinned bind pose must render exactly like the static export
+    # (otherwise the skin double-applies the axis and the mesh drifts).
+    g0, b0 = _export(client_dir, name, tmp_path)
+    dims0, center0 = world_bbox(g0, b0)
+    g1, b1 = _export(client_dir, name, tmp_path, emit_skinned=True)
+    dims1, center1 = skinned_world_bbox(g1, b1)
+    assert dims1 == pytest.approx(dims0, abs=0.05)
+    assert center1 == pytest.approx(center0, abs=0.05)
