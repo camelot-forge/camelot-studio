@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from numpy.testing import assert_array_equal
 
 from camelot.gltf import (
@@ -113,3 +114,14 @@ class TestExportSynthetic:
         prim = gltf["meshes"][0]["primitives"][0]
         assert "JOINTS_0" not in prim["attributes"]
         assert "skins" not in gltf or gltf["skins"] == []
+
+class TestOrientationOverrides:
+    def test_wolf_overrides(self):
+        from camelot.gltf import ORIENTATION_OVERRIDES, _euler_xyz_matrix
+
+        assert ORIENTATION_OVERRIDES["2hwolf.nif"] == (0.0, 0.0, 90.0)
+        m = _euler_xyz_matrix((0.0, 0.0, 90.0))
+        # +90° about Z: x -> y, y -> -x
+        assert m[0][0] == pytest.approx(0.0, abs=1e-6)
+        assert m[0][1] == pytest.approx(-1.0)
+        assert m[1][0] == pytest.approx(1.0)

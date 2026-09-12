@@ -100,6 +100,38 @@ def _slot_for_name(name: str) -> str | None:
     return None
 
 
+# Per-asset orientation corrections (basename lower-case -> XYZ euler degrees),
+# applied on top of the version axis. The client's asset frames are genuinely
+# inconsistent and not derivable from the data alone (verified with rendered
+# screenshots), so this curated, tested table is the source of truth.
+ORIENTATION_OVERRIDES: dict[str, tuple[float, float, float]] = {
+    "2hwolf.nif": (0.0, 0.0, 90.0),
+    "2headed_wolf.nif": (0.0, 0.0, 90.0),
+}
+
+
+def _euler_xyz_matrix(degrees: tuple[float, float, float]) -> list[list[float]]:
+    import math
+
+    rx, ry, rz = (math.radians(v) for v in degrees)
+    cx, sx = math.cos(rx), math.sin(rx)
+    cy, sy = math.cos(ry), math.sin(ry)
+    cz, sz = math.cos(rz), math.sin(rz)
+    rot_x = [[1, 0, 0], [0, cx, -sx], [0, sx, cx]]
+    rot_y = [[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]]
+    rot_z = [[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]]
+
+    def mul(a, b):
+        return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+    r = mul(mul(rot_x, rot_y), rot_z)
+    out = mat4_identity()
+    for i in range(3):
+        for j in range(3):
+            out[i][j] = r[i][j]
+    return out
+
+
 def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
                 emit_skinned: bool = False, texture: str | None = None,
                 texture_data: tuple[str, bytes] | None = None,
@@ -117,6 +149,9 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
     # Up axis depends on the exporting era: early 4.x figures are X-down,
     # later 4.x and all 10.x are Z-up (see nifutil.XUP_VERSIONS).
     axis_matrix = mat4_axis_for_version(data.version)
+    override = ORIENTATION_OVERRIDES.get(os.path.basename(nif_path).lower())
+    if override is not None:
+        axis_matrix = mat4_mul(_euler_xyz_matrix(override), axis_matrix)
 
     # ---------- node tree (DFS) ----------
     objs: list = []

@@ -82,6 +82,31 @@ def world_bbox(gltf_path: str, bin_path: str | None = None):
     return np.round(mx - mn, 3).tolist(), np.round((mx + mn) / 2, 3).tolist()
 
 
+def bone_world_positions(gltf_path: str, bin_path: str | None = None) -> dict[str, list[float]]:
+    """World translation of every named node (for feet/pelvis checks)."""
+    g, _blob = _read(gltf_path, bin_path)
+    world = _world_fn(g)
+    out: dict[str, list[float]] = {}
+    for i, node in enumerate(g["nodes"]):
+        name = node.get("name")
+        if name:
+            out[name] = world(i)[:3, 3].round(4).tolist()
+    return out
+
+
+def feet_below_pelvis(gltf_path: str, bin_path: str | None = None) -> bool | None:
+    """True when the feet bones sit below the pelvis in Y (figure is upright).
+
+    Returns None when the rig has no pelvis/feet (e.g. serpents, statics).
+    """
+    pos = bone_world_positions(gltf_path, bin_path)
+    pelvis = next((v[1] for k, v in pos.items() if k.lower().endswith("pelvis")), None)
+    feet = [v[1] for k, v in pos.items() if k.lower().endswith(("foot", "toe0"))]
+    if pelvis is None or not feet:
+        return None
+    return (sum(feet) / len(feet)) < pelvis
+
+
 def skinned_world_bbox(gltf_path: str, bin_path: str | None = None):
     """three.js-exact skinned world bbox -> (dims, center)."""
     g, blob = _read(gltf_path, bin_path)

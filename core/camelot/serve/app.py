@@ -7,8 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 
 from .. import __version__
 from .api import build_router
@@ -58,6 +57,15 @@ def create_app(config: ServeConfig) -> FastAPI:
 
     static_dir = config.static_dir
     if static_dir and Path(static_dir).exists():
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+        root = Path(static_dir)
+        index = root / "index.html"
+
+        @app.get("/{full_path:path}")
+        async def spa(full_path: str):
+            """Serve static files, falling back to index.html (SPA routes)."""
+            candidate = root / full_path
+            if full_path and candidate.is_file():
+                return FileResponse(candidate)
+            return FileResponse(index)
 
     return app
