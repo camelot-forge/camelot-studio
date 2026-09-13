@@ -1,19 +1,23 @@
 <script lang="ts">
 	import * as THREE from 'three';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 	import { DDSLoader } from 'three/addons/loaders/DDSLoader.js';
-	import { Axis3d, Grid3x3, Maximize2, Rotate3d } from '@lucide/svelte';
-	import type { LoadedModel } from '$lib/gltf/load';
+	import { Axis3d, Grid3x3, Maximize2, Pause, Play, Rotate3d } from '@lucide/svelte';
+	import { rebindSkinnedMeshes, bindBoxOf, type LoadedModel } from '$lib/gltf/load';
+	import { sampleClip, samplePositions, gameToKeyTime, type AnimClip } from '$lib/anim';
 
 	interface Props {
 		model: LoadedModel;
+		anim?: AnimClip | null;
 	}
-	let { model }: Props = $props();
+	let { model, anim = null }: Props = $props();
 
 	let canvasEl = $state<HTMLCanvasElement | null>(null);
 	let wireframe = $state(false);
 	let showAxes = $state(true);
 	let showGrid = $state(true);
+	let playing = $state(true);
 	let rotX = $state(0);
 	let rotY = $state(0);
 	let rotZ = $state(0);
@@ -47,7 +51,9 @@
 		if (!camera || !controls || !root) return;
 		// Frame the model only: the grid/axes helpers must not drive the
 		// zoom (they span 10 units and were making every figure tiny).
-		const box = new THREE.Box3().setFromObject(root);
+		// bindBoxOf, not setFromObject: the SkinnedMesh path folds the live
+		// skeleton into the measurement instead of the bind geometry.
+		const box = bindBoxOf(root);
 		const center = box.getCenter(new THREE.Vector3());
 		const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 0.5);
 		const vFov = THREE.MathUtils.degToRad(camera.fov);
@@ -99,6 +105,9 @@
 
 		root = model.scene;
 		scene.add(root);
+		// Fresh world matrices first (see render page): Box3 and the skin
+		// rebind below must observe composed glTF worlds, not stale ones.
+		root.updateMatrixWorld(true);
 		root.traverse((obj) => {
 			const mesh = obj as THREE.Mesh;
 			if (mesh.isMesh) {
@@ -109,8 +118,28 @@
 					flatShading: true,
 					side: THREE.DoubleSide
 				});
+				const skinned = obj as THREE.SkinnedMesh;
+				if (skinned.isSkinnedMesh) skinned.normalizeSkinWeights();
 			}
 		});
+
+		// Idle animation: map joint names to scene nodes once; the loop below
+		// retargets local rotations (translations stay at the figure bind).
+		// NOTE: three.js sanitizes node names (spaces become underscores).
+		const joints = new SvelteMap<string, THREE.Object3D>();
+		if (anim) {
+			const wanted = new Set(anim.tracks.map((t) => t.node));
+			const byName = new SvelteMap<string, THREE.Object3D>();
+			root.traverse((obj) => {
+				if (!byName.has(obj.name)) byName.set(obj.name, obj);
+				const desanitized = obj.name.replace(/_/g, ' ');
+				if (!byName.has(desanitized)) byName.set(desanitized, obj);
+			});
+			for (const name of wanted) {
+				const joint = byName.get(name) ?? byName.get(name.replace(/ /g, '_')) ?? null;
+				if (joint && !joints.has(name)) joints.set(name, joint);
+			}
+		}
 
 		// Apply embedded DAoC textures (DDS via DDSLoader), one per mesh (skin slot).
 		if (model.meshTextures.size) {
@@ -137,7 +166,9 @@
 		// DAoC uses its own unit scale (figures can span ~80 units) and offsets
 		// the model far from the origin. Normalise every figure to a consistent
 		// size, centred on the origin, so the three.js scene scale stays sane.
-		const box = new THREE.Box3().setFromObject(root);
+		// bindBoxOf: Box3.setFromObject would measure skinned (posed)
+		// positions instead of the bind geometry.
+		const box = bindBoxOf(root);
 		const center = box.getCenter(new THREE.Vector3());
 		const size = box.getSize(new THREE.Vector3());
 		const target = 5;
@@ -151,11 +182,32 @@
 		);
 		root.rotation.set(rotX, rotY, rotZ);
 
+		// Correct three.js skin binding (see rebindSkinnedMeshes): after the
+		// model is scaled/grounded so the captured bind world is final.
+		rebindSkinnedMeshes(scene);
+
 		fit();
 
-		// render loop
+		// render loop (drives the idle animation when present and playing)
+		const clock = new THREE.Clock();
+		let animTime = 0;
 		const loop = () => {
 			frame = requestAnimationFrame(loop);
+			const dt = Math.min(clock.getDelta(), 0.1);
+			if (anim && playing && joints.size && anim.duration > 0) {
+				animTime = (animTime + dt) % anim.duration;
+				const tKey = gameToKeyTime(anim, animTime);
+				const pose = sampleClip(anim, tKey);
+				const placement = samplePositions(anim, tKey);
+				for (const [name, q] of pose) {
+					const joint = joints.get(name);
+					if (joint) joint.quaternion.set(q[1], q[2], q[3], q[0]);
+				}
+				for (const [name, p] of placement) {
+					const joint = joints.get(name);
+					if (joint) joint.position.set(p[0], p[1], p[2]);
+				}
+			}
 			controls?.update();
 			renderer?.render(scene as THREE.Scene, camera as THREE.PerspectiveCamera);
 		};
@@ -241,6 +293,17 @@
 		<button class="btn btn--icon" title="Reset view" onclick={fit}>
 			<Maximize2 size={16} />
 		</button>
+		{#if anim}
+			<button
+				class="btn btn--icon"
+				class:on={playing}
+				title={playing ? `Pause idle (${anim.kfa})` : `Play idle (${anim.kfa})`}
+				aria-pressed={playing}
+				onclick={() => (playing = !playing)}
+			>
+				{#if playing}<Pause size={16} />{:else}<Play size={16} />{/if}
+			</button>
+		{/if}
 		<span class="sep"></span>
 		{#each AXES as { axis, dir } (axis + dir)}
 			<button

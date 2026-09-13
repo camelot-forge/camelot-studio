@@ -5,10 +5,11 @@
 	import Viewer from '$lib/components/Viewer.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import { loadFromFiles, loadFromGlb, type LoadedModel } from '$lib/gltf/load';
-	import { api, type AssetSummary } from '$lib/api/client';
+	import { api, type AnimClip, type AssetSummary } from '$lib/api/client';
 	import { LoaderCircle } from '@lucide/svelte';
 
 	let model = $state<LoadedModel | null>(null);
+	let anim = $state<AnimClip | null>(null);
 	let error = $state<string | null>(null);
 	let loading = $state(false);
 	let selectedId = $state<string | null>(null);
@@ -19,6 +20,7 @@
 		selectedId = null;
 		try {
 			model = await loadFromFiles(files);
+			anim = null;
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -31,7 +33,7 @@
 		error = null;
 		selectedId = asset.id;
 		try {
-			const res = await fetch(api.modelUrl(asset.id));
+			const res = await fetch(api.modelUrl(asset.id, true));
 			if (!res.ok) throw new Error(`model export failed (${res.status})`);
 			const buf = await res.arrayBuffer();
 			const loaded = await loadFromGlb(buf, asset.name.replace(/\.nif$/i, '.glb'));
@@ -42,6 +44,11 @@
 				/* sidecar is optional */
 			}
 			model = loaded;
+			try {
+				anim = await api.anim(asset.id);
+			} catch {
+				anim = null;
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -51,6 +58,7 @@
 
 	function reset() {
 		model = null;
+		anim = null;
 		error = null;
 		selectedId = null;
 	}
@@ -66,7 +74,7 @@
 			{#if loading}
 				<div class="center"><LoaderCircle class="spin" size={22} /> Loading…</div>
 			{:else if model}
-				<Viewer {model} />
+				<Viewer {model} {anim} />
 				<Sidebar {model} />
 			{:else}
 				<div class="center">

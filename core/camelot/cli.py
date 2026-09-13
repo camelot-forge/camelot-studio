@@ -94,8 +94,27 @@ def cmd_gltf(args) -> int:
             skins = resolve_figure_skins(client, args.path)
             if skins:
                 textures = list(skins)
+    pose = None
+    pose_time = args.pose_time
+    if getattr(args, "pose", None):
+        from .kfa import load_kfa
+
+        pose = load_kfa(args.pose)
+        client = os.environ.get("DAOC_CLIENT")
+        if client:
+            from .anims import anim_timing, native_fps
+
+            timing = anim_timing(client, args.pose)
+            if timing is not None:
+                fps, frames = timing
+                rate = fps / native_fps(pose)
+                pose_time = args.pose_time * rate
+                if not args.quiet:
+                    print(f"  anim timing: {frames:g} frames @ {fps:g}fps "
+                          f"(rate {rate:.3g}, loop {frames / fps:.3g}s)")
     export_gltf(args.path, out, verbose=not args.quiet, emit_skinned=args.skinned,
-                texture=args.texture, textures=textures)
+                texture=args.texture, textures=textures,
+                pose=pose, pose_time=pose_time, bake_pose=args.bake_pose)
     return 0
 
 
@@ -311,6 +330,13 @@ def main(argv=None) -> int:
     p.add_argument("--out", help="output prefix (default: input basename)")
     p.add_argument("--skinned", action="store_true",
                    help="experimental: emit JOINTS/WEIGHTS (inverseBind = inv(worldBind))")
+    p.add_argument("--pose", help="pose the skeleton from a .kfa file")
+    p.add_argument("--pose-time", type=float, default=0.0,
+                   help="game seconds to sample the --pose KFA at (mapped to key "
+                        "time via animnifs.csv when $DAOC_CLIENT resolves it, "
+                        "else key seconds)")
+    p.add_argument("--bake-pose", action="store_true",
+                   help="bake the --pose KFA sample into the vertices (CPU skinning)")
     p.add_argument("--texture", help="embed a .dds texture (CS_camelot_texture extension)")
     p.add_argument("--no-texture", action="store_true",
                    help="skip automatic gamedata texture resolution")

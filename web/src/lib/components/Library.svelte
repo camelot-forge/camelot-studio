@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { Database, FileBox, RefreshCw, Search, WifiOff } from '@lucide/svelte';
-	import { api, type AssetSummary, type RootInfo } from '$lib/api/client';
+	import { api, type AssetSummary, type Health, type RootInfo } from '$lib/api/client';
 
 	interface Props {
 		onselect: (asset: AssetSummary) => void;
@@ -12,6 +12,7 @@
 	type Status = 'connecting' | 'online' | 'offline';
 	let status = $state<Status>('connecting');
 	let info = $state<RootInfo | null>(null);
+	let health = $state<Health | null>(null);
 	let items = $state<AssetSummary[]>([]);
 	let total = $state(0);
 	let page = $state(1);
@@ -51,7 +52,7 @@
 
 	async function connect() {
 		try {
-			await api.health();
+			health = await api.health();
 			info = await api.root();
 			status = 'online';
 			await refresh();
@@ -187,6 +188,8 @@
 			<button class="btn btn--ghost" onclick={refresh} aria-label="Refresh">
 				<RefreshCw size={14} class={loading ? 'spin' : ''} />
 			</button>
+			{#if health}<span class="build" title="daemon build">{health.version}@{health.build}</span
+				>{/if}
 		</footer>
 	{/if}
 </aside>
@@ -330,6 +333,12 @@
 	}
 	footer .nums {
 		margin: 0 6px;
+	}
+	footer .build {
+		margin-left: auto;
+		font-size: 10px;
+		font-variant-numeric: tabular-nums;
+		color: var(--text-3);
 	}
 	.offline {
 		display: flex;

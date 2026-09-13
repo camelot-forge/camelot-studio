@@ -8,6 +8,7 @@ export interface Health {
 	status: string;
 	version: string;
 	root: string;
+	build: string;
 }
 
 export interface RootInfo {
@@ -41,6 +42,21 @@ export interface AssetPage {
 	total: number;
 	page: number;
 	limit: number;
+}
+
+export interface AnimTrack {
+	node: string;
+	times: number[];
+	quats: Array<[number, number, number, number]>;
+	ptimes?: number[];
+	positions?: Array<[number, number, number]>;
+}
+
+export interface AnimClip {
+	kfa: string;
+	duration: number; // loop length, game seconds (animnifs frames/fps)
+	rate: number; // game seconds -> KFA key seconds multiplier
+	tracks: AnimTrack[];
 }
 
 export interface AssetQuery {
@@ -100,7 +116,17 @@ export const api = {
 		get<AssetPage>(`/assets${queryString({ ...params })}`, signal),
 	detail: (id: string, signal?: AbortSignal) =>
 		get<AssetDetail>(`/assets/${encodeURIComponent(id)}`, signal),
-	modelUrl: (id: string) => `${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/model`,
+	modelUrl: (id: string, skinned = false) =>
+		`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/model${skinned ? '?skinned=true' : ''}`,
 	skinUrl: (id: string) => `${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/skin`,
+	animUrl: (id: string) => `${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim`,
+	anim: async (id: string, signal?: AbortSignal): Promise<AnimClip | null> => {
+		const res = await fetch(`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim`, {
+			signal
+		});
+		if (res.status === 404) return null;
+		if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+		return (await res.json()) as AnimClip;
+	},
 	events: () => new EventSource(`${getApiBase()}/api/v1/events`)
 };

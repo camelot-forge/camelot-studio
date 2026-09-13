@@ -164,6 +164,22 @@ def test_gltf_boar_export_is_upright(client_dir, tmp_path):
     assert mins[1] < ext[1] * 0.4
 
 
+def test_gltf_export_nan_helpers_are_sanitized(client_dir, tmp_path):
+    """dr_wight/dr_xaphan carry NaN shield helpers: glTF must stay valid JSON."""
+    import json
+    import math
+
+    from camelot.gltf import export_gltf
+
+    prefix = str(tmp_path / "wight")
+    export_gltf(_path(client_dir, "figures/dr_wight.nif"), prefix, verbose=False)
+    with open(prefix + ".gltf") as fh:
+        gltf = json.load(fh)
+    for node in gltf["nodes"]:
+        for value in node.get("matrix", []):
+            assert math.isfinite(value)
+
+
 def test_gltf_export_boar(client_dir, tmp_path):
     from camelot.gltf import export_gltf
 

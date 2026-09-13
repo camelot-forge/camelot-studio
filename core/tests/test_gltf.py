@@ -115,15 +115,73 @@ class TestExportSynthetic:
         assert "JOINTS_0" not in prim["attributes"]
         assert "skins" not in gltf or gltf["skins"] == []
 
+class TestMapKfaToNodes:
+    """KFA channel -> bone mapping: translation leads, rotation breaks ties."""
+
+    _NiNode = type("NiNode", (SimpleNamespace,), {})
+
+    @classmethod
+    def _node(cls, name, t=(0.0, 0.0, 0.0), rot=None):
+        return cls._NiNode(name=name.encode(), translation=t, rotation=rot, children=[])
+
+    def test_scene_root_and_footsteps_are_not_bones(self):
+        from camelot.gltf import map_kfa_to_nodes
+        from camelot.kfa import Animation, Channel, Key
+
+        objs = [
+            self._node("Scene Root"),
+            self._node("Bip01 Footsteps", t=(0.0, 0.0, -36.98)),
+            self._node("Bip01 Pelvis"),
+        ]
+        names = ["Scene Root", "Bip01 Footsteps", "Bip01 Pelvis"]
+        # channel with a translation but no rotation keys: without the
+        # exclusion both Scene Root and Pelvis tie at (0,0,0) and the node
+        # order would pick the root — which pitched the Zombie over.
+        pose = Animation(
+            path="x", version=0, duration=1.0,
+            channels={1: Channel(index=1, translations=(Key(0.0, (0.0, 0.0, 0.0)),))},
+        )
+        assert map_kfa_to_nodes(objs, names, pose) == {1: 2}
+
+    def test_rotation_breaks_translation_ties(self):
+        from camelot.gltf import map_kfa_to_nodes
+        from camelot.kfa import Animation, Channel, Key
+
+        pelvis_bind = [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]
+        root_bind = [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+        objs = [
+            self._node("Bip01", t=(0.0, 0.0, 36.98), rot=root_bind),
+            self._node("Decoy Bone"),  # identity bind, same offset, lower index
+            self._node("Bip01 Pelvis", rot=pelvis_bind),
+        ]
+        names = ["Bip01", "Decoy Bone", "Bip01 Pelvis"]
+        pose = Animation(
+            path="x", version=0, duration=1.0,
+            channels={
+                0: Channel(
+                    index=0,
+                    translations=(Key(0.0, (0.0, 0.0, 36.98)),),
+                    rotations=(Key(0.0, (0.7071, 0.0, 0.0, -0.7071)),),
+                ),
+                1: Channel(
+                    index=1,
+                    translations=(Key(0.0, (0.0, 0.0, 0.0)),),
+                    rotations=(Key(0.0, (0.5, -0.5, -0.5, -0.5)),),
+                ),
+            },
+        )
+        assert map_kfa_to_nodes(objs, names, pose) == {0: 0, 1: 2}
+
+
 class TestOrientationOverrides:
     def test_wolf_signature_overrides(self):
         from camelot.gltf import SIGNATURE_OVERRIDES, _euler_xyz_matrix
 
-        # both vertical-canid container signatures get +90° about Z
-        assert SIGNATURE_OVERRIDES[(0x0A010000, (0, 1, 0, 0, 0, 1, 1, 0, 0))] == (0.0, 0.0, 90.0)
-        assert SIGNATURE_OVERRIDES[(0x0A010000, (0, -1, 0, 0, 0, -1, 1, 0, 0))] == (0.0, 0.0, 90.0)
-        m = _euler_xyz_matrix((0.0, 0.0, 90.0))
-        # +90° about Z: x -> y, y -> -x
+        # horizontal canids face +Z in NIF space; turn them to +X (90 deg Y).
+        assert SIGNATURE_OVERRIDES[(0x0A010000, (0, 0, 1, -1, 0, 0, 0, -1, 0))] == (0.0, 90.0, 0.0)
+        assert SIGNATURE_OVERRIDES[(0x0A010000, (0, 0, 1, 1, 0, 0, 0, 1, 0))] == (0.0, 90.0, 0.0)
+        m = _euler_xyz_matrix((0.0, 90.0, 0.0))
+        # +90° about Y: x -> -z, z -> x
         assert m[0][0] == pytest.approx(0.0, abs=1e-6)
-        assert m[0][1] == pytest.approx(-1.0)
-        assert m[1][0] == pytest.approx(1.0)
+        assert m[0][2] == pytest.approx(1.0)
+        assert m[2][0] == pytest.approx(-1.0)

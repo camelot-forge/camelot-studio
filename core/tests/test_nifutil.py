@@ -1,4 +1,5 @@
 """Unit tests for nifutil: vectors, matrices, axis conversion, node LTM."""
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -88,22 +89,17 @@ class TestMatrixMath:
             assert out == list(want)
 
 
-class TestAxisForVersion:
-    def test_xup_versions_are_early_4x(self):
-        assert nifutil.is_xup_version(0x0401000C)
-        assert nifutil.is_xup_version(0x04020100)
-        assert not nifutil.is_xup_version(0x04020200)
-        assert not nifutil.is_xup_version(0x0A010000)
+class TestNodeLocalMatrixSanitize:
+    def test_nan_translation_becomes_zero(self):
+        from camelot.legacy import _block_class
 
-    def test_xup_maps_up_minus_x_to_plus_y(self):
-        m = nifutil.mat4_axis_for_version(0x04020100)
-        # mesh up is -X -> glTF +Y
-        out = [sum(m[i][j] * ([-1, 0, 0, 1][j]) for j in range(4)) for i in range(4)]
-        assert out == [0.0, 1.0, 0.0, 1.0]
-
-    def test_zup_falls_back_to_standard_conversion(self):
-        assert nifutil.mat4_axis_for_version(0x0A010000) == nifutil.mat4_axis()
-        assert nifutil.mat4_axis_for_version(0x04020200) == nifutil.mat4_axis()
+        Node = _block_class("NiNode")
+        nan = float("nan")
+        node = Node(translation=(nan, nan, nan), rotation=None, scale=1.0)
+        m = nifutil.node_local_matrix(node)
+        assert m is not None
+        assert m[0][3] == 0.0 and m[1][3] == 0.0 and m[2][3] == 0.0
+        assert all(math.isfinite(v) for row in m for v in row)  # no NaN left
 
 
 class TestNodeLocalMatrix:

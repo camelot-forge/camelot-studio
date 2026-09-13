@@ -1,21 +1,12 @@
-"""Camelot Studio — canonical skeleton bone index table (KFA index -> Bip01 name).
+"""Camelot Studio — skeleton DFS reference (index -> Bip01 name).
 
-KFA animation files address bones **by index** into a shared canonical
-skeleton (the ``NiStringExtraData`` of each channel). The canonical human
-skeleton is ``figures/skeleton.nif``; the index of a bone is its **DFS
-pre-order position in that skeleton's node tree, excluding the ``Scene Root``
-node**.
-
-Verified against the retail corpus (see docs/formats.md §3 and §4): the
-channel indices of ``2HW_idle.kfa`` land exactly on the expected arm/shield
-bones (11=R Forearm, 12=R Hand, 23=R Shield, 24=L Clavicle...), and the
-channel set is identical across a figure's idle/walk/run (the keys differ,
-not the channel list).
-
-``BONE_INDEX`` maps the verified range 0..53. Indices 54+ are extra shared
-bones (full-hand fingers, twists, creature appendages) that are *not*
-present in ``skeleton.nif``; they remain *open* research (see
-``docs/status.md`` — next step 4).
+``BONE_INDEX`` is the DFS pre-order of ``figures/skeleton.nif`` excluding
+``Scene Root`` (structural fact, locked by corpus test). It was previously
+assumed to be the KFA channel space, but per-figure translation matching
+(Boar.NIF vs BOAR_idle.kfa: 27 channels at 0.000 units, ``map_kfa_to_nodes``)
+shows KFA indices resolve against the figure's own bind offsets — e.g. Boar
+Pelvis rides channel 1 while this table puts Pelvis at 2 — so this table is
+kept as a DFS reference only, not as the animation mapping.
 """
 from __future__ import annotations
 

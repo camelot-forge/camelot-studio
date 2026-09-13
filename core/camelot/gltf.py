@@ -6,19 +6,21 @@
 - JOINTS_0/WEIGHTS_0: max 4 influences, normalized.
 - Textures: not embedded in M0 (skins folder to come).
 """
+
 from __future__ import annotations
 
 import json
+import math
 import os
 from typing import Any
 
 import numpy as np
 
 from .nifutil import (
-    mat4_axis_for_version,
-    mat4_cell,
+    mat4_axis,
     mat4_identity,
     mat4_mul,
+    nif_rot_cell,
     node_local_matrix,
     vec3,
 )
@@ -43,8 +45,279 @@ def _apply_axis(points3) -> np.ndarray:
     return np.stack([x, z, -y], axis=1)
 
 
-def _m44_from_rows(rows) -> list[list[float]]:
-    return [[mat4_cell(rows, i, j) for j in range(4)] for i in range(4)]
+def _quat_to_mat3(q) -> list[list[float]]:
+    """Quaternion (w, x, y, z) -> row-major 3x3 (standard, no transpose).
+
+    Quaternions are unambiguous (unlike NIF Matrix33 storage), so the standard
+    conversion matches the transposed-corrected bind matrices (Bip01: 0.0 deg).
+    """
+    w, x, y, z = (float(c) for c in q)
+    return [
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ]
+
+
+# KFA channels address Biped bones only (the canonical table has no
+# Footsteps: Pelvis=1, and no Scene Root). Those nodes are never animated
+# targets, yet their offsets collide with real bones (Zombie.NIF's Scene
+# Root sits at (0,0,0) exactly like its Pelvis, so a wrong mapping pitched
+# the whole figure over).
+_KFA_NON_BONES = frozenset({"scene root", "bip01 footsteps"})
+
+
+def _rot3(r) -> list[list[float]]:
+    """Row-major 3x3 of a node's bind rotation (identity when absent)."""
+    if r is None:
+        return [[1.0 if i == j else 0.0 for j in range(3)] for i in range(3)]
+    return [[nif_rot_cell(r, i, j) for j in range(3)] for i in range(3)]
+
+
+def _rot_deviation_deg(a: list[list[float]], b: list[list[float]]) -> float:
+    """Angle between two rotations in degrees (acos((tr(A·Bᵀ)−1)/2))."""
+    cos = (sum(a[i][k] * b[i][k] for i in range(3) for k in range(3)) - 1.0) / 2.0
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+
+
+def _channel_rot(ch):
+    """First-key rotation matrix of a channel, or None without rotation keys."""
+    if not ch.rotations:
+        return None
+    return _quat_to_mat3(ch.rotations[0].value)
+
+
+def _pick_candidate(scored):
+    """Choose among (distance, rotation-deviation, node) candidates.
+
+    Translation leads; the rotation deviation (KFA quats are absolute local
+    rotations, so at idle they sit within a few degrees of the bind) only
+    breaks translation near-ties — the Zombie's Pelvis and Scene Root both
+    sat at (0,0,0), and only the rotation tells them apart.
+    """
+    if not scored:
+        return None
+    best_d = min(c[0] for c in scored)
+    if not math.isfinite(best_d):
+        return None
+    tie = [c for c in scored if c[0] <= best_d + max(0.05, 0.05 * best_d)]
+    if not tie:
+        return None
+    tie.sort(key=lambda c: (c[1] if c[1] is not None else 0.0, c[0], c[2]))
+    return tie[0]
+
+
+def _norm_bone_name(name: str) -> str:
+    return name.strip().lower().replace("_", " ")
+
+
+def map_kfa_to_nodes(
+    objs, names, pose, trans_tol: float = 0.3, bone_names: list[str] | None = None
+) -> dict[int, int]:
+    """Map KFA channel index -> node index.
+
+    A corresponding (figure, KFA) pair (same creature, e.g. Boar.NIF with
+    BOAR_idle.kfa) stores identical bone offsets: 27/31 Boar channels match
+    to 1e-6. Anchors (unambiguous translations) fix their nodes first;
+    contiguous index runs then inherit their side from their anchors (limb
+    runs are same-side chains: 22-26 L, 35-39 R) and remaining members take
+    the nearest unused node on that side. Translation near-ties (mirrored
+    bones, a root at the origin) are broken by the first-key rotation, which
+    must agree with the node's bind rotation for a bone.
+
+    Pair quality (fraction of translated channels the offsets resolve) gates
+    reuse: clips authored on a different rig (wolves, giants) or with a
+    shifted channel table (the CATA boar's arms/tail) score low — those map
+    nothing and keep the bind pose rather than flail the wrong bones. When
+    *bone_names* (the client's ``figures/animnode.dat``, channel index ->
+    bone name) is given and the offsets vouch for the pair, the table fills
+    the remaining channels by name — including rotation-only channels
+    (Ext/cloth helpers) that offset matching cannot bind at all. Returns {}
+    when *pose* is None.
+    """
+    if pose is None:
+        return {}
+    node_trans: dict[int, tuple[float, float, float]] = {}
+    node_rot: dict[int, list[list[float]]] = {}
+    for i, obj in enumerate(objs):
+        if obj is None or type(obj).__name__ != "NiNode":
+            continue
+        if names[i].lower() in _KFA_NON_BONES:
+            continue
+        t = vec3(getattr(obj, "translation", None))
+        if not all(math.isfinite(v) for v in t):
+            continue  # dr_wight/dr_xaphan carry NaN shield helpers
+        node_trans[i] = t
+        node_rot[i] = _rot3(getattr(obj, "rotation", None))
+    mapping: dict[int, int] = {}
+    used: set[int] = set()
+
+    def side_of(name: str) -> str | None:
+        if " L " in name:
+            return "L"
+        if " R " in name:
+            return "R"
+        return None
+
+    def score(idx: int, side: str | None = None) -> list:
+        ch = pose.channels[idx]
+        kt = ch.translations[0].value  # type: ignore[union-attr]
+        kt_t = (float(kt[0]), float(kt[1]), float(kt[2]))
+        if not all(math.isfinite(v) for v in kt_t):
+            return []
+        rc = _channel_rot(ch)
+        out = []
+        for ni, bt in node_trans.items():
+            if ni in used:
+                continue
+            if side is not None:
+                ns = side_of(names[ni])
+                if ns is not None and ns != side:
+                    continue
+            d = sum((kt_t[k] - bt[k]) ** 2 for k in range(3)) ** 0.5
+            if d > trans_tol:
+                continue
+            a = _rot_deviation_deg(rc, node_rot[ni]) if rc is not None else None
+            out.append((d, a, ni))
+        return out
+
+    # Pass 1 — anchors: channels whose translation identifies a bone beyond
+    # any lookalike (authoring-identical offsets beat Tail1-vs-Forearm style
+    # confusion, 1e-7 vs 0.09). Dust-level R/L twins never anchor.
+    anchors: dict[int, int] = {}
+    for idx in sorted(pose.channels):
+        if not pose.channels[idx].translations:
+            continue
+        scored = score(idx)
+        pick = _pick_candidate(scored)
+        if pick is None:
+            continue
+        by_d = sorted(scored, key=lambda c: c[0])
+        if len(by_d) == 1 or by_d[0][0] < 0.1 * by_d[1][0]:
+            anchors[idx] = pick[2]
+            mapping[idx] = pick[2]
+            used.add(pick[2])
+
+    # Pass 2 — contiguous KFA index runs take their side from their anchors
+    # (limb runs are same-side chains: 22-26 L, 35-39 R, 48-52 L, 54-58 R).
+    with_trans = sorted(idx for idx, ch in pose.channels.items() if ch.translations)
+    runs: list[list[int]] = []
+    for idx in with_trans:
+        if runs and idx == runs[-1][-1] + 1:
+            runs[-1].append(idx)
+        else:
+            runs.append([idx])
+    run_side: dict[int, str | None] = {}
+    for ri, run in enumerate(runs):
+        votes: dict[str, int] = {}
+        for idx in run:
+            if idx in anchors:
+                s = side_of(names[anchors[idx]])
+                if s is not None:
+                    votes[s] = votes.get(s, 0) + 1
+        run_side[ri] = max(votes, key=lambda s: votes[s]) if votes else None
+
+    # Pass 3 — remaining members map to the nearest unused node on their
+    # run's side (sideless runs stay unconstrained). Runs WITHOUT any anchor
+    # (e.g. a remodel's reshuffled limb table) map nothing: their offsets
+    # only coincide by accident and posing them would flail the wrong bones.
+    # Anchored sideless runs (spine, tail) still resolve — their anchors are
+    # translation-decisive.
+    anchored = {ri for ri, run in enumerate(runs) if any(idx in anchors for idx in run)}
+    sided_runs = sorted(
+        (ri for ri in anchored if run_side[ri] is not None),
+        key=lambda ri: runs[ri][0],
+    )
+    sideless_runs = sorted(
+        (ri for ri in anchored if run_side[ri] is None),
+        key=lambda ri: runs[ri][0],
+    )
+    for ri in sided_runs + sideless_runs:
+        side = run_side[ri]
+        for idx in runs[ri]:
+            if idx in mapping:
+                continue
+            pick = _pick_candidate(score(idx, side))
+            if pick is not None:
+                mapping[idx] = pick[2]
+                used.add(pick[2])
+
+    # Pair quality: fraction of translated channels the offsets resolve. Some
+    # clips are reused on rig variants whose binds differ (wolves, giants) or
+    # whose channel table is shifted (the CATA boar's arms/tail): there the few
+    # offset hits are coincidences. Refuse those (bind pose) instead of
+    # flailing, and only use the canonical table to fill the gaps of pairs the
+    # offsets already vouch for.
+    translatable = {i for i, ch in pose.channels.items() if ch.translations}
+    if not translatable:
+        quality = len(mapping) / max(1, len(pose.channels))
+    else:
+        quality = len(set(mapping) & translatable) / len(translatable)
+
+    if quality < 0.3 and translatable:
+        return {}
+
+    if bone_names:
+        by_name = {}
+        for i, obj in enumerate(objs):
+            if obj is None or type(obj).__name__ != "NiNode":
+                continue
+            if names[i].lower() in _KFA_NON_BONES:
+                continue
+            by_name.setdefault(_norm_bone_name(names[i]), i)
+        table_hits = {}
+        for idx in sorted(pose.channels):
+            if idx >= len(bone_names):
+                continue
+            ni = by_name.get(_norm_bone_name(bone_names[idx]))
+            if ni is not None:
+                table_hits[idx] = ni
+        if not translatable:
+            # rotation-only clip: the table is the only binding available
+            if len(table_hits) >= max(3, 0.5 * len(pose.channels)):
+                mapping = table_hits
+        elif quality >= 0.7:
+            # Vetted pair: the client's own index->name table wins over the
+            # offsets, which can mis-bind lookalikes (Ettin's Spine1/Spine2
+            # share a bind offset; BritonM1's R UpperArm offset also matches
+            # Ponytail2). Drop offset hits whose node the table claims.
+            claimed = set(table_hits.values())
+            for idx in [i for i in mapping if i not in table_hits and mapping[i] in claimed]:
+                del mapping[idx]
+            mapping.update(table_hits)
+    return mapping
+
+
+def kfa_translation_trust(pose, objs, mapping: dict[int, int], trans_tol: float = 0.3) -> set[int]:
+    """KFA channels whose translation track belongs to the mapped rig.
+
+    KFA translations are absolute locals of the rig the clip was authored on.
+    Clips reused across rig variants (wolves, giants, the CATA boar) carry
+    offsets from a different bind; applying them detaches bones or lifts the
+    figure. A track is trusted when at least one key returns to the mapped
+    node's bind translation (the rest pose the clip was authored around);
+    otherwise the caller keeps the figure's bind translation. Rotations are
+    unaffected — they are local per bone and transfer across rig variants.
+    """
+    trusted: set[int] = set()
+    for idx, ni in mapping.items():
+        ch = pose.channels.get(idx)
+        if ch is None or not ch.translations:
+            continue
+        if ni < 0 or ni >= len(objs) or objs[ni] is None:
+            continue
+        bt = vec3(getattr(objs[ni], "translation", None))
+        if not all(math.isfinite(v) for v in bt):
+            continue
+        for key in ch.translations:
+            v = key.value
+            if not all(math.isfinite(float(v[k])) for k in range(3)):
+                continue
+            d = sum((float(v[k]) - bt[k]) ** 2 for k in range(3)) ** 0.5
+            if d <= trans_tol:
+                trusted.add(idx)
+                break
+    return trusted
 
 
 def _flatten_colmajor(m: list[list[float]]) -> list[float]:
@@ -65,12 +338,16 @@ class Buffer:
             self.chunks.append(b"\x00")
             self.size += 1
 
-    def add(self, data: bytes, comp: int, count: int, kind: str,
-            mn=None, mx=None) -> int:
+    def add(self, data: bytes, comp: int, count: int, kind: str, mn=None, mx=None) -> int:
         self._pad()
         self.views.append({"buffer": 0, "byteOffset": self.size, "byteLength": len(data)})
-        acc = {"bufferView": len(self.views) - 1, "byteOffset": 0,
-               "componentType": comp, "count": count, "type": kind}
+        acc = {
+            "bufferView": len(self.views) - 1,
+            "byteOffset": 0,
+            "componentType": comp,
+            "count": count,
+            "type": kind,
+        }
         if mn is not None:
             acc["min"] = mn
             acc["max"] = mx
@@ -100,6 +377,36 @@ def _slot_for_name(name: str) -> str | None:
     return None
 
 
+# Meshes that never render, checked in this order. First, the NiAVObject
+# hidden flag (bit 0 — same rule as DAOC_Navigator): 3ds Max biped-rig
+# helpers (dozens of "Biped Object"/"Bone" boxes around the joints, e.g. 37
+# of them in amb_rabbit.nif) and 6-vert export scraps all carry it, while
+# real meshes do not (180/22 vs 181/133). Second, the same non-drawable name
+# list DAOC_Navigator uses (collision/LOD/climb/shadow stand-ins), matched
+# case-insensitively on prefix, for the rare unflagged leftovers.
+SKIP_MESH_PREFIXES = (
+    "biped",
+    "bone",
+    "collidee",
+    "bounding",
+    "climb",
+    "!lod_cullme",
+    "!visible_damaged",
+    "shadowcaster",
+    "far",
+)
+
+
+def _is_skipped_mesh(name: str, flags=None) -> bool:
+    if flags is not None:
+        try:
+            if int(flags) & 1:
+                return True
+        except (TypeError, ValueError):
+            pass
+    return any(name.lower().startswith(p) for p in SKIP_MESH_PREFIXES)
+
+
 # Per-asset orientation corrections (basename lower-case -> XYZ euler degrees),
 # applied on top of the version axis. The client's asset frames are genuinely
 # inconsistent and not derivable from the data alone (verified with rendered
@@ -110,9 +417,10 @@ ORIENTATION_OVERRIDES: dict[str, tuple[float, float, float]] = {}
 # XYZ euler degrees. Assets share authoring frames, so ~20 signatures cover the
 # whole figures corpus; this scales far better than per-asset exceptions.
 SIGNATURE_OVERRIDES: dict[tuple[int, tuple[int, ...]], tuple[float, float, float]] = {
-    # vertical canines (2HWolf, 2headed_Wolf, cata_wolf, harpy, anglich…)
-    (0x0A010000, (0, 1, 0, 0, 0, 1, 1, 0, 0)): (0.0, 0.0, 90.0),
-    (0x0A010000, (0, -1, 0, 0, 0, -1, 1, 0, 0)): (0.0, 0.0, 90.0),
+    # horizontal canines facing +Z in NIF space; turn them to face +X like the
+    # goldens (90 deg about Y). Signatures are row-major post transpose-fix.
+    (0x0A010000, (0, 0, 1, -1, 0, 0, 0, -1, 0)): (0.0, 90.0, 0.0),
+    (0x0A010000, (0, 0, 1, 1, 0, 0, 0, 1, 0)): (0.0, 90.0, 0.0),
 }
 
 
@@ -167,23 +475,45 @@ def _euler_xyz_matrix(degrees: tuple[float, float, float]) -> list[list[float]]:
     return out
 
 
-def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
-                emit_skinned: bool = False, texture: str | None = None,
-                texture_data: tuple[str, bytes] | None = None,
-                textures: list[tuple[str, str, bytes]] | None = None) -> dict:
+def export_gltf(
+    nif_path: str,
+    out_prefix: str,
+    verbose: bool = True,
+    emit_skinned: bool = False,
+    texture: str | None = None,
+    texture_data: tuple[str, bytes] | None = None,
+    textures: list[tuple[str, str, bytes]] | None = None,
+    pose=None,
+    pose_time: float = 0.0,
+    bake_pose: bool = False,
+    bone_names: list[str] | None = None,
+) -> dict:
     """
     emit_skinned=False (default): bind-pose geometry + skeleton, plus a
     <prefix>.skin.json sidecar (bone names + per-vertex weights) for later.
     emit_skinned=True (experimental): emits JOINTS_0/WEIGHTS_0 with
     inverseBind = inverse(exported skeleton world) — standard glTF, correct at
     the bind pose; will use the kfa index table later.
+    pose + bake_pose: sample a KFA :class:`Animation` at *pose_time* and bake
+    the linear-blend-skinning pose into the vertex positions/normals
+    (``p = sum w * inv(meshWorld) * boneAnim * inv(boneBind) * meshWorld * v``,
+    the Gamebryo ``Mb = rootParentToSkin * boneToRootParent * skinToBone``
+    identity). Rotations and translations replace the bind locals; the KFA
+    translations carry grounding (root bob with planted feet). The KFA->node
+    map comes from the client's ``animnode.dat`` table when available, else
+    from bind-translation matching (:func:`map_kfa_to_nodes`), so proportions
+    survive. The viewer receives a plain posed mesh.
     """
     from .nifutil import load
 
     data = load(nif_path)
-    # Up axis depends on the exporting era: early 4.x figures are X-down,
-    # later 4.x and all 10.x are Z-up (see nifutil.XUP_VERSIONS).
-    axis_matrix = mat4_axis_for_version(data.version)
+    # Every DAoC exporter (NetImmerse 4.x through Gamebryo 10.1) composes the
+    # node tree Z-up in NIF world space: the skeleton's feet are lowest along
+    # +Z and the pelvis->neck direction is +Z for bipeds, verified across the
+    # figures corpus with the row-major reading (skinning identity <= 5e-03).
+    # The former "early 4.x is X-down" conversion was compensating for the
+    # pre-row-major transposed reading and is gone (see docs/formats.md §2).
+    axis_matrix = mat4_axis()
 
     # ---------- node tree (DFS) ----------
     objs: list = []
@@ -246,15 +576,98 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
 
     walk(synth, mat4_identity())
 
+    # Optional KFA pose: map channels to nodes, sample TRS at pose_time.
+    # Both rotations and translations replace the bind locals (absolute,
+    # engine-faithful: the controller overwrites the node transform).
+    # Translations apply only when the clip's own bind matches the mapped
+    # node (kfa_translation_trust): clips reused across rig variants would
+    # otherwise detach bones or lift the figure. Scales stay at the figure
+    # bind (never animated in the corpus). Channels without keys keep bind.
+    if pose is not None and bone_names is None:
+        from .anims import load_bone_table
+
+        bone_names = load_bone_table(os.path.dirname(os.path.abspath(nif_path)))
+    kfa_to_node: dict[int, int] = map_kfa_to_nodes(objs, names, pose, bone_names=bone_names)
+    trusted_trans = kfa_translation_trust(pose, objs, kfa_to_node) if pose is not None else set()
+    posed_rot: dict[int, list[list[float]]] = {}
+    posed_trans: dict[int, tuple[float, float, float]] = {}
+    if pose is not None:
+        for kfa_idx, node_idx in kfa_to_node.items():
+            rot, trans, _scale = pose.sample(kfa_idx, pose_time)
+            if rot is not None:
+                posed_rot[node_idx] = _quat_to_mat3(rot)
+            if trans is not None and kfa_idx in trusted_trans:
+                posed_trans[node_idx] = (float(trans[0]), float(trans[1]), float(trans[2]))
+
+    def posed_local(idx: int) -> list[list[float]] | None:
+        """Bind local matrix with the KFA rotation/translation applied."""
+        base = None if objs[idx] is None else node_local_matrix(objs[idx])
+        if base is None or idx not in posed_rot and idx not in posed_trans:
+            return base
+        m = [row[:] for row in base]
+        if idx in posed_rot:
+            for a in range(3):
+                for b in range(3):
+                    m[a][b] = posed_rot[idx][a][b] * (
+                        float(getattr(objs[idx], "scale", 1.0) or 1.0)
+                    )
+        if idx in posed_trans:
+            for a in range(3):
+                m[a][3] = posed_trans[idx][a]
+        return m
+
+    posed_world: dict[int, list[list[float]]] = {}
+    if bake_pose and pose is not None:
+
+        def walk_posed(idx: int, pw: list[list[float]]) -> None:
+            if idx == synth:
+                w = mat4_mul(pw, axis_matrix)
+            else:
+                m = posed_local(idx)
+                w = mat4_mul(pw, m) if m else pw
+            posed_world[idx] = w
+            for c in children[idx]:
+                walk_posed(c, w)
+
+        walk_posed(synth, mat4_identity())
+        # NIF-space bind worlds (synthetic axis excluded) for the skinning
+        # identity; the glTF `world` above includes the axis node.
+        nif_bind: dict[int, list[list[float]]] = {}
+
+        def walk_nif(idx: int, pw: list[list[float]]) -> None:
+            m = None if idx == synth else node_local_matrix(objs[idx])
+            w = mat4_mul(pw, m) if m else pw
+            nif_bind[idx] = w
+            for c in children[idx]:
+                walk_nif(c, w)
+
+        walk_nif(synth, mat4_identity())
+        nif_posed: dict[int, list[list[float]]] = {}
+
+        def walk_nif_posed(idx: int, pw: list[list[float]]) -> None:
+            if idx == synth:
+                w = pw
+            else:
+                m = posed_local(idx)
+                w = mat4_mul(pw, m) if m else pw
+            nif_posed[idx] = w
+            for c in children[idx]:
+                walk_nif_posed(c, w)
+
+        walk_nif_posed(synth, mat4_identity())
+
     # ---------- meshes ----------
     buf = Buffer()
-    meshes: list[dict[str, Any]] = []       # node_index, name, accessors
-    skins: list[dict[str, Any]] = []        # joints, invbind (acc), node_index
-    stats = {"meshes": 0, "skinned": 0, "vertices": 0, "triangles": 0, "joints": 0}
+    meshes: list[dict[str, Any]] = []  # node_index, name, accessors
+    skins: list[dict[str, Any]] = []  # joints, invbind (acc), node_index
+    stats = {"meshes": 0, "skinned": 0, "vertices": 0, "triangles": 0, "joints": 0, "skipped": 0}
     sidecar: dict[str, Any] = {"meshes": []}
 
     for i, obj in enumerate(objs):
         if obj is None or type(obj).__name__ not in ("NiTriShape", "NiTriStrips"):
+            continue
+        if _is_skipped_mesh(names[i], getattr(obj, "flags", None)):
+            stats["skipped"] += 1
             continue
         shp = getattr(obj, "data", None)
         if shp is None:
@@ -287,13 +700,77 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
                 joints.append(index_of.get(id(bn), -1))
                 joint_names.append(bn.name.decode("latin1") if bn.name else "?")
             if partition is not None:
-                for part in (getattr(partition, "skin_partition_blocks", None)
-                             or getattr(partition, "partitions", [])):
+                for part in getattr(partition, "skin_partition_blocks", None) or getattr(
+                    partition, "partitions", []
+                ):
                     _fill_partition(part, weights_global)
             elif skin_data is not None:
                 # legacy 4.1.0.12: weights live in bone_list, no partition
                 _fill_weights_from_bonelist(skin_data, joints, weights_global)
             stats["joints"] = max(stats["joints"], len(joints))
+
+        if bake_pose and pose is not None and skinned and weights_global:
+            # CPU linear-blend skinning into NIF-local space (Gamebryo Mb).
+            Ws = np.asarray(nif_bind.get(i, mat4_identity()), dtype=float)
+            invWs = np.linalg.inv(Ws)
+            Mb_cache: dict[int, np.ndarray] = {}
+            Rb_cache: dict[int, np.ndarray] = {}
+
+            def _mb(
+                skin_k: int,
+                _joints=joints,
+                _nif_bind=nif_bind,
+                _nif_posed=nif_posed,
+                _Ws=Ws,
+                _invWs=invWs,
+                _Mb_cache=Mb_cache,
+                _Rb_cache=Rb_cache,
+            ) -> np.ndarray:
+                m = _Mb_cache.get(skin_k)
+                if m is None:
+                    jn = _joints[skin_k] if skin_k < len(_joints) else -1
+                    Wb = np.asarray(_nif_bind.get(jn, mat4_identity()), dtype=float)
+                    Wa = np.asarray(_nif_posed.get(jn, Wb.tolist()), dtype=float)
+                    m = _invWs @ Wa @ np.linalg.inv(Wb) @ _Ws
+                    _Mb_cache[skin_k] = m
+                    _Rb_cache[skin_k] = m[:3, :3]
+                return m
+
+            baked_v: list[tuple[float, float, float]] = []
+            for vi, v in enumerate(verts):
+                acc = np.zeros(3)
+                tot = 0.0
+                for sk, w in weights_global.get(vi, []):
+                    if sk < 0 or sk >= len(joints):
+                        continue
+                    mh = _mb(sk) @ np.array((v[0], v[1], v[2], 1.0))
+                    acc = acc + float(w) * mh[:3]
+                    tot += float(w)
+                baked_v.append(
+                    (float(acc[0] / tot), float(acc[1] / tot), float(acc[2] / tot))
+                    if tot > 0
+                    else v
+                )
+            verts = baked_v
+            if norms is not None:
+                baked_n = []
+                for vi, n in enumerate(norms):
+                    acc = np.zeros(3)
+                    tot = 0.0
+                    for sk, w in weights_global.get(vi, []):
+                        if sk < 0 or sk >= len(joints):
+                            continue
+                        if sk not in Rb_cache:
+                            _mb(sk)
+                        acc = acc + float(w) * (Rb_cache[sk] @ np.array(n[:3]))
+                        tot += float(w)
+                    if tot > 0:
+                        acc = acc / tot
+                        l = float(np.linalg.norm(acc)) or 1.0
+                        baked_n.append((float(acc[0] / l), float(acc[1] / l), float(acc[2] / l)))
+                    else:
+                        baked_n.append(n)
+                norms = baked_n
 
         num_v = len(verts)
         joint_arr = np.zeros((num_v, 4), dtype=np.uint16)
@@ -311,14 +788,35 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
         # matrix below, so the whole model (mesh + skeleton) rotates together.
         verts_np = np.array(verts, dtype=np.float32)
         norms_np = np.array(norms, dtype=np.float32) if norms is not None else None
-        acc_pos = buf.add(verts_np.tobytes(), F32, num_v, "VEC3",
-                          mn=verts_np.min(axis=0).round(6).tolist(),
-                          mx=verts_np.max(axis=0).round(6).tolist())
+        acc_pos = buf.add(
+            verts_np.tobytes(),
+            F32,
+            num_v,
+            "VEC3",
+            mn=verts_np.min(axis=0).round(6).tolist(),
+            mx=verts_np.max(axis=0).round(6).tolist(),
+        )
         acc_nrm = buf.add(norms_np.tobytes(), F32, num_v, "VEC3") if norms_np is not None else None
-        acc_uv = buf.add(np.array(uvs, dtype=np.float32).reshape(-1).tobytes(), F32, num_v, "VEC2") if uvs else None
-        acc_j = buf.add(joint_arr.tobytes(), U16, num_v, "VEC4") if (skinned and emit_skinned) else None
-        acc_w = buf.add(weight_arr.tobytes(), F32, num_v, "VEC4") if (skinned and emit_skinned) else None
-        acc_i = buf.add(np.array(tris, dtype=np.uint32).reshape(-1).tobytes(), I32, len(tris) * 3, "SCALAR") if tris else None
+        acc_uv = (
+            buf.add(np.array(uvs, dtype=np.float32).reshape(-1).tobytes(), F32, num_v, "VEC2")
+            if uvs
+            else None
+        )
+        acc_j = (
+            buf.add(joint_arr.tobytes(), U16, num_v, "VEC4") if (skinned and emit_skinned) else None
+        )
+        acc_w = (
+            buf.add(weight_arr.tobytes(), F32, num_v, "VEC4")
+            if (skinned and emit_skinned)
+            else None
+        )
+        acc_i = (
+            buf.add(
+                np.array(tris, dtype=np.uint32).reshape(-1).tobytes(), I32, len(tris) * 3, "SCALAR"
+            )
+            if tris
+            else None
+        )
 
         prim = {"attributes": {"POSITION": acc_pos}, "indices": acc_i}
         if acc_nrm is not None:
@@ -339,21 +837,25 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
                 ib.append(np.linalg.inv(np.asarray(w, dtype=float)).tolist())
             ib_arr = np.array([_flatten_colmajor(m) for m in ib], dtype=np.float32)
             acc_ib = buf.add(ib_arr.tobytes(), F32, len(ib), "MAT4")
-            skins.append({"node": i, "joints": joints, "invbind": acc_ib, "joint_names": joint_names})
+            skins.append(
+                {"node": i, "joints": joints, "invbind": acc_ib, "joint_names": joint_names}
+            )
             stats["skinned"] += 1
         # sidecar: keep the raw material for later (weights, bones) even without a glTF skin
-        sidecar["meshes"].append({
-            "name": names[i],
-            "joints": joint_names,
-            "vertices": _weights_to_list(weights_global, num_v),
-        })
+        sidecar["meshes"].append(
+            {
+                "name": names[i],
+                "joints": joint_names,
+                "vertices": _weights_to_list(weights_global, num_v),
+            }
+        )
         stats["meshes"] += 1
         stats["vertices"] += num_v
         stats["triangles"] += len(tris) if tris else 0
 
     # ---------- JSON ----------
     with open(out_prefix + ".skin.json", "w") as fh:
-        json.dump(sidecar, fh, indent=1)
+        json.dump(sidecar, fh, indent=1, allow_nan=False)
     if verbose and sidecar["meshes"]:
         print(f"  sidecar : {out_prefix}.skin.json")
 
@@ -365,10 +867,9 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
         if i == synth:
             n["matrix"] = _flatten_colmajor(axis_matrix)
         else:
-            m = node_local_matrix(objs[i])
+            m = posed_local(i) if pose is not None else node_local_matrix(objs[i])
             if m is not None and any(
-                abs(m[r][c] - (1.0 if r == c else 0.0)) > 1e-6
-                for r in range(4) for c in range(4)
+                abs(m[r][c] - (1.0 if r == c else 0.0)) > 1e-6 for r in range(4) for c in range(4)
             ):
                 n["matrix"] = _flatten_colmajor(m)
         gltf_nodes.append(n)
@@ -434,8 +935,11 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
         "scenes": [{"nodes": [synth]}],
         "nodes": gltf_nodes,
         "meshes": [
-            {"primitives": [m["prim"]], "name": m["name"],
-             **({"extensions": mesh_ext[k]} if k in mesh_ext else {})}
+            {
+                "primitives": [m["prim"]],
+                "name": m["name"],
+                **({"extensions": mesh_ext[k]} if k in mesh_ext else {}),
+            }
             for k, m in enumerate(meshes)
         ],
         "skins": [
@@ -451,16 +955,23 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
     with open(out_prefix + ".bin", "wb") as fh:
         fh.write(b)
     with open(out_prefix + ".gltf", "w") as fh:
-        json.dump(gltf, fh, indent=1)
+        json.dump(gltf, fh, indent=1, allow_nan=False)
 
     # ---------- diagnostics ----------
     if verbose:
         print(f"glTF written: {out_prefix}.gltf + .bin ({len(b)} bytes)")
-        print(f"  nodes={len(gltf_nodes)} meshes={stats['meshes']} skinned={stats['skinned']} "
-              f"vertices={stats['vertices']} triangles={stats['triangles']} bones={stats['joints']}")
+        print(
+            f"  nodes={len(gltf_nodes)} meshes={stats['meshes']} skinned={stats['skinned']} "
+            f"vertices={stats['vertices']} triangles={stats['triangles']} bones={stats['joints']}"
+            + (f" skipped={stats['skipped']}" if stats["skipped"] else "")
+        )
         for s in skins:
             if s["joint_names"]:
-                print("  bones: " + ", ".join(s["joint_names"][:24]) + (" …" if len(s["joint_names"]) > 24 else ""))
+                print(
+                    "  bones: "
+                    + ", ".join(s["joint_names"][:24])
+                    + (" …" if len(s["joint_names"]) > 24 else "")
+                )
         worst, checked = 0.0, 0
         for s in skins:
             for jn in s["joints"]:
@@ -475,8 +986,7 @@ def export_gltf(nif_path: str, out_prefix: str, verbose: bool = True,
     return {**stats, "bin_bytes": len(b)}
 
 
-def _weights_to_list(weights_global: dict[int, list[tuple[int, float]]],
-                     num_v: int) -> list:
+def _weights_to_list(weights_global: dict[int, list[tuple[int, float]]], num_v: int) -> list:
     """Per-vertex weights [(joint, weight), ...] for the JSON sidecar."""
     out = []
     for gv in range(num_v):
@@ -522,11 +1032,13 @@ def _fill_weights_from_bonelist(skin_data, joints, weights_global) -> None:
     """Legacy 4.1.0.12 skins store per-vertex weights in bone_list (no partition).
 
     Each bone_list entry's weights are (vertex_index, weight) for that bone;
-    the bone's canonical index is its position in the skin's bone list.
+    the key stored is the skin-bone index *k* (position in the bone list),
+    consistent with :func:`_fill_partition`, so ``joints[k]`` resolves it to
+    a node. (Previously stored the node index directly, which broke JOINTS
+    indexing whenever ``emit_skinned`` was used on legacy skins.)
     """
     bl = getattr(skin_data, "bone_list", []) or []
     for k, entry in enumerate(bl):
-        jg = joints[k] if k < len(joints) else k
         wts = entry["weights"] if isinstance(entry, dict) else getattr(entry, "weights", None)
         for vi, w in wts or []:
-            weights_global.setdefault(int(vi), []).append((jg, w))
+            weights_global.setdefault(int(vi), []).append((k, w))

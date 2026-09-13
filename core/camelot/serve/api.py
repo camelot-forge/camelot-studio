@@ -29,6 +29,28 @@ def sse_frame(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
 
 
+def build_id() -> str:
+    """Short git commit (+dirty) of the checkout, best-effort for stale-build
+    detection (surfaced in /health and the viewer footer)."""
+    import subprocess
+
+    try:
+        repo = Path(__file__).resolve().parents[3]
+        rev = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo, capture_output=True, text=True, timeout=5, check=False,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo, capture_output=True, text=True, timeout=5, check=False,
+        ).stdout.strip()
+        if rev:
+            return rev + ("+dirty" if dirty else "")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return "unknown"
+
+
 # --------------------------------------------------------------------------- #
 # Format helpers (always deferred to core)
 # --------------------------------------------------------------------------- #
@@ -89,7 +111,9 @@ def _metadata(config: ServeConfig, asset: Asset, tmpdir: str) -> dict[str, Any]:
     return {}
 
 
-def _export_model(config: ServeConfig, asset: Asset, tmpdir: str) -> tuple[bytes, bytes]:
+def _export_model(
+    config: ServeConfig, asset: Asset, tmpdir: str, skinned: bool = False
+) -> tuple[bytes, bytes]:
     """Export *asset* to (glb_bytes, skin_json_bytes), with auto textures."""
     from ..gltf import export_gltf
 
@@ -106,7 +130,7 @@ def _export_model(config: ServeConfig, asset: Asset, tmpdir: str) -> tuple[bytes
     except (MpakError, OSError, ValueError, KeyError, IndexError):
         textures = None
 
-    export_gltf(source, out_prefix, verbose=False, textures=textures)
+    export_gltf(source, out_prefix, verbose=False, textures=textures, emit_skinned=skinned)
     gltf = json.loads(Path(out_prefix + ".gltf").read_text(encoding="utf-8"))
     bin_bytes = Path(out_prefix + ".bin").read_bytes()
     skin_path = Path(out_prefix + ".skin.json")
@@ -114,12 +138,13 @@ def _export_model(config: ServeConfig, asset: Asset, tmpdir: str) -> tuple[bytes
     return pack_glb(gltf, bin_bytes), skin
 
 
-def _cached_model(config: ServeConfig, asset: Asset) -> tuple[bytes, bytes]:
-    """Export with a disk cache keyed on the source mtime."""
+def _cached_model(config: ServeConfig, asset: Asset, skinned: bool = False) -> tuple[bytes, bytes]:
+    """Export with a disk cache keyed on the source mtime (and skin flag)."""
     out_dir = config.cache_dir / "exports"
-    glb_path = out_dir / f"{asset.id}.glb"
-    skin_path = out_dir / f"{asset.id}.skin.json"
-    meta_path = out_dir / f"{asset.id}.json"
+    suffix = ".skinned" if skinned else ""
+    glb_path = out_dir / f"{asset.id}{suffix}.glb"
+    skin_path = out_dir / f"{asset.id}{suffix}.skin.json"
+    meta_path = out_dir / f"{asset.id}{suffix}.json"
 
     meta = read_json(meta_path)
     if (
@@ -131,7 +156,7 @@ def _cached_model(config: ServeConfig, asset: Asset) -> tuple[bytes, bytes]:
         return glb_path.read_bytes(), skin_path.read_bytes()
 
     with tempfile.TemporaryDirectory(prefix="camelot-serve-") as tmpdir:
-        glb, skin = _export_model(config, asset, tmpdir)
+        glb, skin = _export_model(config, asset, tmpdir, skinned=skinned)
     out_dir.mkdir(parents=True, exist_ok=True)
     glb_path.write_bytes(glb)
     skin_path.write_bytes(skin)
@@ -148,7 +173,7 @@ def build_router(config: ServeConfig, index: AssetIndex,
 
     @router.get("/health", response_model=Health)
     def health() -> Health:
-        return Health(status="ok", version=__version__, root=str(config.root))
+        return Health(status="ok", version=__version__, root=str(config.root), build=build_id())
 
     @router.get("/root", response_model=RootInfo)
     def root_info() -> RootInfo:
@@ -199,17 +224,43 @@ def build_router(config: ServeConfig, index: AssetIndex,
         return Response(content=skin, media_type="application/json")
 
     @router.get("/assets/{asset_id}/model")
-    def asset_model(asset_id: str) -> Response:
+    def asset_model(asset_id: str, skinned: bool = False) -> Response:
         asset = index.get(asset_id)
         if asset is None:
             raise HTTPException(status_code=404, detail="unknown asset")
         if asset.type != "nif":
             raise HTTPException(status_code=400, detail="model export is only available for nif assets")
         try:
-            glb, _skin = _cached_model(config, asset)
+            glb, _skin = _cached_model(config, asset, skinned=skinned)
         except (MpakError, OSError, ValueError) as exc:
             raise HTTPException(status_code=500, detail=f"export failed: {exc}") from exc
         return Response(content=glb, media_type="model/gltf-binary")
+
+    @router.get("/assets/{asset_id}/anim")
+    def asset_anim(asset_id: str) -> Response:
+        """Idle animation rotation tracks for a figure (auto-resolved KFA)."""
+        from ..anims import animation_tracks, resolve_idle_kfa
+
+        asset = index.get(asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="unknown asset")
+        if asset.type != "nif":
+            raise HTTPException(status_code=400, detail="anim is only available for nif assets")
+        with tempfile.TemporaryDirectory(prefix="camelot-serve-") as tmpdir:
+            try:
+                source = _materialize(config, asset, tmpdir)
+                kfa_path = resolve_idle_kfa(str(config.root), source)
+            except (MpakError, OSError) as exc:
+                raise HTTPException(status_code=500, detail=f"anim failed: {exc}") from exc
+            if kfa_path is None:
+                raise HTTPException(status_code=404, detail="no idle animation for this figure")
+            try:
+                tracks = animation_tracks(source, kfa_path, str(config.root))
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=500, detail=f"anim failed: {exc}") from exc
+            if not tracks["tracks"]:
+                raise HTTPException(status_code=404, detail="no idle animation for this figure")
+        return Response(content=json.dumps(tracks), media_type="application/json")
 
     @router.get("/events")
     async def events(request: Request) -> StreamingResponse:

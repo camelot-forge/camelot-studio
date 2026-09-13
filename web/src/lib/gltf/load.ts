@@ -138,6 +138,48 @@ function bindMeshTextures(
 	return out;
 }
 
+// Re-bind every SkinnedMesh with its live bind world.
+//
+// three.js r186 GLTFLoader binds skins with an identity bind matrix, while
+// SkinnedMesh.updateMatrixWorld keeps refreshing bindMatrixInverse from the
+// live world (AttachedBindMode). For meshes parented under transformed nodes
+// (our Body offset + __axes__ conversion) that pairing drops the mesh world
+// transform and the model renders in the wrong frame. Re-binding with the
+// real bind world restores the standard identity
+// (world = boneWorld * invBind at bind) — must run after the scene is
+// assembled and positioned, before the first render.
+export function rebindSkinnedMeshes(scene: THREE.Object3D): number {
+	let count = 0;
+	scene.traverse((obj) => {
+		const skinned = obj as THREE.SkinnedMesh;
+		if (!skinned.isSkinnedMesh) return;
+		skinned.bind(skinned.skeleton);
+		count++;
+	});
+	return count;
+}
+
+// Bind-pose world bounds of a loaded model.
+//
+// Unlike THREE.Box3.setFromObject (whose SkinnedMesh path folds the live
+// skeleton into the measurement), this uses raw bind-geometry positions
+// transformed by mesh world matrices only — exactly what static grounding
+// and camera framing must be computed from.
+export function bindBoxOf(root: THREE.Object3D): THREE.Box3 {
+	root.updateMatrixWorld(true);
+	const box = new THREE.Box3();
+	const v = new THREE.Vector3();
+	root.traverse((obj) => {
+		const mesh = obj as THREE.Mesh;
+		const pos = mesh.geometry?.attributes.position as THREE.BufferAttribute | undefined;
+		if (!mesh.isMesh || !pos) return;
+		for (let i = 0; i < pos.count; i++) {
+			v.fromBufferAttribute(pos, i).applyMatrix4(obj.matrixWorld);
+			box.expandByPoint(v);
+		}
+	});
+	return box;
+}
 // Split a GLB container into its JSON document and binary chunk. The serve
 // daemon returns GLB (single response) but the CS_camelot_texture extension
 // lives in orphan bufferViews inside the BIN chunk, so we need both parts.

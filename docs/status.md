@@ -12,7 +12,7 @@ State of Camelot Studio (M0 → M0.5, Sept 2026). Byte-level format facts:
 |---|---|
 | `camelot info <f>` | NIF version, block histogram, named nodes, textures |
 | `camelot kfa <f>` | .kfa animated bone channels (bone indices, key counts) |
-| `camelot gltf <f> --out <prefix> [--skinned]` | glTF 2.0 export (Z-up→Y-up axis node) + `<prefix>.skin.json` sidecar |
+| `camelot gltf <f> --out <prefix> [--skinned] [--pose A.kfa --pose-time T --bake-pose]` | glTF 2.0 export (Z-up→Y-up axis node) + `<prefix>.skin.json` sidecar |
 | `camelot roundtrip <f>` | read → write → read (multiset compare; legacy 4.x = N/A) |
 | `camelot batch <manifest> --out <report> [--read-only] [--limit N]` | bulk validation, live progress; `$DAOC_CLIENT` rewrites `DAOC CLIENT/...` manifest paths |
 | `camelot mpak list <archive>` / `get <archive> <entry>` / `pack <out> <name> <files…>` | MPAK reader/writer (`.mpk`/`.npk`) |
@@ -45,11 +45,12 @@ are 10.1.0.0 housing files failing inside pyffi — see `formats.md` §7).
   to be confirmed by real rendering in M1.
 - **glTF axis**: vertices/normals stay in NIF space and the synthetic root
   node (`__axes__`) applies the axis conversion once (no double rotation).
-  The up axis is **version-based** (see `formats.md` §2 "Up axis"): early
-  NetImmerse **4.1.0.12 / 4.2.1.0 figures are X-down** (Ettin, Ogre, Zombie)
-  and get `(x,y,z)→(y,−x,z)`; 4.2.2.0 and 10.x are Z-up and get
-  `(x,y,z)→(x,z,−y)`. The viewer normalises scale to ~5 units and keeps a 90°
-  rotate control. Open: `Rat.NIF` (10.x) orientation needs visual confirmation.
+  Every era composes **Z-up** in NIF world space, so the conversion is always
+  `(x,y,z)→(x,z,−y)` (`formats.md` §2 "Up axis"): the former version-based
+  "early 4.x is X-down" rule was a pre-row-major artifact and is gone. The
+  viewer normalises scale to ~5 units and keeps a 90° rotate control. Open:
+  `Rat.NIF` (10.x) still has its length along the horizontal axis — its tail
+  dominates the bbox, visual confirmation pending.
 
 ## Testing
 
@@ -71,11 +72,14 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
 1. **Write**: pyffi reorders blocks on write (roundtrip validated as
    multisets; worth watching for diff-friendly editing).
 2. **Legacy 4.x write**: not implemented (see above).
-3. **Bone index table**: KFA indices **0..53 mapped to the Bip01 skeleton**
-   (index = DFS pre-order of `skeleton.nif` minus `Scene Root`, verified vs
-   `2HW_idle.kfa`; `core/camelot/skeleton.py`). Indices **54..114 still
-   open** — extra shared bones (fingers/twists/creature appendages) absent
-   from `skeleton.nif`; needs a full-skeleton reference or game.dll analysis.
+3. **Bone index table**: the client's `figures/animnode.dat` (175 names,
+   index = KFA channel) is now the mapping's backbone (`load_bone_table`),
+   filling channels by name once the pair's offsets vouch for it; the
+   offset/rotation matching (`map_kfa_to_nodes`) remains the validator and
+   the fallback, and mismatched-rig clips (wolf/lynx/giant) are refused to
+   bind. `skeleton.py` stays a DFS reference only. Open: which human figure
+   `2HW_idle.kfa` was authored for (neither `skeleton.nif` nor `BritonM1`
+   match its offsets) — the table should name its bones now.
 4. **pyffi 10.1.0.0**: 2 housing files fail (see `formats.md` §7).
 5. **MPAK header checksum**: the two *open* header fields (`formats.md` §5)
    are written as deterministic placeholders; whether the game validates
@@ -112,16 +116,29 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
 3. ~~MPAK writer~~ — **done**: `core/camelot/mpak.py` + `camelot mpak`
    CLI, unit + corpus repack tests, header `byte 13` decoded; the two
    *open* header checksums documented (`formats.md` §5).
-4. Bone index table research (KFA indices → Bip01 skeleton): **0..53 done**,
-   indices 54+ open (see Known limits #3).
-5. ~~M1: Svelte + three.js viewer~~ — **initial delivered**: `web/` SvelteKit
-   (Svelte 5 runes, Vite, Vitest) static viewer loading `.gltf`+`.bin`
-   (+`.skin.json`); design system adapted from Pictiúr. Animated `.kfa`
-   playback is future work (needs index table 54+ and a KFA reader here).
-   **Textures**: `camelot gltf` resolves the figure's DDS from gamedata
-   (`core/camelot/gamedata.py`) and embeds it (`CS_camelot_texture`); the
-   viewer loads it with three.js `DDSLoader`. Multi-slot → per-mesh mapping
-   is open.
+4. Idle coverage: Boar is proven end-to-end; validate more creatures the
+   same way (`anim_check.mjs` pattern) and pair human figures with their own
+   KFAs (see Known limits #3).
+5. ~~M1: Svelte + three.js viewer~~ — **idle playback delivered**: `web/`
+   SvelteKit (Svelte 5 runes, Vite, Vitest) loads the skinned `.glb`
+   (`GET /api/v1/assets/{id}/model?skinned=true`) plus joint rotation tracks
+   (`GET /api/v1/assets/{id}/anim`, idle KFA auto-resolved by filename) and
+   loops the idle with play/pause **at the game's own rate** (`animnifs.csv`
+   frames/fps → `{rate, duration}`; classic idles play ~5x slower than their
+   key stamps). Validated end-to-end on Boar
+   (`web/scripts/anim_check.mjs`: skinned bind ≈ static at IoU 0.89, GPU
+   skinned vertices == CPU bake to 1e-4, feet planted through the loop).
+   resolves the figure's DDS from gamedata (`core/camelot/gamedata.py`) and
+   embeds it (`CS_camelot_texture`); the viewer loads it with three.js
+   `DDSLoader`. Multi-slot → per-mesh mapping is open.
+   **three.js gotchas (documented, handled)**: r186 `GLTFLoader` binds skins
+   with an identity bind matrix while `SkinnedMesh` (AttachedBindMode) keeps
+   refreshing `bindMatrixInverse` from the live world — parented meshes
+   (Body offset + `__axes__`) then render in the wrong frame. The viewer
+   re-binds with the live bind world (`rebindSkinnedMeshes`, unit-tested).
+   Likewise `Box3.setFromObject` on a `SkinnedMesh` measures CPU-skinned
+   positions (not bind geometry), which grounded models ~0.5 units high —
+   grounding/camera use `bindBoxOf` (geometry bounds × mesh world) instead.
 6. M2: Blender addon + server-bridge (artifact injection, in-game testing).
 
 ## Command cheat sheet

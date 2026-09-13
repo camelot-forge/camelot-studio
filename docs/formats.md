@@ -37,24 +37,23 @@ CSV headers span 2-3 lines; files on disk are case-insensitive to the client
 
 ### Up axis (verified on the corpus)
 
-The figures' **geometry** is authored in different frames depending on the
-exporting era; the mesh container node (`Scene Root > Body`) also carries a
-local rotation (e.g. +90° X) for many 10.x meshes. Composing the node tree
-already places 10.x meshes Z-up, so the rule that reproduces the game's
-orientation is:
+Composing the node tree, **every DAoC exporter (NetImmerse 4.1.0.12 through
+Gamebryo 10.1) authors Z-up in NIF world space**. The glTF conversion is
+therefore always `(x,y,z) → (x, z, −y)` (`nifutil.mat4_axis`, the synthetic
+`__axes__` root node).
 
-| NIF version | Geometry up | glTF conversion |
-|---|---|---|
-| **4.1.0.12**, **4.2.1.0** | **X-down** (feet at +X, head at −X) | `(x,y,z) → (y, −x, z)` |
-| 4.2.2.0, 10.1.0.0 (all others) | **Z-up** | `(x,y,z) → (x, z, −y)` |
+Evidence (row-major reading): for every biped the feet sit lowest along +Z and
+the pelvis→neck direction is +Z — Zombie.NIF (4.1.0.12), Ettin/Ogre/Fomor
+(4.2.1.0), Boar/humans (10.1) — and the skinning identity
+`inv(meshWorld)·boneWorld·skinToBone` holds at the bind (Zombie 1.6e-05,
+Ettin 5.3e-03). Quadrupeds (wolves) stand on +Z with a horizontal spine along
+±Y; serpents lie horizontally with +Z still up. `feet_below_pelvis` in
+`core/tests/_bbox.py` locks this in the render-regression tests.
 
-Evidence: the early-4.x meshes (Ettin, Ogre, Fomor, Zombie) have their largest
-extent along X and the skeleton feet at +X; without the X→Y conversion they
-exported lying down. 4.2.2.0 and 10.x meshes have their height along Z (Boar,
-BritonM1, skeleton, fox_pet01…). `nifutil.XUP_VERSIONS` /`mat4_axis_for_version`
-encode this. Open: `Rat.NIF` (10.x) still renders with its length along Z and
-a short Y, which needs a render-based confirmation (its tail dominates the
-bbox, so geometry-only detection is ambiguous).
+History: an earlier version rule ("4.1.0.12/4.2.1.0 geometry is X-down, use
+`(x,y,z) → (y, −x, z)`") was written while legacy matrices were read
+transposed; once the row-major fix landed it exported Zombie/Ettin/Ogre lying
+down. Removed (commit: "Drop the stale X-up axis rule…").
 
 ## 3. Figures & fig3 architecture
 
@@ -76,14 +75,53 @@ bbox, so geometry-only detection is ambiguous).
 - Skeletons: `%s_skeleton.nif` (game.dll string) + `figures/skeleton.nif` =
   canonical human Bip01, **51 bones** (`Scene Root → Bip01 → Footsteps →
   Pelvis → Spine1/2 → Neck → Head`, full arms/fingers, Held/Shield/Back/
-  Belt, legs). The KFA bone index of a bone = **DFS pre-order position in
-  this skeleton, excluding `Scene Root`** — *verified* for indices 0..53
-  (`core/camelot/skeleton.py`): the `2HW_idle.kfa` channels land exactly on
-  the expected arm/shield bones (11=R Forearm, 12=R Hand, 23=R Shield, 24=L
-  Clavicle…), and a figure's idle/walk/run share the same channel set (only
-  the keys differ). Indices 54+ are extra shared bones (full-hand fingers,
-  twists, creature appendages) absent from `skeleton.nif` — *open*. The
-  master table (0..114) exceeds the human skeleton.
+  Belt, legs). `core/camelot/skeleton.py` keeps the DFS pre-order of this
+  skeleton (minus `Scene Root`) as a structural reference only.
+- **NIF rotation storage is row-major** in DAoC files (DirectX/Max
+  convention), contrary to nif.xml's "column-major" note: without the
+  transpose the Gamebryo skinning identity misses by ~56 units, with it by
+  5e-06, and KFA quaternions agree with their bind matrices (Bip01: 0.0°).
+  Implemented as `nif_rot_cell` + row-major `legacy.mat33`.
+- **Skinning (Gamebryo, verified on Boar)**: per bone
+  `Mb = inv(meshWorld) * boneAnim * inv(boneBind) * meshWorld`
+  (`rootParentToSkin * boneToRootParent * skinToBone`); baked into NIF-local
+  vertices, axis node unchanged. Boar idle at mid-breath: mean edge
+  5.509→5.445 (bending, no stretch), bbox preserved. glTF consumers beware:
+  three.js r186 `GLTFLoader` binds with identity while `SkinnedMesh`
+  refreshes the inverse from the live world, which drops parented mesh
+  transforms — re-bind with the live bind world before rendering
+  (`rebindSkinnedMeshes`).
+- **KFA channel -> bone mapping** (`map_kfa_to_nodes`,
+  `camelot gltf --pose/--bake-pose`): the client ships the engine's own
+  index table, `figures/animnode.dat` — 175 bone names, one per line, index =
+  channel (0 = Bip01, 1 = Bip01 Pelvis, no Footsteps; same table as
+  blender_niftools PR #558). It fills every channel by name when the pair's
+  offsets vouch for it (fraction of translated channels that resolve >= 0.7),
+  including rotation-only channels (Ext/cloth) that offset matching cannot
+  bind. Otherwise mapping is per-figure **bind-translation matching**
+  (anchors + same-side runs): corresponding pairs store identical offsets
+  (Boar.NIF vs BOAR_idle.kfa: 31 channels at 0.000). Near-ties (mirrored
+  bones, a root at the origin) break by first-key rotation; `Scene Root` and
+  `Bip01 Footsteps` are never targets. Pairs that score < 0.3 (wolf/lynx/giant
+  idles authored on another bind) are refused entirely — bind pose beats a
+  wrong pose; the CATA boar's shifted arm/tail slots likewise stay on bind
+  (its spine/legs still map). Rotations AND translations replace the bind
+  locals (absolute, engine-faithful — the translations ground the figure:
+  root bob with planted feet, min-Y constant through the loop). Translations
+  apply only when the clip's track returns to the mapped node's bind
+  (`kfa_translation_trust`); scales stay at the bind (never animated). The
+  old "shared 0..53 DFS = KFA space" claim is superseded (Boar Pelvis rides
+  channel 1, not 2), as is rotations-only retargeting (it floats +2.26).
+- **KFA playback timing comes from `animnifs.csv`, not the key stamps.**
+  Every file is authored at 15 or 30 fps key density (`native_fps`: median
+  rotation-key interval, snapped), and the game plays `frames` key intervals
+  at `fps` frames per game second: rate `fps / native` over a loop of
+  `frames / fps` game seconds. Verified exact on 12+ files (Boar idle
+  `16,3,15` → 0.2x over 5.33s; run `15,30,30` → 2x over 0.5s; walk/run share
+  one byte-identical file and still differ: 7 keys at 1x vs 16 keys at 2x).
+  Missing rows and `fps` <= 0 (code-driven swims) fall back to stamped file
+  timing. Served as `{rate, duration}` with the tracks; the viewer samples
+  key time `(t_game % duration) * rate`.
 - Items: statics (3/60 skinned), textured (58/60), attach nodes
   `BACK`/`BELT`/`GROUND`.
 
@@ -132,9 +170,14 @@ skin/armour is per-character (fig3 + `pskins`), needs a cleaner model;
   NiNode (anonymous) + NiStringExtraData (numeric bone index)
     + NiKeyframeController → NiKeyframeData(rot_keys=N≈frames)
   ```
-- The `NiStringExtraData` **index** is stable across creatures
-  (`2HW_idle` and `BOAR_idle` share 0..77) — a shared canonical skeleton
-  template (Biped + extras).
+- KFA channels address bones **by index into a per-skeleton table**: classic
+  creatures share index ranges (`2HW_idle` and `BOAR_idle` share 0..77),
+  while CATA remodels reshuffle theirs (their arm slots address different
+  offsets — matched only when translation-decisive, otherwise left on bind).
+  `game.dll` finds bones **by name** at runtime; our tooling resolves
+  index→node per figure by bind-offset matching (§3).
+- `.kfa` key times are **seconds at the authored key rate** (15 classic,
+  30 CATA-era); the game loops `frames` of them at `fps` (see §3 timing).
 - `game.dll` embeds the Gamebryo engine statically (`NiMain/NiAnimation/
   NiCollision… Version 10.1.0.0`) — no EMotion FX anywhere.
 - ⚠️ 10.1.0.0 files list each block type once (header table) while 4.2.x
@@ -177,7 +220,11 @@ placeholders for the two *open* fields.
 
 `core/camelot/legacy.py` reads 4.1.0.12 / 4.2.x meshed NIFs that pyffi
 cannot parse. Layout: `[u32 type_len][type_name][body]`, little-endian,
-0xFFFFFFFF = null ref, footer `[u32 num_roots][roots...]`. Versioned facts:
+0xFFFFFFFF = null ref, footer `[u32 num_roots][roots...]`. Rotation matrices
+are row-major on disk in ALL DAoC exporters (4.x and 10.1 alike, contrary to
+nif.xml's column-major note) — proven per family by the skinning identity
+`inv(meshWorld) * boneWorld * skinToBone == I` (Boar 10.1: 5e-06, Ettin
+4.2.1: 5e-03; transposed: ~56/~70). Versioned facts:
 
 - Booleans: u8 from 4.1.0.1; **0x00 and 0xFF both mean false** (exporter
   wrote 0xFFFFFFFF-style false).

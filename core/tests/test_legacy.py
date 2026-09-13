@@ -81,10 +81,11 @@ class TestReaderPrimitives:
         assert r.vec3() == (1.0, 2.0, 3.0)
         assert r.vec4() == (4.0, 5.0, 6.0, 7.0)
 
-    def test_mat33_column_major_to_row_major(self):
-        # column-major storage: col0=(1,2,3) col1=(4,5,6) col2=(7,8,9)
+    def test_mat33_row_major(self):
+        # DAoC files store rotations row-major (DirectX/Max convention):
+        # bytes 1..9 are row0=(1,2,3) row1=(4,5,6) row2=(7,8,9).
         r = self.make(struct.pack("<9f", 1, 2, 3, 4, 5, 6, 7, 8, 9))
-        assert r.mat33() == [[1, 4, 7], [2, 5, 8], [3, 6, 9]]
+        assert r.mat33() == [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
 
     def test_read_past_end(self):
         r = self.make(b"\x01")

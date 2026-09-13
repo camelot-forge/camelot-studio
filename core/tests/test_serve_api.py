@@ -66,10 +66,27 @@ class TestAssetDetail:
         assert r.headers["content-type"] == "model/gltf-binary"
         assert r.content[:4] == b"glTF"
 
+    def test_model_skinned_flag_returns_glb(self, tmp_path, nif_path):
+        client = _client(_make_app(tmp_path, nif_path))
+        r = client.get(f"/api/v1/assets/{self._nif_id(client)}/model", params={"skinned": True})
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "model/gltf-binary"
+        assert r.content[:4] == b"glTF"
+
     def test_model_rejects_non_nif(self, tmp_path, nif_path):
         client = _client(_make_app(tmp_path, nif_path))
         kfa = client.get("/api/v1/assets", params={"type": "kfa"}).json()["items"][0]
         assert client.get(f"/api/v1/assets/{kfa['id']}/model").status_code == 400
+
+    def test_anim_is_404_without_matching_kfa(self, tmp_path, nif_path):
+        client = _client(_make_app(tmp_path, nif_path))
+        r = client.get(f"/api/v1/assets/{self._nif_id(client)}/anim")
+        assert r.status_code == 404
+
+    def test_anim_rejects_non_nif(self, tmp_path, nif_path):
+        client = _client(_make_app(tmp_path, nif_path))
+        kfa = client.get("/api/v1/assets", params={"type": "kfa"}).json()["items"][0]
+        assert client.get(f"/api/v1/assets/{kfa['id']}/anim").status_code == 400
 
 
 class TestSecurity:

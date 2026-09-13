@@ -179,9 +179,14 @@ class _Reader:
         return (self.f32(), self.f32(), self.f32(), self.f32())
 
     def mat33(self) -> list[list[float]]:
-        # stored column-major; exposed row-major m[row][col]
+        # DAoC files store rotations row-major (DirectX/Max convention),
+        # contrary to nif.xml's "column-major" note written for OpenGL —
+        # NetImmerse 4.x like Gamebryo 10.1. Proven per family by the
+        # Gamebryo skinning identity inv(meshWorld) * boneWorld * skinToBone:
+        # Boar.NIF (10.1) hits I at 5e-06 row-major (~56 column-major) and
+        # Ettin.NIF (4.2.1) at 5e-03 row-major (~70 column-major).
         vals = [self.f32() for _ in range(9)]
-        return [[vals[c * 3 + r] for c in range(3)] for r in range(3)]
+        return [[vals[r * 3 + c] for c in range(3)] for r in range(3)]
 
     def string(self) -> bytes:
         n = self.u32()

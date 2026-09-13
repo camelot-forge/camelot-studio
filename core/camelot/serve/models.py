@@ -10,6 +10,7 @@ class Health(BaseModel):
     status: str
     version: str
     root: str
+    build: str = "unknown"
 
 
 class RootInfo(BaseModel):
