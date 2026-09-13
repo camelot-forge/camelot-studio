@@ -83,13 +83,15 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
      `sect_idle`, amazon -> `Hoplite_Idle`, amb_bat -> `amb_bat_fly`, 2HWolf
      -> `2HW_idle`…). Filename conventions + player aliases remain the
      fallback.
-   - **Only vetted pairs animate** (`mapping_is_vetted`): table-mapped pairs,
-     or offset mappings covering >= 0.9 of translated channels. Partial
-     subsets (amazon 17/43, Bear 13/32, CATA boar 19/40) are refused to bind
-     — they mix another rig's limbs and walk on air. 306 vetted links, ~280
-     animate after the `skin_stretch` gate (AfancB/dracolich style rigs whose
-     stored skin bind disagrees with the node tree are refused), 169 partials
-     refused, 48 without a mapping.
+   - **Gamedata-linked clips map by the engine's table** (`prefer_table`):
+     offset heuristics must not judge them, since animated bones (root bob,
+     clavicle breathing) drift from the bind and used to refuse
+     amazon/rat/bear/cata_lion/badger/amb_blackcat — all of which deform
+     cleanly (mean edge ratio 1.01-1.07) once mapped by name. Fallback
+     (filename) links keep the conservative offset gate. Coverage: **483
+     animate** (511 vetted, 28 refused by `skin_stretch`, 7 no mapping,
+     94 no link); the black cat's sitting `Idle` slot loses to its
+     `STAND_IDLE` (`resolve_anim_from_gamedata` penalizes sit/tailswipe).
    - **All translations apply on a vetted pair** (`kfa_translation_trust`):
      the root track is the grounding (root bob with planted feet); dropping
      it made 2HWolf/3head/Zombie/Ettin/Wolf float 1-2.3 units — with it the
@@ -138,17 +140,19 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
    *open* header checksums documented (`formats.md` §5).
 4. Idle coverage: Boar is proven end-to-end; the gamedata animation chain
    (`monnifs → anims → animnifs`, Known limits #3) linked 475 figures and
-   **306 vetted pairs animate** (~280 after the stretch gate) with planted
-   feet; all reported floats (2HWolf, 3head, Zombie, Ettin, Wolf, items) are
-   fixed and user-verified. Next: validate a few more families with the
-   `anim_check.mjs` pattern, then revisit the refused rigs via engine-exact
-   skinning.
+   **483 animate** with planted feet (511 vetted, 28 refused by
+   `skin_stretch`), including the formerly-refused amazon/rat/bear/
+   cata_lion/amb_blackcat/badger. All reported floats (2HWolf, 3head, Zombie,
+   Ettin, Wolf, items) are fixed and user-verified. Next: validate a few more
+   families with the `anim_check.mjs` pattern, then revisit the 28 refused
+   rigs via engine-exact skinning (stored `NiSkinData` transforms).
 5. ~~M1: Svelte + three.js viewer~~ — **idle playback delivered**: `web/`
    SvelteKit (Svelte 5 runes, Vite, Vitest) loads the skinned `.glb`
    (`GET /api/v1/assets/{id}/model?skinned=true`) plus joint rotation tracks
    (`GET /api/v1/assets/{id}/anim`; the figure's KFA comes from the gamedata
-   chain, filename fallback, and only **vetted rig pairs** play — partial
-   matches answer 404 and the viewer shows the bind pose) and
+   chain, filename fallback; gamedata links map through the engine's table,
+   and clips that fail the deformation gate answer 404 so the viewer shows
+   the bind pose) and
    loops the idle with play/pause **at the game's own rate** (`animnifs.csv`
    frames/fps → `{rate, duration}`; classic idles play ~5x slower than their
    key stamps). Validated end-to-end on Boar

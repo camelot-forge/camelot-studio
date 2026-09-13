@@ -114,6 +114,54 @@ def test_gamedata_chain_picks_case_insensitively_and_falls_back(tmp_path):
     )
 
 
+def test_gamedata_prefers_standing_idle_over_sitting(tmp_path):
+    """The black cat's Idle slot is a sit-tailswipe; Idle3 is the stand idle."""
+    from camelot.anims import resolve_anim_from_gamedata
+
+    _write_gamedata(
+        tmp_path,
+        "Information,,NIF,Anim\n"
+        "ID,Textual Name,Name,Set\n"
+        "962,amb_blackcat,amb_blackcat,409\n",
+        ",,0,1,2,3\n"
+        "ID,name,Walk,Idle,Idle2,Idle3\n"
+        "409,Black Cat,4043,4039,4044,4041\n",
+        "Anim,,,,\n"
+        "NIFS,name,NIF Name,frames,fps,fps,type\n"
+        "4039,cat sit tailswipe,amb_blackcat_SIT_TAILSWIPE.kfa,40,15,15,loop\n"
+        "4041,cat stand idle,amb_blackcat_STAND_IDLE.kfa,40,15,15,loop\n"
+        "4044,cat sit idle,amb_blackcat_SIT_IDLE.kfa,40,15,15,loop\n",
+    )
+    (tmp_path / "anims").mkdir()
+    for f in ("amb_blackcat_SIT_TAILSWIPE.kfa", "amb_blackcat_STAND_IDLE.kfa", "amb_blackcat_SIT_IDLE.kfa"):
+        (tmp_path / "anims" / f).write_bytes(b"kfa")
+    got = resolve_anim_from_gamedata(str(tmp_path), str(tmp_path / "figures" / "amb_blackcat.nif"))
+    assert got is not None and got.endswith("amb_blackcat_STAND_IDLE.kfa")
+
+
+def test_gamedata_keeps_sit_when_nothing_stands(tmp_path):
+    from camelot.anims import resolve_anim_from_gamedata
+
+    _write_gamedata(
+        tmp_path,
+        "Information,,NIF,Anim\n"
+        "ID,Textual Name,Name,Set\n"
+        "1,cat,cat,9\n",
+        ",,0,1\n"
+        "ID,name,Idle,Sit Idle\n"
+        "9,Cat,4039,4044\n",
+        "Anim,,,,\n"
+        "NIFS,name,NIF Name,frames,fps,fps,type\n"
+        "4039,cat sit tailswipe,cat_SIT_TAILSWIPE.kfa,40,15,15,loop\n"
+        "4044,cat sit idle,cat_SIT_IDLE.kfa,40,15,15,loop\n",
+    )
+    (tmp_path / "anims").mkdir()
+    for f in ("cat_SIT_TAILSWIPE.kfa", "cat_SIT_IDLE.kfa"):
+        (tmp_path / "anims" / f).write_bytes(b"kfa")
+    got = resolve_anim_from_gamedata(str(tmp_path), str(tmp_path / "figures" / "cat.nif"))
+    assert got is not None and got.endswith("cat_SIT_TAILSWIPE.kfa")
+
+
 def test_native_fps_snaps_to_authoring_rates():
     from types import SimpleNamespace
 

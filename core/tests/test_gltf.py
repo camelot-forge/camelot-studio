@@ -143,6 +143,27 @@ class TestMapKfaToNodes:
         )
         assert map_kfa_to_nodes(objs, names, pose) == {1: 2}
 
+    def test_prefer_table_uses_engine_names_for_partial_offsets(self):
+        """Gamedata-linked clips map by name even when offsets disagree.
+
+        A creature's animated bones (root bob, shoulder weights) drift far
+        from the bind, so the offset heuristic refuses the pair; the engine
+        binding (animnode.dat) is decisive for a gamedata-linked clip.
+        """
+        from camelot.gltf import map_kfa_to_nodes
+        from camelot.kfa import Animation, Channel, Key
+
+        objs = [self._node("Bip01", t=(0.0, 0.0, 10.0)), self._node("Bip01 Tail", t=(5.0, 0.0, 0.0))]
+        names = ["Bip01", "Bip01 Tail"]
+        pose = Animation(
+            path="x", version=0, duration=1.0,
+            channels={
+                0: Channel(index=0, translations=(Key(0.0, (0.0, 0.0, 30.0)),)),  # bob, far from bind
+            },
+        )
+        assert map_kfa_to_nodes(objs, names, pose) == {}  # offsets alone: refused
+        assert map_kfa_to_nodes(objs, names, pose, bone_names=["Bip01"], prefer_table=True) == {0: 0}
+
     def test_rotation_breaks_translation_ties(self):
         from camelot.gltf import map_kfa_to_nodes
         from camelot.kfa import Animation, Channel, Key

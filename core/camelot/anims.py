@@ -153,11 +153,25 @@ def resolve_anim_from_gamedata(client_dir: str, nif_path: str) -> str | None:
                 if value and value != "0":
                     slots.setdefault(header[i].strip().lower(), value)
             break
-        for slot in _ANIM_SLOT_PRIORITY:
+        # Prefer a standing idle: some sets fill their "Idle" slots with a
+        # sitting animation (the black cat: Idle/Idle1 = SIT_TAILSWIPE,
+        # Idle2 = SIT_IDLE, Idle3 = STAND_IDLE) — for a viewer default the
+        # sit clips must lose to the stand one. Penalized candidates are only
+        # used when nothing better exists.
+        candidates: list[tuple[int, int, str]] = []
+        for rank, slot in enumerate(_ANIM_SLOT_PRIORITY):
             fname = by_id.get(slots.get(slot, ""))
-            real = entries.get(fname.lower()) if fname else None
-            if real:
-                return os.path.join(anim_dir, real)
+            if not fname:
+                continue
+            real = entries.get(fname.lower())
+            if not real:
+                continue
+            lowered = real.lower()
+            penalty = 1 if ("sit" in lowered or "tailswipe" in lowered) else 0
+            candidates.append((penalty, rank, real))
+        if candidates:
+            candidates.sort()
+            return os.path.join(anim_dir, candidates[0][2])
     return None
 
 
@@ -183,6 +197,16 @@ def _score_alias(stem: str, name: str) -> int | None:
             rank += penalty
             best = rank if best is None else min(best, rank)
     return best
+
+
+def kfa_comes_from_gamedata(client_dir: str, nif_path: str, kfa_path: str) -> bool:
+    """True when *kfa_path* is the figure's gamedata-linked clip.
+
+    Gamedata links are the engine's own binding, so callers use the name
+    table directly (``prefer_table``) instead of the offset heuristics.
+    """
+    linked = resolve_anim_from_gamedata(client_dir, nif_path)
+    return bool(linked) and os.path.basename(linked).lower() == os.path.basename(kfa_path).lower()
 
 
 def resolve_idle_kfa(client_dir: str, nif_path: str) -> str | None:
@@ -309,7 +333,12 @@ def animation_tracks(
             stack.extend(reversed(list(getattr(obj, "children", []) or [])))
     pose = load_kfa(kfa_path)
     table = load_bone_table(os.path.join(client_dir, "figures")) if client_dir else None
-    mapping, source = map_kfa_to_nodes(objs, names, pose, bone_names=table, with_source=True)
+    prefer_table = bool(
+        client_dir and kfa_comes_from_gamedata(client_dir, nif_path, kfa_path)
+    )
+    mapping, source = map_kfa_to_nodes(
+        objs, names, pose, bone_names=table, with_source=True, prefer_table=prefer_table
+    )
     trusted = kfa_translation_trust(pose, objs, mapping, source=source)
     # Partial offset subsets are approximations (a subset of bones from
     # another rig): they visibly break grounding (amazon walks on air, Bear

@@ -116,15 +116,27 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   `kfa_translation_trust` now trusts **every** translated channel of a vetted
   pair, and only falls back to the old "a key must return to the bind" test
   for partial mappings.
-- **Only vetted pairs animate (`mapping_is_vetted`).** A mapping is vetted
-  when it comes from the `animnode.dat` table (engine binding) or when offset
-  matching resolved ~all translated channels (>= 0.9). Partial offset subsets
-  (amazon 17/43, Bear 13/32, CATA boar 19/40) mix another rig's limb motions:
-  the viewer/API refuses them and shows the bind pose (they walked on air).
-  Coverage (2026-09-13): 306 vetted links (up to ~280 animate after the
-  `skin_stretch` gate), 169 partials refused, 48 without a mapping. The
-  `with_source=True` variant of `map_kfa_to_nodes` reports how a mapping was
-  obtained.
+- **Two-tier mapping: the client's link decides, the physics gates judge.**
+  A **gamedata-linked** clip (`kfa_comes_from_gamedata`, i.e. the pair comes
+  from `monnifs -> anims -> animnifs`) is mapped through the engine's own
+  `animnode.dat` table (`map_kfa_to_nodes(..., prefer_table=True)`) and every
+  translation applies; `skin_stretch` then refuses only rigs that actually
+  deform badly. This is why offset heuristics must not judge these pairs:
+  their animated bones (root bob, clavicle breathing) drift from the bind,
+  which used to fail the 0.3-unit anchor test and refused amazon/rat/bear/
+  cata_lion/amb_blackcat/badger — all of which deform cleanly (mean edge
+  ratio 1.01-1.07) once mapped by name. **Fallback** links (filename
+  conventions, e.g. `Boar_CATA` which has no gamedata row) keep the
+  conservative offset quality gate (`mapping_is_vetted`, `with_source`).
+  Coverage (2026-09-13, second pass): 511 vetted links -> 483 animate, 28
+  refused by `skin_stretch` (dracolich/AfancB/ambrat: stored skin bind
+  disagrees with the node tree), 7 without a mapping, 94 without a link.
+- **Sitting idles lose to standing ones.** Some sets fill their Idle slot
+  with a sitting clip: the black cat's `Idle`/`Idle1` are
+  `amb_blackcat_SIT_TAILSWIPE`, `Idle2` `SIT_IDLE`, `Idle3`
+  `amb_blackcat_STAND_IDLE`. `resolve_anim_from_gamedata` penalizes
+  `sit`/`tailswipe` filenames and only falls back to them when nothing else
+  exists, so the viewer's default animation is the standing idle.
 - **Which KFA belongs to a figure: the gamedata chain first.**
   `monnifs.csv` (Name = NIF basename) -> `Anim Set` id -> `anims.csv` row ->
   animation id per state slot (Idle/C-Idle/Fly/Walk…) -> `animnifs.csv` ->

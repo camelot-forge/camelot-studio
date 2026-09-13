@@ -118,6 +118,7 @@ def map_kfa_to_nodes(
     trans_tol: float = 0.3,
     bone_names: list[str] | None = None,
     with_source: bool = False,
+    prefer_table: bool = False,
 ):
     """Map KFA channel index -> node index.
 
@@ -142,6 +143,32 @@ def map_kfa_to_nodes(
     """
     if pose is None:
         return ({}, "none") if with_source else {}
+
+    # A gamedata-linked clip (prefer_table): the client itself binds this KFA
+    # to this figure, so the animnode.dat name table is the engine's own
+    # mapping — use it directly (physics gates validate the result) instead
+    # of the offset heuristics, which mistrust animated bones (root bob,
+    # clavicle breathing) and would refuse amazon/rat/bear….
+    if prefer_table and bone_names:
+        by_name: dict[str, int] = {}
+        for i, obj in enumerate(objs):
+            if obj is None or type(obj).__name__ != "NiNode":
+                continue
+            if names[i].lower() in _KFA_NON_BONES:
+                continue
+            by_name.setdefault(_norm_bone_name(names[i]), i)
+        table_hits: dict[int, int] = {}
+        for idx in sorted(pose.channels):
+            if idx >= len(bone_names):
+                continue
+            ni = by_name.get(_norm_bone_name(bone_names[idx]))
+            if ni is not None:
+                table_hits[idx] = ni
+        if len(table_hits) >= min(3, len(pose.channels)) and len(table_hits) >= 0.5 * len(pose.channels):
+            if with_source:
+                return table_hits, "table"
+            return table_hits
+
     node_trans: dict[int, tuple[float, float, float]] = {}
     node_rot: dict[int, list[list[float]]] = {}
     for i, obj in enumerate(objs):
@@ -831,8 +858,16 @@ def export_gltf(
                     " — rig bind mismatch, bind pose kept"
                 )
             pose = None
+    prefer_table = False
+    if pose is not None and bone_names:
+        from .anims import kfa_comes_from_gamedata
+
+        pose_path = getattr(pose, "path", "") or ""
+        client_dir = os.path.dirname(os.path.dirname(os.path.abspath(nif_path)))
+        if pose_path and os.path.exists(os.path.join(client_dir, "gamedata.mpk")):
+            prefer_table = kfa_comes_from_gamedata(client_dir, nif_path, pose_path)
     kfa_to_node, kfa_source = map_kfa_to_nodes(
-        objs, names, pose, bone_names=bone_names, with_source=True
+        objs, names, pose, bone_names=bone_names, with_source=True, prefer_table=prefer_table
     )
     if pose is not None and not mapping_is_vetted(pose, kfa_to_node, kfa_source):
         if verbose:

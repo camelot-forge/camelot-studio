@@ -100,6 +100,33 @@ def test_pose_gate_refuses_rigs_whose_skin_bind_disagrees(client_dir):
             assert len(tracks["tracks"]) >= 20
 
 
+def test_gamedata_linked_figures_animate_despite_offset_drift(client_dir):
+    """The client's link is decisive: amazon/rat/bear/cata_lion/badger/blackcat.
+
+    Their KFAs carry animated bones whose offsets drift from the bind (root
+    bob, shoulder weights), which used to fail the offset heuristics; mapped
+    through the engine's animnode.dat table they deform cleanly (skin
+    stretch 1.01-1.07) and stay grounded.
+    """
+    from camelot.anims import animation_tracks
+
+    expected = {
+        "amazon.nif": "Hoplite_Idle.kfa",
+        "Rat.NIF": "rat_idle.kfa",
+        "Bear.NIF": "Bear_idle.kfa",
+        "cata_lion.nif": "lynx_idle.kfa",
+        "amb_blackcat.nif": "amb_blackcat_stand_idle.kfa",
+        "badger.nif": "rat_idle.kfa",
+    }
+    for nif, kfa in expected.items():
+        tracks = animation_tracks(
+            os.path.join(client_dir, "figures", nif),
+            os.path.join(client_dir, "anims", kfa),
+            client_dir,
+        )
+        assert len(tracks["tracks"]) >= 15, nif
+
+
 def test_wolf_idle_is_refused_on_rig_mismatch(client_dir):
     """wolf_idle.kfa's offsets belong to another bind: bind pose, no flailing."""
     nif = os.path.join(client_dir, "figures", "Wolf.NIF")
