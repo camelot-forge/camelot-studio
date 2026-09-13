@@ -71,6 +71,35 @@ def test_briton_player_figure_pairs_with_race_idle(client_dir):
         assert want in by_name
 
 
+def test_pose_gate_refuses_rigs_whose_skin_bind_disagrees(client_dir):
+    """AfancB/dracolich store a skin bind 300+ units away from their node tree.
+
+    Their bind pose looks fine but the viewer's skinning model explodes the
+    mesh under animation; the stretch gate must refuse those clips (empty
+    tracks -> bind) while keeping proven rigs.
+    """
+    from camelot.anims import animation_tracks
+    from camelot.gltf import STRETCH_LIMIT_MEAN, skin_stretch
+
+    for name, kfa in (
+        ("AfancB.NIF", "Afanc_idle.kfa"),
+        ("dracolich.nif", "dracolich_idle.kfa"),
+        ("Boar.NIF", "BOAR_idle.kfa"),
+        ("Zombie.NIF", "Zombie_idle.kfa"),
+    ):
+        nif = os.path.join(client_dir, "figures", name)
+        pose = load_kfa(os.path.join(client_dir, "anims", kfa))
+        stretch = skin_stretch(load(nif), pose, bone_names=_bone_table(client_dir))
+        assert stretch is not None
+        tracks = animation_tracks(nif, os.path.join(client_dir, "anims", kfa), client_dir)
+        if name in ("AfancB.NIF", "dracolich.nif"):
+            assert stretch[0] > STRETCH_LIMIT_MEAN
+            assert tracks["tracks"] == []
+        else:
+            assert stretch[0] <= STRETCH_LIMIT_MEAN
+            assert len(tracks["tracks"]) >= 20
+
+
 def test_wolf_idle_is_refused_on_rig_mismatch(client_dir):
     """wolf_idle.kfa's offsets belong to another bind: bind pose, no flailing."""
     nif = os.path.join(client_dir, "figures", "Wolf.NIF")

@@ -42,6 +42,78 @@ def test_resolve_direct_name_beats_alias(tmp_path):
     assert got is not None and got.endswith("britm1_idle.kfa")
 
 
+def _write_gamedata(tmp_path, monnifs: str, anims: str, animnifs: str):
+    from camelot.mpak import write_mpak
+
+    write_mpak(
+        str(tmp_path / "gamedata.mpk"),
+        "gamedata",
+        [
+            ("monnifs.csv", monnifs.encode("latin1")),
+            ("anims.csv", anims.encode("latin1")),
+            ("animnifs.csv", animnifs.encode("latin1")),
+        ],
+    )
+
+
+def test_gamedata_chain_links_creature_not_named_after_its_kfa(tmp_path):
+    """monnifs -> anims -> animnifs: Arachite02 -> sect_idle.kfa."""
+    from camelot.anims import resolve_anim_from_gamedata, resolve_idle_kfa
+
+    _write_gamedata(
+        tmp_path,
+        "Information,,NIF,Anim,Stride\n"
+        "ID,Textual Name,Name,Set,Stride\n"
+        "260,arachite 1,arachite01,38,225\n"
+        "299,Afanc,afanc,61,300\n",
+        ",,0,1,2\n"
+        "ID,name,Walk,Idle,Death\n"
+        "38,Arachites,20,21,14\n"
+        "61,Afanc,643,640,638\n",
+        "Anim,,,,\n"
+        "NIFS,name,NIF Name,frames,fps,fps,type\n"
+        "21,arachite idle,sect_idle.kfa,20,15,15,loop\n"
+        "640,afanc idle,afanc_idle.kfa,16,5,15,loop\n",
+    )
+    (tmp_path / "anims").mkdir()
+    (tmp_path / "anims" / "sect_idle.kfa").write_bytes(b"kfa")
+    (tmp_path / "anims" / "afanc_idle.kfa").write_bytes(b"kfa")
+
+    got = resolve_anim_from_gamedata(str(tmp_path), str(tmp_path / "figures" / "Arachite01.NIF"))
+    assert got is not None and got.endswith("sect_idle.kfa")
+    # the public resolver prefers the game's link over filename conventions
+    assert resolve_idle_kfa(str(tmp_path), str(tmp_path / "figures" / "afanc.NIF")).endswith(
+        "afanc_idle.kfa"
+    )
+
+
+def test_gamedata_chain_picks_case_insensitively_and_falls_back(tmp_path):
+    from camelot.anims import resolve_idle_kfa
+
+    _write_gamedata(
+        tmp_path,
+        "Information,,NIF,Anim\n"
+        "ID,Textual Name,Name,Set\n"
+        "970,amb_bat,amb_bat,413\n",
+        ",,0,1,2\n"
+        "ID,name,Fly,Idle,Death\n"
+        "413,amb_bat,4058,4058,4059\n",
+        "Anim,,,,\n"
+        "NIFS,name,NIF Name,frames,fps,fps,type\n"
+        "4058,amb_bat fly,amb_bat_fly.kfa,7,15,15,loop\n",
+    )
+    (tmp_path / "anims").mkdir()
+    (tmp_path / "anims" / "amb_bat_fly.kfa").write_bytes(b"kfa")
+    (tmp_path / "anims" / "Wolf_idle.kfa").write_bytes(b"kfa")
+    assert resolve_idle_kfa(str(tmp_path), str(tmp_path / "figures" / "amb_bat.nif")).endswith(
+        "amb_bat_fly.kfa"
+    )
+    # no gamedata row for the wolf: filename convention still applies
+    assert resolve_idle_kfa(str(tmp_path), str(tmp_path / "figures" / "Wolf.NIF")).endswith(
+        "Wolf_idle.kfa"
+    )
+
+
 def test_native_fps_snaps_to_authoring_rates():
     from types import SimpleNamespace
 
@@ -140,3 +212,23 @@ def test_boar_timing_from_client(client_dir):
     rate = fps / native_fps(pose)
     assert rate == 0.2
     assert frames / fps == 16 / 3
+
+
+def test_gamedata_links_creature_animations_from_client(client_dir):
+    """The client's own chain links figures whose KFAs are named differently."""
+    import os
+
+    expected = {
+        "AfancB.NIF": "afanc_idle.kfa",
+        "arachite01.nif": "sect_idle.kfa",
+        "amb_bat.nif": "amb_bat_fly.kfa",
+        "amb_bird.nif": "amb_bird_fly.kfa",
+        "b_avmon01.nif": "undead_idle.kfa",
+        "amazon.nif": "hoplite_idle.kfa",
+        "2HWolf.NIF": "2hw_idle.kfa",
+        "7legspider.nif": "cata_spider_idle.kfa",
+    }
+    for nif, want in expected.items():
+        got = resolve_idle_kfa(client_dir, os.path.join(client_dir, "figures", nif))
+        assert got is not None, nif
+        assert os.path.basename(got).lower() == want, nif

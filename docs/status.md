@@ -72,14 +72,34 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
 1. **Write**: pyffi reorders blocks on write (roundtrip validated as
    multisets; worth watching for diff-friendly editing).
 2. **Legacy 4.x write**: not implemented (see above).
-3. **Bone index table**: the client's `figures/animnode.dat` (175 names,
-   index = KFA channel) is now the mapping's backbone (`load_bone_table`),
-   filling channels by name once the pair's offsets vouch for it; the
-   offset/rotation matching (`map_kfa_to_nodes`) remains the validator and
-   the fallback, and mismatched-rig clips (wolf/lynx/giant) are refused to
-   bind. `skeleton.py` stays a DFS reference only. Open: which human figure
-   `2HW_idle.kfa` was authored for (neither `skeleton.nif` nor `BritonM1`
-   match its offsets) — the table should name its bones now.
+3. **Bone index table & animation policy** (settled 2026-09-13, do not
+   regress):
+   - The client's `figures/animnode.dat` (175 names, index = KFA channel) is
+     the mapping's backbone (`load_bone_table`); offset/rotation matching
+     (`map_kfa_to_nodes`) validates the pair and reports its source
+     (`with_source=True`: `"table"` or `"offsets"`).
+   - The animation link uses the game's gamedata chain (`monnifs` -> `anims`
+     -> `animnifs`), which resolved the "no animation" figures (Arachite02 ->
+     `sect_idle`, amazon -> `Hoplite_Idle`, amb_bat -> `amb_bat_fly`, 2HWolf
+     -> `2HW_idle`…). Filename conventions + player aliases remain the
+     fallback.
+   - **Only vetted pairs animate** (`mapping_is_vetted`): table-mapped pairs,
+     or offset mappings covering >= 0.9 of translated channels. Partial
+     subsets (amazon 17/43, Bear 13/32, CATA boar 19/40) are refused to bind
+     — they mix another rig's limbs and walk on air. 306 vetted links, ~280
+     animate after the `skin_stretch` gate (AfancB/dracolich style rigs whose
+     stored skin bind disagrees with the node tree are refused), 169 partials
+     refused, 48 without a mapping.
+   - **All translations apply on a vetted pair** (`kfa_translation_trust`):
+     the root track is the grounding (root bob with planted feet); dropping
+     it made 2HWolf/3head/Zombie/Ettin/Wolf float 1-2.3 units — with it the
+     min-Y span is <= 0.34 through the loop (verified in the viewer).
+     `skeleton.py` stays a DFS reference only.
+   - Open: engine-exact skinning using the stored `NiSkinData` transforms
+     (`inverseBind = S·meshWorld⁻¹·axis⁻¹`, `formats.md` §3) would fix the
+     `skin_stretch`-refused rigs instead of binding them, but needs the
+     viewer grounding reworked (the engine bind of AfancB is rigidly shifted
+     302 units).
 4. **pyffi 10.1.0.0**: 2 housing files fail (see `formats.md` §7).
 5. **MPAK header checksum**: the two *open* header fields (`formats.md` §5)
    are written as deterministic placeholders; whether the game validates
@@ -116,13 +136,19 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
 3. ~~MPAK writer~~ — **done**: `core/camelot/mpak.py` + `camelot mpak`
    CLI, unit + corpus repack tests, header `byte 13` decoded; the two
    *open* header checksums documented (`formats.md` §5).
-4. Idle coverage: Boar is proven end-to-end; validate more creatures the
-   same way (`anim_check.mjs` pattern) and pair human figures with their own
-   KFAs (see Known limits #3).
+4. Idle coverage: Boar is proven end-to-end; the gamedata animation chain
+   (`monnifs → anims → animnifs`, Known limits #3) linked 475 figures and
+   **306 vetted pairs animate** (~280 after the stretch gate) with planted
+   feet; all reported floats (2HWolf, 3head, Zombie, Ettin, Wolf, items) are
+   fixed and user-verified. Next: validate a few more families with the
+   `anim_check.mjs` pattern, then revisit the refused rigs via engine-exact
+   skinning.
 5. ~~M1: Svelte + three.js viewer~~ — **idle playback delivered**: `web/`
    SvelteKit (Svelte 5 runes, Vite, Vitest) loads the skinned `.glb`
    (`GET /api/v1/assets/{id}/model?skinned=true`) plus joint rotation tracks
-   (`GET /api/v1/assets/{id}/anim`, idle KFA auto-resolved by filename) and
+   (`GET /api/v1/assets/{id}/anim`; the figure's KFA comes from the gamedata
+   chain, filename fallback, and only **vetted rig pairs** play — partial
+   matches answer 404 and the viewer shows the bind pose) and
    loops the idle with play/pause **at the game's own rate** (`animnifs.csv`
    frames/fps → `{rate, duration}`; classic idles play ~5x slower than their
    key stamps). Validated end-to-end on Boar

@@ -104,14 +104,53 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   bones, a root at the origin) break by first-key rotation; `Scene Root` and
   `Bip01 Footsteps` are never targets. Pairs that score < 0.3 (wolf/lynx/giant
   idles authored on another bind) are refused entirely — bind pose beats a
-  wrong pose; the CATA boar's shifted arm/tail slots likewise stay on bind
-  (its spine/legs still map). Rotations AND translations replace the bind
-  locals (absolute, engine-faithful — the translations ground the figure:
-  root bob with planted feet, min-Y constant through the loop). Translations
-  apply only when the clip's track returns to the mapped node's bind
-  (`kfa_translation_trust`); scales stay at the bind (never animated). The
-  old "shared 0..53 DFS = KFA space" claim is superseded (Boar Pelvis rides
-  channel 1, not 2), as is rotations-only retargeting (it floats +2.26).
+  wrong pose. The old "shared 0..53 DFS = KFA space" claim is superseded
+  (Boar Pelvis rides channel 1, not 2).
+- **Grounding: the root translation track is not decoration.** In a vetted
+  pair, **all** KFA translations replace the bind locals (absolute, engine-
+  faithful; rotations too); scales stay at the bind (never animated). The
+  root (`Bip01`, channel 0) track is the foot-planting compensation: dropping
+  it because no key happens to equal the bind made 2HWolf float 2.2 units,
+  3head 1.0, Zombie 1.1, Ettin 1.3, Wolf 2.3 (min-Y span over the loop; with
+  the track applied all are <= 0.34, checked in the viewer). So
+  `kfa_translation_trust` now trusts **every** translated channel of a vetted
+  pair, and only falls back to the old "a key must return to the bind" test
+  for partial mappings.
+- **Only vetted pairs animate (`mapping_is_vetted`).** A mapping is vetted
+  when it comes from the `animnode.dat` table (engine binding) or when offset
+  matching resolved ~all translated channels (>= 0.9). Partial offset subsets
+  (amazon 17/43, Bear 13/32, CATA boar 19/40) mix another rig's limb motions:
+  the viewer/API refuses them and shows the bind pose (they walked on air).
+  Coverage (2026-09-13): 306 vetted links (up to ~280 animate after the
+  `skin_stretch` gate), 169 partials refused, 48 without a mapping. The
+  `with_source=True` variant of `map_kfa_to_nodes` reports how a mapping was
+  obtained.
+- **Which KFA belongs to a figure: the gamedata chain first.**
+  `monnifs.csv` (Name = NIF basename) -> `Anim Set` id -> `anims.csv` row ->
+  animation id per state slot (Idle/C-Idle/Fly/Walk…) -> `animnifs.csv` ->
+  `.kfa` file. This is how the client links figures whose animations are not
+  named after them: `Arachite02.NIF` -> `sect_idle.kfa`, `amazon.nif` ->
+  `Hoplite_Idle.kfa`, `amb_bat.nif` -> `amb_bat_fly.kfa`, `b_avmon01.nif` ->
+  `undead_idle.kfa`, `2HWolf.NIF` -> `2HW_idle.kfa`. The viewer/API uses it
+  (`anims.resolve_anim_from_gamedata`) with a per-client, mtime-keyed table
+  cache; filename conventions + player aliases (`BritonM1` -> `britm_idle`)
+  remain the fallback for Cata remodels and test roots. The chain linked 475
+  figures (was 151 with filename matching alone); 306 are vetted and animate
+  (see below), the rest keep the bind pose.
+- **Skin-bind consistency gate (`skin_stretch`)**: some figures store
+  `NiSkinData` bone transforms that disagree with their node tree — AfancB by
+  exactly 302.56 units (the whole mesh shifts rigidly), dracolich by 392,
+  phoenix, soulkeeper, amb_bird, dracolich… While the bind pose still looks
+  right, the viewer's skinning model (`inv(meshWorld)·boneAnim·inv(boneBind)`)
+  stretches those limbs (AfancB mean edge ratio 1.45). Clips are sampled at 4
+  times; mean edge ratio > 1.12 (or max > 10) refuses the animation (bind
+  pose shown instead: 30 of 474 links in 2026-09). The engine-exact model
+  uses the **stored** transform `S`: world `p = boneAnim·S·v`, i.e. bake
+  `Mb = inv(meshWorld)·boneAnim·S` and glTF
+  `inverseBind = S·meshWorld⁻¹·axis⁻¹` (reduces to the current values when
+  `S = inv(boneWorld)·meshWorld`, which holds for Boar/Ettin/Zombie and most
+  files). Switching to it also shifts placement for inconsistent rigs, so it
+  needs the viewer's grounding reworked first — measured, not yet shipped.
 - **KFA playback timing comes from `animnifs.csv`, not the key stamps.**
   Every file is authored at 15 or 30 fps key density (`native_fps`: median
   rotation-key interval, snapped), and the game plays `frames` key intervals

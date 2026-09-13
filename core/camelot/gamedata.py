@@ -1,4 +1,4 @@
-"""Camelot Studio — DAoC gamedata tables and figure texture resolution.
+"""Camelot Studio — DAoC gamedata tables, textures and animation links.
 
 DAoC figures carry no texture in the NIF (except rare embedded cases): the
 texture is resolved at runtime from the data tables packed in ``gamedata.mpk``:
@@ -7,6 +7,10 @@ texture is resolved at runtime from the data tables packed in ``gamedata.mpk``:
                 ->  monsters.csv (# = monnifs ID)      ->  skin IDs per slot
                 ->  skins/mskins/pskins.csv (ID)       ->  texture name + archive
                 ->  figures/skins/skinNNN.mpk          ->  the .dds bytes
+
+The same ``monnifs.csv`` row carries the animation set (``Anim Set`` column),
+which links the figure to its .kfa files through ``anims.csv`` and
+``animnifs.csv`` (see :func:`camelot.anims.resolve_anim_from_gamedata`).
 
 The archive number is the skin table's ``Num`` column (e.g. Boar body skin
 109 -> Num 3 -> ``figures/skins/skin003.mpk`` -> ``boar.dds``). Texture names
@@ -23,7 +27,10 @@ from .mpak import MpakArchive
 
 # Column indices (the CSVs carry two header rows: a group row then names).
 MONNIFS_NAME = 2
+MONNIFS_SET = 3  # Anim Set id -> anims.csv row (animations live there too)
 MONSTERS_NIF = 2
+ANIMNIFS_ID = 0
+ANIMNIFS_FILE = 2  # .kfa filename
 MONSTERS_SLOTS = {"Body": 3, "Head": 4, "Arms": 5, "Gloves": 6,
                   "Lbody": 7, "Legs": 8, "Boots": 9, "Cloak": 10, "Helm": 11}
 SKINS_NAME = 2

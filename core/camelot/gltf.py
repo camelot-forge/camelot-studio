@@ -112,8 +112,13 @@ def _norm_bone_name(name: str) -> str:
 
 
 def map_kfa_to_nodes(
-    objs, names, pose, trans_tol: float = 0.3, bone_names: list[str] | None = None
-) -> dict[int, int]:
+    objs,
+    names,
+    pose,
+    trans_tol: float = 0.3,
+    bone_names: list[str] | None = None,
+    with_source: bool = False,
+):
     """Map KFA channel index -> node index.
 
     A corresponding (figure, KFA) pair (same creature, e.g. Boar.NIF with
@@ -136,7 +141,7 @@ def map_kfa_to_nodes(
     when *pose* is None.
     """
     if pose is None:
-        return {}
+        return ({}, "none") if with_source else {}
     node_trans: dict[int, tuple[float, float, float]] = {}
     node_rot: dict[int, list[list[float]]] = {}
     for i, obj in enumerate(objs):
@@ -255,8 +260,9 @@ def map_kfa_to_nodes(
         quality = len(set(mapping) & translatable) / len(translatable)
 
     if quality < 0.3 and translatable:
-        return {}
+        return ({}, "none") if with_source else {}
 
+    source = "offsets"
     if bone_names:
         by_name = {}
         for i, obj in enumerate(objs):
@@ -276,6 +282,7 @@ def map_kfa_to_nodes(
             # rotation-only clip: the table is the only binding available
             if len(table_hits) >= max(3, 0.5 * len(pose.channels)):
                 mapping = table_hits
+                source = "table"
         elif quality >= 0.7:
             # Vetted pair: the client's own index->name table wins over the
             # offsets, which can mis-bind lookalikes (Ettin's Spine1/Spine2
@@ -285,26 +292,66 @@ def map_kfa_to_nodes(
             for idx in [i for i in mapping if i not in table_hits and mapping[i] in claimed]:
                 del mapping[idx]
             mapping.update(table_hits)
+            source = "table"
+    if with_source:
+        return mapping, ("table" if mapping and source == "table" else ("offsets" if mapping else "none"))
     return mapping
 
 
-def kfa_translation_trust(pose, objs, mapping: dict[int, int], trans_tol: float = 0.3) -> set[int]:
+def mapping_is_vetted(pose, mapping: dict[int, int], source: str | None = None) -> bool:
+    """True when the mapping is trustworthy enough to animate the figure.
+
+    ``source == "table"`` means the engine's own ``animnode.dat`` binding was
+    used for an offset-vetted pair: vetted even when the figure lacks some of
+    the clip's bones (the remaining channels are semantically right).
+    ``source == "offsets"`` is the fallback subset — only vetted when it
+    resolved (almost) every translated channel, since a partial subset mixes
+    another rig's limb motions (amazon 17/43, Bear 13/32, CATA boar 19/40:
+    refused — they walk on air). When *source* is None the mapping is
+    inspected: a channel bound without translation keys can only come from
+    the table.
+    """
+    channels = pose.channels
+    if not channels or not mapping:
+        return False
+    if source == "table":
+        return True
+    translatable = {i for i, ch in channels.items() if ch.translations}
+    if translatable:
+        covered = len(set(mapping) & translatable) >= 0.9 * len(translatable)
+    else:
+        covered = len(mapping) >= 0.9 * len(channels)
+    if covered:
+        return True
+    if source is None:
+        return any(not channels[idx].translations for idx in mapping)
+    return False
+
+
+def kfa_translation_trust(
+    pose, objs, mapping: dict[int, int], trans_tol: float = 0.3, source: str | None = None
+) -> set[int]:
     """KFA channels whose translation track belongs to the mapped rig.
 
-    KFA translations are absolute locals of the rig the clip was authored on.
-    Clips reused across rig variants (wolves, giants, the CATA boar) carry
-    offsets from a different bind; applying them detaches bones or lifts the
-    figure. A track is trusted when at least one key returns to the mapped
-    node's bind translation (the rest pose the clip was authored around);
-    otherwise the caller keeps the figure's bind translation. Rotations are
-    unaffected — they are local per bone and transfer across rig variants.
+    KFA translations are absolute locals of the rig the clip was authored on,
+    and the engine applies all of them. For a **vetted** pair (same rig, see
+    :func:`mapping_is_vetted`) every translated channel is trusted — the root
+    track is the grounding (2HWolf/3head/Zombie feet float 1-8 units without
+    it). For partial mappings the tracks may come from another rig, so a
+    track is trusted only when at least one key returns to the mapped node's
+    bind translation; otherwise the caller keeps the figure's bind
+    translation. Rotations are unaffected — they are local per bone.
     """
     trusted: set[int] = set()
+    vetted = mapping_is_vetted(pose, mapping, source)
     for idx, ni in mapping.items():
         ch = pose.channels.get(idx)
         if ch is None or not ch.translations:
             continue
         if ni < 0 or ni >= len(objs) or objs[ni] is None:
+            continue
+        if vetted:
+            trusted.add(idx)
             continue
         bt = vec3(getattr(objs[ni], "translation", None))
         if not all(math.isfinite(v) for v in bt):
@@ -318,6 +365,192 @@ def kfa_translation_trust(pose, objs, mapping: dict[int, int], trans_tol: float 
                 trusted.add(idx)
                 break
     return trusted
+
+
+# A clip whose skinned pose stretches the mesh beyond this is refused (the
+# viewer keeps the bind pose instead of showing exploded limbs). The mean
+# ratio catches broad warping (AfancB 1.45, dracolich 1.40, phoenix 1.30,
+# soulkeeper 1.14) while sane clips stay at 1.00-1.05; the max ratio is a
+# loose net for a few exploded vertices (single degenerate edges spike it,
+# so it must stay high: Ettin's idle peaks at 6 on valid geometry).
+STRETCH_LIMIT_MEAN = 1.12
+STRETCH_LIMIT_MAX = 10.0
+
+
+def skin_stretch(data, pose, bone_names=None, samples: int = 4) -> tuple[float, float] | None:
+    """Worst skinned edge stretch of *data* posed by *pose* vs its bind.
+
+    Reproduces the viewer's CPU skinning
+    (``inv(meshWorld)·boneAnim·inv(boneBind)·meshWorld``) at up to *samples*
+    clip times and returns ``(mean_ratio, max_ratio)`` over all mesh edges, or
+    ``None`` when there is no mapping to test. Some rigs store skin binds that
+    disagree with their node tree (AfancB by 302 units, dracolich by 392):
+    the bind pose looks fine but that skinning model explodes their limbs.
+    Callers refuse such clips and keep the bind pose (see STRETCH_LIMIT_*).
+    """
+    if pose is None or not pose.channels:
+        return None
+    objs: list = []
+    names: list[str] = []
+    children: list[list[int]] = []
+    index_of: dict[int, int] = {}
+
+    def add(obj) -> int:
+        oid = id(obj)
+        if oid in index_of:
+            return index_of[oid]
+        idx = len(objs)
+        index_of[oid] = idx
+        objs.append(obj)
+        nm = ""
+        if hasattr(obj, "name") and obj.name:
+            nm = obj.name.decode("latin1")
+        names.append(nm or type(obj).__name__)
+        children.append([])
+        return idx
+
+    for root in data.roots:
+        rid = add(root)
+        todo = [(root, rid)]
+        while todo:
+            obj, pid = todo.pop()
+            for ch in reversed(list(getattr(obj, "children", []) or [])):
+                cid = add(ch)
+                children[pid].append(cid)
+                todo.append((ch, cid))
+
+    mapping, source = map_kfa_to_nodes(objs, names, pose, bone_names=bone_names, with_source=True)
+    if not mapping:
+        return None
+    trusted = kfa_translation_trust(pose, objs, mapping, source=source)
+
+    bind: dict[int, list[list[float]]] = {}
+
+    def walk_bind(idx: int, pw):
+        m = node_local_matrix(objs[idx])
+        w = mat4_mul(pw, m) if m else pw
+        bind[idx] = w
+        for c in children[idx]:
+            walk_bind(c, w)
+
+    walk_bind(0, mat4_identity()) if objs else None
+
+    def posed_world(t: float) -> dict[int, list[list[float]]]:
+        rot: dict[int, list[list[float]]] = {}
+        trans: dict[int, tuple[float, float, float]] = {}
+        for kfa_idx, node_idx in mapping.items():
+            r, tr, _s = pose.sample(kfa_idx, t)
+            if r is not None:
+                rot[node_idx] = _quat_to_mat3(r)
+            if tr is not None and kfa_idx in trusted:
+                trans[node_idx] = (float(tr[0]), float(tr[1]), float(tr[2]))
+        out: dict[int, list[list[float]]] = {}
+
+        def walk(idx: int, pw):
+            base = None if objs[idx] is None else node_local_matrix(objs[idx])
+            if base is not None and (idx in rot or idx in trans):
+                m = [row[:] for row in base]
+                scale = float(getattr(objs[idx], "scale", 1.0) or 1.0)
+                if idx in rot:
+                    for a in range(3):
+                        for b in range(3):
+                            m[a][b] = rot[idx][a][b] * scale
+                if idx in trans:
+                    for a in range(3):
+                        m[a][3] = trans[idx][a]
+            else:
+                m = base
+            w = mat4_mul(pw, m) if m else pw
+            out[idx] = w
+            for c in children[idx]:
+                walk(c, w)
+
+        walk(0, mat4_identity())
+        return out
+
+    # meshes: weights, bind edges, then skinned edges per sampled time
+    meshes = []
+    for i, obj in enumerate(objs):
+        if obj is None or type(obj).__name__ not in ("NiTriShape", "NiTriStrips"):
+            continue
+        if _is_skipped_mesh(names[i], getattr(obj, "flags", None)):
+            continue
+        shp = getattr(obj, "data", None)
+        if shp is None or not getattr(shp, "vertices", None):
+            continue
+        si = getattr(obj, "skin_instance", None)
+        if si is None:
+            continue
+        skin_data = getattr(si, "skin_data", None) or getattr(si, "data", None)
+        bones = list(getattr(si, "bones", []) or [])
+        if skin_data is None or not bones:
+            continue
+        partition = getattr(si, "skin_partition", None) or getattr(skin_data, "skin_partition", None)
+        weights: dict[int, list[tuple[int, float]]] = {}
+        if partition is not None:
+            for part in getattr(partition, "skin_partition_blocks", None) or getattr(
+                partition, "partitions", []
+            ):
+                _fill_partition(part, weights)
+        else:
+            _fill_weights_from_bonelist(
+                skin_data, [index_of.get(id(b), -1) for b in bones], weights
+            )
+        joints = [index_of.get(id(b), -1) for b in bones]
+        tris = list(shp.get_triangles()) or None
+        if not tris:
+            continue
+        verts = [vec3(v) for v in shp.vertices]
+        Ws = np.asarray(bind.get(i, mat4_identity()), dtype=float)
+        invWs = np.linalg.inv(Ws)
+        meshes.append((i, joints, weights, tris, verts, Ws, invWs))
+
+    if not meshes:
+        return None
+
+    def edge_ratios(positions, tris, base) -> tuple[float, float]:
+        p = np.asarray(positions)
+        t = np.asarray(tris, dtype=int).reshape(-1, 3)
+        lens = np.linalg.norm(p[t[:, 0]] - p[t[:, 1]], axis=1)
+        valid = base > 1e-6
+        if not valid.any():
+            return 1.0, 1.0
+        r = lens[valid] / base[valid]
+        return float(r.mean()), float(r.max())
+
+    duration = max(pose.duration, 1e-3)
+    worst_mean, worst_max = 1.0, 1.0
+    times = [duration * k / max(1, samples - 1) for k in range(max(1, samples))]
+    for t in times:
+        world = posed_world(t)
+        for i, joints, weights, tris, verts, Ws, invWs in meshes:
+            positions = []
+            cache: dict[int, np.ndarray] = {}
+            for vi, v in enumerate(verts):
+                acc = np.zeros(3)
+                tot = 0.0
+                for sk, w in weights.get(vi, []):
+                    if sk < 0 or sk >= len(joints):
+                        continue
+                    m = cache.get(sk)
+                    if m is None:
+                        jn = joints[sk]
+                        Wb = np.asarray(bind.get(jn, mat4_identity()), dtype=float)
+                        Wa = np.asarray(world.get(jn, Wb.tolist()), dtype=float)
+                        m = invWs @ Wa @ np.linalg.inv(Wb) @ Ws
+                        cache[sk] = m
+                    mh = m @ np.array((v[0], v[1], v[2], 1.0))
+                    acc = acc + float(w) * mh[:3]
+                    tot += float(w)
+                positions.append(acc / tot if tot > 0 else np.array(v))
+            # bind edge lengths in mesh-local space (same as baked positions)
+            local = np.asarray(verts)
+            t = np.asarray(tris, dtype=int).reshape(-1, 3)
+            base_lens = np.linalg.norm(local[t[:, 0]] - local[t[:, 1]], axis=1)
+            mean_r, max_r = edge_ratios(positions, tris, base_lens)
+            worst_mean = max(worst_mean, mean_r)
+            worst_max = max(worst_max, max_r)
+    return worst_mean, worst_max
 
 
 def _flatten_colmajor(m: list[list[float]]) -> list[float]:
@@ -587,8 +820,30 @@ def export_gltf(
         from .anims import load_bone_table
 
         bone_names = load_bone_table(os.path.dirname(os.path.abspath(nif_path)))
-    kfa_to_node: dict[int, int] = map_kfa_to_nodes(objs, names, pose, bone_names=bone_names)
-    trusted_trans = kfa_translation_trust(pose, objs, kfa_to_node) if pose is not None else set()
+    if pose is not None:
+        stretch = skin_stretch(data, pose, bone_names=bone_names)
+        if stretch is not None and (
+            stretch[0] > STRETCH_LIMIT_MEAN or stretch[1] > STRETCH_LIMIT_MAX
+        ):
+            if verbose:
+                print(
+                    f"  pose ignored: skin stretch {stretch[0]:.2f} (max {stretch[1]:.2f})"
+                    " — rig bind mismatch, bind pose kept"
+                )
+            pose = None
+    kfa_to_node, kfa_source = map_kfa_to_nodes(
+        objs, names, pose, bone_names=bone_names, with_source=True
+    )
+    if pose is not None and not mapping_is_vetted(pose, kfa_to_node, kfa_source):
+        if verbose:
+            print("  pose ignored: partial mapping (subset of another rig) — bind pose kept")
+        pose = None
+        kfa_to_node = {}
+    trusted_trans = (
+        kfa_translation_trust(pose, objs, kfa_to_node, source=kfa_source)
+        if pose is not None
+        else set()
+    )
     posed_rot: dict[int, list[list[float]]] = {}
     posed_trans: dict[int, tuple[float, float, float]] = {}
     if pose is not None:

@@ -1,10 +1,13 @@
 """Camelot Studio — figure animation resolution and track building.
 
-The client names idle animations after the model (``BOAR_idle.kfa``,
-``rat_idle.kfa`` …), sometimes with Catacombs/combat variants. This module
-resolves a figure's idle KFA by name and converts its channels into
-viewer-ready joint rotation tracks (node names, not KFA indices), reusing the
-bind-translation mapping from :mod:`camelot.gltf`.
+A figure's animation comes from the client's own tables first (``monnifs``
+``Anim Set`` -> ``anims.csv`` -> ``animnifs.csv``, see
+:func:`resolve_anim_from_gamedata`); filename conventions and player aliases
+are the fallback for figures the tables do not cover (Cata remodels, test
+roots). Resolution yields the default KFA (the game's ``Idle`` slot, which
+some creatures fill with a fly/locomotion file); this module then converts
+its channels into viewer-ready joint rotation tracks (node names, not KFA
+indices), reusing the bind-translation mapping from :mod:`camelot.gltf`.
 
 Playback timing comes from ``animnifs.csv`` (``frames`` + ``fps`` columns):
 every KFA in the corpus is authored at 15 or 30 fps key density, and the game
@@ -26,6 +29,7 @@ __all__ = [
     "animation_tracks",
     "load_bone_table",
     "native_fps",
+    "resolve_anim_from_gamedata",
     "resolve_idle_kfa",
 ]
 
@@ -63,6 +67,100 @@ def _score(stem: str, name: str) -> int | None:
     return None
 
 
+# The game fills "Idle" with the stand-still clip whatever the file is called
+# (amb_bat's idle points at its fly file); combat/secondary idles come next,
+# then locomotion for rigs that only have those.
+_ANIM_SLOT_PRIORITY = (
+    "idle",
+    "c-idle",
+    "idle1",
+    "idle2",
+    "idle3",
+    "fly",
+    "alt fly anim",
+    "swim",
+    "walk",
+    "run",
+)
+
+_TABLE_CACHE: dict[tuple[str, str, float], list[list[str]]] = {}
+
+
+def _cached_table(client_dir: str, name: str) -> list[list[str]]:
+    key = (client_dir, name, os.path.getmtime(os.path.join(client_dir, "gamedata.mpk")))
+    hit = _TABLE_CACHE.get(key)
+    if hit is None:
+        from .gamedata import _read_table
+
+        try:
+            hit = _read_table(client_dir, name)
+        except (OSError, ValueError, KeyError):
+            hit = []
+        _TABLE_CACHE[key] = hit
+    return hit
+
+
+def resolve_anim_from_gamedata(client_dir: str, nif_path: str) -> str | None:
+    """The client's own animation link for a figure, or ``None``.
+
+    ``monnifs.csv`` (Name = NIF basename) gives the Anim Set id, ``anims.csv``
+    gives that set's animation ids per slot, ``animnifs.csv`` maps each id to
+    its .kfa file. This is how the game links creatures whose animation files
+    are not named after the model: Arachite02 -> ``sect_idle.kfa``,
+    amazon -> ``Hoplite_Idle.kfa``, amb_bat -> ``amb_bat_fly.kfa``,
+    b_avmon01 -> ``undead_idle.kfa``.
+    """
+    from .gamedata import ANIMNIFS_FILE, MONNIFS_NAME, MONNIFS_SET
+
+    base = os.path.splitext(os.path.basename(nif_path))[0].lower()
+    try:
+        monnifs = _cached_table(client_dir, "monnifs.csv")
+        anims = _cached_table(client_dir, "anims.csv")
+        animnifs = _cached_table(client_dir, "animnifs.csv")
+    except OSError:
+        return None
+    if not monnifs or not anims or not animnifs:
+        return None
+
+    set_ids: list[str] = []
+    for row in monnifs[2:]:
+        if len(row) > MONNIFS_SET and row[MONNIFS_NAME].strip().lower() == base:
+            sid = row[MONNIFS_SET].strip()
+            if sid and sid not in set_ids:
+                set_ids.append(sid)
+    if not set_ids:
+        return None
+
+    by_id: dict[str, str] = {}
+    for row in animnifs[2:]:
+        if len(row) > ANIMNIFS_FILE and row[0].strip().isdigit():
+            by_id.setdefault(row[0].strip(), row[ANIMNIFS_FILE].strip())
+
+    anim_dir = os.path.join(client_dir, "anims")
+    try:
+        entries = {e.lower(): e for e in os.listdir(anim_dir)}
+    except OSError:
+        return None
+
+    header = anims[1] if len(anims) > 1 else []
+    for sid in set_ids:
+        slots: dict[str, str] = {}
+        for row in anims[2:]:
+            if not row or row[0].strip() != sid:
+                continue
+            for i in range(2, min(len(header), len(row))):
+                value = row[i].strip()
+                if value and value != "0":
+                    slots.setdefault(header[i].strip().lower(), value)
+            break
+        for slot in _ANIM_SLOT_PRIORITY:
+            fname = by_id.get(slots.get(slot, ""))
+            real = entries.get(fname.lower()) if fname else None
+            if real:
+                return os.path.join(anim_dir, real)
+    return None
+
+
 # Player figures do not always share their KFAs' stem spelling:
 # BritonM1.NIF pairs with britm_idle.kfa, Troll_M.nif with Troll_idle.kfa.
 # Aliases only *propose* files (direct name matches rank first); the mapping
@@ -88,7 +186,16 @@ def _score_alias(stem: str, name: str) -> int | None:
 
 
 def resolve_idle_kfa(client_dir: str, nif_path: str) -> str | None:
-    """Path to a figure's idle .kfa by filename convention, or ``None``."""
+    """Path to a figure's default .kfa, or ``None``.
+
+    The game's own link (monnifs -> anims -> animnifs, see
+    :func:`resolve_anim_from_gamedata`) wins when it resolves; the filename
+    convention plus player aliases is the fallback for figures the tables do
+    not cover (Cata remodels, test roots).
+    """
+    from_gamedata = resolve_anim_from_gamedata(client_dir, nif_path)
+    if from_gamedata is not None:
+        return from_gamedata
     name = os.path.splitext(os.path.basename(nif_path))[0].lower()
     anim_dir = os.path.join(client_dir, "anims")
     try:
@@ -176,7 +283,14 @@ def animation_tracks(
     channels without translation keys; scales always stay at the bind (never
     animated in the corpus).
     """
-    from .gltf import kfa_translation_trust, map_kfa_to_nodes
+    from .gltf import (
+        STRETCH_LIMIT_MAX,
+        STRETCH_LIMIT_MEAN,
+        kfa_translation_trust,
+        map_kfa_to_nodes,
+        mapping_is_vetted,
+        skin_stretch,
+    )
     from .kfa import load_kfa
     from .nifutil import load
 
@@ -195,8 +309,13 @@ def animation_tracks(
             stack.extend(reversed(list(getattr(obj, "children", []) or [])))
     pose = load_kfa(kfa_path)
     table = load_bone_table(os.path.join(client_dir, "figures")) if client_dir else None
-    mapping = map_kfa_to_nodes(objs, names, pose, bone_names=table)
-    trusted = kfa_translation_trust(pose, objs, mapping)
+    mapping, source = map_kfa_to_nodes(objs, names, pose, bone_names=table, with_source=True)
+    trusted = kfa_translation_trust(pose, objs, mapping, source=source)
+    # Partial offset subsets are approximations (a subset of bones from
+    # another rig): they visibly break grounding (amazon walks on air, Bear
+    # floats 5 units). Only vetted pairs animate; everything else keeps bind.
+    if not mapping_is_vetted(pose, mapping, source):
+        mapping = {}
     tracks = []
     for kfa_idx in sorted(mapping):
         ch = pose.channels.get(kfa_idx)
@@ -212,6 +331,12 @@ def animation_tracks(
             track["ptimes"] = [k.time for k in ch.translations]
             track["positions"] = [list(k.value) for k in ch.translations]  # type: ignore[union-attr]
         tracks.append(track)
+    # Refuse clips that explode the mesh under the viewer's skinning model
+    # (rigs whose stored skin bind disagrees with their node tree — AfancB,
+    # dracolich…): an empty track list sends the viewer to the bind pose.
+    stretch = skin_stretch(data, pose, bone_names=table)
+    if stretch is not None and (stretch[0] > STRETCH_LIMIT_MEAN or stretch[1] > STRETCH_LIMIT_MAX):
+        tracks = []
     rate, duration = 1.0, pose.duration
     if client_dir is not None:
         timing = anim_timing(client_dir, kfa_path)

@@ -5,9 +5,12 @@ textures, animations) — built for the private-server community.
 
 > **Status: M0 → M1 delivered** — core v0.1 (NIF/KFA reading, glTF export,
 > round-trip, batch validation, a **100% legacy reader** for NetImmerse 4.x),
-> MPAK reader/writer, canonical bone index table (0..53), and a **SvelteKit
-> + three.js figure viewer** (`web/`). State: `docs/status.md`. Format
-> reference: `docs/formats.md`.
+> MPAK reader/writer, the client's **canonical KFA bone table**
+> (`animnode.dat`, 0..174), and a **SvelteKit + three.js figure viewer**
+> (`web/`) that plays idles at the game's own rate. Animations are only
+> applied when the clip provably belongs to the figure's skeleton (vetted
+> rig pairs); anything else stays on the rest pose with the feet planted.
+> State: `docs/status.md`. Format reference: `docs/formats.md`.
 
 ## Why this project?
 
