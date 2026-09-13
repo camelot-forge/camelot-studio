@@ -22,7 +22,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e "core[dev]"
+          # [server] mirrors bootstrap.sh: the serve tests import fastapi/httpx
+          pip install -e "core[dev,server]"
 
       # pyffi 2.2.3 predates Python 3.12 (time.clock removal); the venv
       # bootstrap does the same patch — see bootstrap.sh.
