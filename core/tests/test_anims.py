@@ -162,6 +162,46 @@ def test_gamedata_keeps_sit_when_nothing_stands(tmp_path):
     assert got is not None and got.endswith("cat_SIT_TAILSWIPE.kfa")
 
 
+def test_rotation_keys_support_type4_xyz_channels():
+    """Beetle/shark/snake idles store rotations as 3 Euler float tracks."""
+    from camelot.anims import _channel_rotation_keys
+    from camelot.kfa import Channel, Key
+
+    ch = Channel(
+        index=1,
+        xyz_rotations=(
+            (Key(0.0, 0.5), Key(1.0, 0.5)),  # X
+            (Key(0.0, 0.0), Key(1.0, 0.5)),  # Y
+            (Key(0.0, 0.0), Key(1.0, 0.0)),  # Z
+        ),
+    )
+    keys = _channel_rotation_keys(ch)
+    times = [t for t, _ in keys]
+    assert times[0] == 0.0 and times[-1] == 1.0
+    # densely resampled (>= 30 Hz) so the viewer's slerp follows the
+    # engine's per-axis interpolation instead of cutting straight between keys
+    assert len(times) > 5 and times == sorted(times)
+    for _t, q in keys:
+        assert len(q) == 4 and abs(sum(c * c for c in q) - 1.0) < 1e-9
+    assert _channel_rotation_keys(Channel(index=2)) == []
+
+
+def test_native_fps_counts_type4_axes():
+    from types import SimpleNamespace
+
+    from camelot.anims import native_fps
+
+    xyz = SimpleNamespace(
+        rotations=(),
+        xyz_rotations=(
+            tuple(SimpleNamespace(time=i / 30) for i in range(47)),
+            (SimpleNamespace(time=0.0),),
+            (SimpleNamespace(time=0.0),),
+        ),
+    )
+    assert native_fps(SimpleNamespace(channels={0: xyz})) == 30.0
+
+
 def test_native_fps_snaps_to_authoring_rates():
     from types import SimpleNamespace
 
@@ -260,6 +300,33 @@ def test_boar_timing_from_client(client_dir):
     rate = fps / native_fps(pose)
     assert rate == 0.2
     assert frames / fps == 16 / 3
+
+
+def test_type4_xyz_idles_animate(client_dir):
+    """Beetle (a classic mob) stores its idle as Euler tracks; it must play."""
+    import os
+
+    import pytest
+
+    from camelot.anims import animation_tracks
+    from camelot.kfa import load_kfa
+
+    for nif, kfa, minimum in (("Beetle.NIF", "Beetle_idle.kfa", 10),):
+        path = os.path.join(client_dir, "figures", nif)
+        kfa_path = os.path.join(client_dir, "anims", kfa)
+        if not os.path.exists(path) or not os.path.exists(kfa_path):
+            pytest.skip(f"{nif} fixtures missing")
+        pose = load_kfa(kfa_path)
+        assert any(ch.xyz_rotations for ch in pose.channels.values()), nif
+        tracks = animation_tracks(path, kfa_path, client_dir)
+        assert len(tracks["tracks"]) >= minimum, nif
+        if nif == "Beetle.NIF":
+            # The root has translation keys only; its grounding track must be
+            # served, else the body stays pinned while the legs animate (the
+            # "feet floating" regression).
+            root = next(t for t in tracks["tracks"] if t["node"] == "Bip01")
+            assert "quats" not in root
+            assert len(root["ptimes"]) == len(root["positions"]) == 3
 
 
 def test_gamedata_links_creature_animations_from_client(client_dir):

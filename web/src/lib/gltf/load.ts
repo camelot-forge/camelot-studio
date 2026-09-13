@@ -153,7 +153,12 @@ export function rebindSkinnedMeshes(scene: THREE.Object3D): number {
 	scene.traverse((obj) => {
 		const skinned = obj as THREE.SkinnedMesh;
 		if (!skinned.isSkinnedMesh) return;
-		skinned.bind(skinned.skeleton);
+		// Explicit bindMatrix: `bind(skeleton)` without it also calls
+		// skeleton.calculateInverses(), overwriting the GLB's
+		// inverseBindMatrices with inverses of the *current* pose (bind at
+		// load, but a sampled/posed skeleton later — the engine-exact
+		// stored-bind rigs would silently lose their fix).
+		skinned.bind(skinned.skeleton, skinned.matrixWorld);
 		count++;
 	});
 	return count;
@@ -173,9 +178,28 @@ export function bindBoxOf(root: THREE.Object3D): THREE.Box3 {
 		const mesh = obj as THREE.Mesh;
 		const pos = mesh.geometry?.attributes.position as THREE.BufferAttribute | undefined;
 		if (!mesh.isMesh || !pos) return;
-		for (let i = 0; i < pos.count; i++) {
-			v.fromBufferAttribute(pos, i).applyMatrix4(obj.matrixWorld);
-			box.expandByPoint(v);
+		const skinned = obj as THREE.SkinnedMesh;
+		if (skinned.isSkinnedMesh && skinned.skeleton) {
+			// Measure the *engine bind*: the exact deformation the GPU will
+			// apply at rest. Some rigs store NiSkinData binds that disagree
+			// with their node tree (AfancB: a 302-unit shift), so raw
+			// geometry world bounds are not where the model renders.
+			// Rebinding first makes bindMatrix the live world, which makes
+			// applyBoneTransform + matrixWorld equal
+			// boneWorld * inverseBind * meshWorld * v (explicit bindMatrix:
+			// never let three.js recompute the GLB's inverse bind matrices).
+			skinned.bind(skinned.skeleton, skinned.matrixWorld);
+			for (let i = 0; i < pos.count; i++) {
+				v.fromBufferAttribute(pos, i);
+				skinned.applyBoneTransform(i, v);
+				v.applyMatrix4(skinned.matrixWorld);
+				box.expandByPoint(v);
+			}
+		} else {
+			for (let i = 0; i < pos.count; i++) {
+				v.fromBufferAttribute(pos, i).applyMatrix4(obj.matrixWorld);
+				box.expandByPoint(v);
+			}
 		}
 	});
 	return box;

@@ -7,8 +7,10 @@
 
 export interface AnimTrack {
 	node: string;
-	times: number[];
-	quats: Array<[number, number, number, number]>; // (w, x, y, z)
+	// A channel can carry rotations, translations, or both: some roots have
+	// only a position track (Beetle's bob), so both fields are optional.
+	times?: number[];
+	quats?: Array<[number, number, number, number]>; // (w, x, y, z)
 	ptimes?: number[];
 	positions?: Array<[number, number, number]>;
 }
@@ -54,8 +56,9 @@ export function slerp(a: Quat, b: Quat, u: number): Quat {
 
 /** Sample one track at time *t* (clamped). Returns null when empty. */
 export function sampleTrack(track: AnimTrack, t: number): Quat | null {
-	const { times, quats } = track;
-	if (!times.length) return null;
+	const times = track.times ?? [];
+	const quats = track.quats ?? [];
+	if (!times.length || !quats.length) return null;
 	if (t <= times[0]) return quats[0];
 	if (t >= times[times.length - 1]) return quats[times.length - 1];
 	for (let i = 1; i < times.length; i++) {

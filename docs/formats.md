@@ -149,20 +149,51 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   remain the fallback for Cata remodels and test roots. The chain linked 475
   figures (was 151 with filename matching alone); 306 are vetted and animate
   (see below), the rest keep the bind pose.
-- **Skin-bind consistency gate (`skin_stretch`)**: some figures store
-  `NiSkinData` bone transforms that disagree with their node tree — AfancB by
-  exactly 302.56 units (the whole mesh shifts rigidly), dracolich by 392,
-  phoenix, soulkeeper, amb_bird, dracolich… While the bind pose still looks
-  right, the viewer's skinning model (`inv(meshWorld)·boneAnim·inv(boneBind)`)
-  stretches those limbs (AfancB mean edge ratio 1.45). Clips are sampled at 4
-  times; mean edge ratio > 1.12 (or max > 10) refuses the animation (bind
-  pose shown instead: 30 of 474 links in 2026-09). The engine-exact model
-  uses the **stored** transform `S`: world `p = boneAnim·S·v`, i.e. bake
-  `Mb = inv(meshWorld)·boneAnim·S` and glTF
-  `inverseBind = S·meshWorld⁻¹·axis⁻¹` (reduces to the current values when
-  `S = inv(boneWorld)·meshWorld`, which holds for Boar/Ettin/Zombie and most
-  files). Switching to it also shifts placement for inconsistent rigs, so it
-  needs the viewer's grounding reworked first — measured, not yet shipped.
+- **Engine-exact skinning with the stored bind (2026-09-13, shipped)**. Some
+  figures store `NiSkinData` bone transforms that disagree with their node
+  tree — AfancB by exactly 302.56 units (a rigid shift), dracolich by 392,
+  dracolich/phoenix/amb_bird/player races… The engine skips the node-tree
+  bind entirely and uses the **stored** transform `S`: world
+  `p = boneAnim·S·v`. The exporter now matches it exactly:
+  - glTF `inverseBind = S · meshWorld⁻¹` (three.js computes
+    `boneWorld·IB·meshWorld·v`; `meshWorld` here is the exported mesh node
+    world, axis included),
+  - CPU bake `Mb = inv(meshWorld)·boneAnim·S` (same result as the old
+    `inv(boneBind)` formula when `S = inv(boneBind)·meshWorld`, the common
+    case: Boar/Ettin/Zombie exports are unchanged),
+  - `skin_stretch` measures with the same math against the **engine bind**
+    (not raw vertices) and gates the result: mean edge ratio > 1.12 refuses
+    the clip (bind pose instead). The max ratio stays as a loose catastrophic
+    net (> 25) because single degenerate edges spike it on valid geometry.
+  This rescued the stored-bind class (AfancB/dracolich/phoenix/soulkeeper/
+  amb_bird/ambrat/CwHuman/Dragon01…) which now animate cleanly (mean
+  1.01-1.07, feet planted through the loop, verified in the viewer). Still
+  refused: player-race pairings whose mean stretch reaches 1.14-1.57
+  (BInconnu/NKobold/NDwarf/HShar/… with `I_HM`/`I_HF`), kept on bind.
+- **Grounding/framing uses the engine bind** (`bindBoxOf`): bounds are
+  measured with three.js' own skinning at rest (in the viewer the bound box
+  also unions poses sampled across the idle, so root tracks that travel —
+  amb_bird flying, the afanc diving — stay in frame and never clip the
+  grid). `rebindSkinnedMeshes` must pass an explicit `bindMatrix`
+  (`bind(skeleton, matrixWorld)`): calling `bind(skeleton)` without it makes
+  three.js recompute the skeleton's inverse bind matrices from the live
+  pose, silently discarding the engine-exact ones exported above.
+- **KFA rotations come in two storages**: quaternion keys and **type-4
+  per-axis Euler float tracks** (`xyz_rotations`). DAoC uses both, sometimes
+  within the same clip, and some classic mobs are Euler-only (Beetle, sharks,
+  snakes, ballistas…: 116 KFAs xyz-only, 1578 mixed). The viewer used to drop
+  every Euler channel (Beetle "not animated"); `anims._channel_rotation_keys`
+  now samples the three axis tracks at union key times plus 1/30 s steps
+  (the engine interpolates per axis and composes; slerping between sparse
+  composed quaternions made feet drift), composes a quaternion with
+  `kfa.evaluate`, and emits a normal `{times, quats}` track. `native_fps`
+  counts the densest axis as well.
+- **Translation-only channels produce tracks too**: the Beetle's root has a
+  position track and no rotation keys at all. Tracks are now emitted when a
+  channel has rotations, translations (trusted), or both; the viewer applies
+  positions in a separate pass. Dropping the root track pinned the body while
+  the legs animated — the beetle's "floating feet" (raw min-Y span 3.76
+  before, 0.52 after).
 - **KFA playback timing comes from `animnifs.csv`, not the key stamps.**
   Every file is authored at 15 or 30 fps key density (`native_fps`: median
   rotation-key interval, snapped), and the game plays `frames` key intervals

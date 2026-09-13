@@ -71,12 +71,12 @@ def test_briton_player_figure_pairs_with_race_idle(client_dir):
         assert want in by_name
 
 
-def test_pose_gate_refuses_rigs_whose_skin_bind_disagrees(client_dir):
+def test_engine_skinning_rescues_stored_bind_rigs(client_dir):
     """AfancB/dracolich store a skin bind 300+ units away from their node tree.
 
-    Their bind pose looks fine but the viewer's skinning model explodes the
-    mesh under animation; the stretch gate must refuse those clips (empty
-    tracks -> bind) while keeping proven rigs.
+    The engine-exact formula (Mb = inv(meshWorld)·boneAnim·stored S, glTF
+    inverseBind = S·inv(meshWorld)) deforms them cleanly: they now animate
+    instead of being refused by the stretch gate.
     """
     from camelot.anims import animation_tracks
     from camelot.gltf import STRETCH_LIMIT_MEAN, skin_stretch
@@ -84,6 +84,7 @@ def test_pose_gate_refuses_rigs_whose_skin_bind_disagrees(client_dir):
     for name, kfa in (
         ("AfancB.NIF", "Afanc_idle.kfa"),
         ("dracolich.nif", "dracolich_idle.kfa"),
+        ("Afanc.NIF", "Afanc_idle.kfa"),
         ("Boar.NIF", "BOAR_idle.kfa"),
         ("Zombie.NIF", "Zombie_idle.kfa"),
     ):
@@ -91,13 +92,31 @@ def test_pose_gate_refuses_rigs_whose_skin_bind_disagrees(client_dir):
         pose = load_kfa(os.path.join(client_dir, "anims", kfa))
         stretch = skin_stretch(load(nif), pose, bone_names=_bone_table(client_dir))
         assert stretch is not None
+        assert stretch[0] <= STRETCH_LIMIT_MEAN, name
         tracks = animation_tracks(nif, os.path.join(client_dir, "anims", kfa), client_dir)
-        if name in ("AfancB.NIF", "dracolich.nif"):
-            assert stretch[0] > STRETCH_LIMIT_MEAN
-            assert tracks["tracks"] == []
-        else:
-            assert stretch[0] <= STRETCH_LIMIT_MEAN
-            assert len(tracks["tracks"]) >= 20
+        assert len(tracks["tracks"]) >= 20, name
+
+
+def test_stretch_gate_still_refuses_broken_rigs(client_dir):
+    """The gate is not decoration: BHalfOgreF + TROLLF_IDLE over-stretches.
+
+    (Most player races now pass once mapped through the engine table and its
+    translations — BInconnuM_2 1.10, NKoboldF 1.03 — but this pairing stays
+    at ~1.49 and must keep the bind pose.)
+    """
+    from camelot.anims import animation_tracks
+    from camelot.gltf import STRETCH_LIMIT_MEAN, skin_stretch
+
+    nif = os.path.join(client_dir, "figures", "BHalfOgreF.NIF")
+    kfa = os.path.join(client_dir, "anims", "TROLLF_IDLE.kfa")
+    if not os.path.exists(nif) or not os.path.exists(kfa):
+        pytest.skip("fixtures missing")
+    stretch = skin_stretch(
+        load(nif), load_kfa(kfa), bone_names=_bone_table(client_dir), prefer_table=True
+    )
+    assert stretch is not None
+    assert stretch[0] > STRETCH_LIMIT_MEAN
+    assert animation_tracks(nif, kfa, client_dir)["tracks"] == []
 
 
 def test_gamedata_linked_figures_animate_despite_offset_drift(client_dir):
@@ -205,7 +224,8 @@ def test_boar_anim_endpoint(client_dir, tmp_path):
     by_node = {t["node"]: t for t in body["tracks"]}
     assert "Bip01" in by_node
     for t in body["tracks"]:
-        assert len(t["times"]) == len(t["quats"]) >= 1
+        if "times" in t:  # translation-only tracks (e.g. Beetle's root) have none
+            assert len(t["times"]) == len(t["quats"]) >= 1
         for q in t["quats"]:
             assert math.isclose(sum(c * c for c in q), 1.0, abs_tol=1e-3)
     r = client.get(f"/api/v1/assets/{nif_id}/model", params={"skinned": True})

@@ -4,6 +4,7 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 	import { loadFromGlb, rebindSkinnedMeshes, bindBoxOf } from '$lib/gltf/load';
+	import { sampleClip, samplePositions, gameToKeyTime, type AnimClip } from '$lib/anim';
 
 	// Diagnostic page: /render?glb=<url> draws a model with fixed axes/grid so
 	// screenshots can be compared unambiguously (orientation regressions).
@@ -53,11 +54,62 @@
 			...(root.children[0]?.matrixWorld.elements as unknown as number[])
 		].map((x) => +x.toFixed(3));
 		(window as unknown as { __wmark?: string }).__wmark = 'updated-v2';
+
+		// Optional posed render: sample the idle clip at game time ?t=.
+		// NOTE: three.js sanitizes node names (spaces become underscores), so
+		// match tracks against both the raw and the sanitized scene names.
+		let clip: AnimClip | null = null;
+		const joints = new SvelteMap<string, THREE.Object3D>();
+		if (animUrl) {
+			const ares = await fetch(animUrl);
+			if (ares.ok) {
+				clip = (await ares.json()) as AnimClip;
+				const byName = new SvelteMap<string, THREE.Object3D>();
+				root.traverse((obj) => {
+					if (!byName.has(obj.name)) byName.set(obj.name, obj);
+					const desanitized = obj.name.replace(/_/g, ' ');
+					if (!byName.has(desanitized)) byName.set(desanitized, obj);
+				});
+				for (const track of clip.tracks) {
+					const name = track.node;
+					const joint = byName.get(name) ?? byName.get(name.replace(/ /g, '_')) ?? null;
+					if (joint && !joints.has(name)) joints.set(name, joint);
+				}
+			}
+		}
+		const applyPoseAt = (tGame: number): number => {
+			if (!clip || clip.duration <= 0 || !joints.size) return 0;
+			const tKey = gameToKeyTime(clip, tGame);
+			const place = samplePositions(clip, tKey);
+			let applied = 0;
+			for (const [name, q] of sampleClip(clip, tKey)) {
+				const joint = joints.get(name);
+				if (!joint) continue;
+				joint.quaternion.set(q[1], q[2], q[3], q[0]);
+				applied++;
+			}
+			// Positions in their own pass: translation-only tracks (Beetle's
+			// root bob) have no quats and were silently skipped here.
+			for (const [name, p] of place) {
+				const joint = joints.get(name);
+				if (joint) joint.position.set(p[0], p[1], p[2]);
+			}
+			return applied;
+		};
+
 		// Optional Viewer-equivalent normalization (?norm=1): scale to ~5
-		// units and ground the bind box at Y = 0, exactly like Viewer.svelte.
+		// units and ground the *animation loop's* lowest point at Y = 0
+		// (engine bind union sampled poses), exactly like Viewer.svelte.
 		// Rebind after positioning so the captured bind world is final.
 		if (params.get('norm') === '1') {
 			const nbox = bindBoxOf(root);
+			if (clip) {
+				for (let k = 0; k < 8; k++) {
+					applyPoseAt((clip.duration * k) / 8);
+					root.updateMatrixWorld(true);
+					nbox.union(bindBoxOf(root));
+				}
+			}
 			const ncenter = nbox.getCenter(new THREE.Vector3());
 			const nsize = nbox.getSize(new THREE.Vector3());
 			const nscale = 5 / Math.max(nsize.x, nsize.y, nsize.z, 1e-6);
@@ -93,40 +145,12 @@
 				if (skinned.isSkinnedMesh) skinned.normalizeSkinWeights();
 			}
 		});
-
-		// Optional posed render: sample the idle clip at game time ?t=.
-		// NOTE: three.js sanitizes node names (spaces become underscores), so
-		// match tracks against both the raw and the sanitized scene names.
-		let posedJoints = 0;
-		if (animUrl) {
-			const ares = await fetch(animUrl);
-			if (ares.ok) {
-				const { sampleClip, samplePositions, gameToKeyTime } = await import('$lib/anim');
-				const clip = (await ares.json()) as Parameters<typeof sampleClip>[0];
-				const tKey = gameToKeyTime(clip, Number.isFinite(at) ? at : 0);
-				const byName = new SvelteMap<string, THREE.Object3D>();
-				root.traverse((obj) => {
-					if (!byName.has(obj.name)) byName.set(obj.name, obj);
-					const desanitized = obj.name.replace(/_/g, ' ');
-					if (!byName.has(desanitized)) byName.set(desanitized, obj);
-				});
-				const place = samplePositions(clip, tKey);
-				for (const [name, q] of sampleClip(clip, tKey)) {
-					const joint = byName.get(name) ?? byName.get(name.replace(/ /g, '_')) ?? null;
-					if (joint) {
-						joint.quaternion.set(q[1], q[2], q[3], q[0]);
-						const p = place.get(name);
-						if (p) joint.position.set(p[0], p[1], p[2]);
-						posedJoints++;
-					}
-				}
-				root.updateMatrixWorld(true);
-			}
-		}
+		const posedJoints = clip ? applyPoseAt(Number.isFinite(at) ? at : 0) : 0;
+		if (clip) root.updateMatrixWorld(true);
 
 		// fixed 3/4 camera so orientation is consistent across shots.
-		// bindBoxOf: Box3.setFromObject would measure skinned (posed)
-		// positions instead of the bind geometry.
+		// bindBoxOf: the engine bind, not raw geometry — rigs whose stored
+		// NiSkinData bind disagrees with their node tree render shifted.
 		const box = bindBoxOf(root);
 		const center = box.getCenter(new THREE.Vector3());
 		const size = box.getSize(new THREE.Vector3());
@@ -182,31 +206,22 @@
 			(win as unknown as { __rawMin?: number[] }).__rawMin = rawBox.min
 				.toArray()
 				.map((x) => +x.toFixed(4));
+			// Same path as bindBoxOf/applyBoneTransform (three's own skinning
+			// math). A hand-rolled boneMatrices mix-up here silently shifted
+			// the bounds; this stays in sync with what the GPU draws.
 			const pts: THREE.Vector3[] = [];
 			let joints = 0;
-			const m = new THREE.Matrix4();
-			const skinM = new THREE.Matrix4();
 			const v = new THREE.Vector3();
 			root.traverse((obj) => {
 				const skinned = obj as THREE.SkinnedMesh;
 				if (!skinned.isSkinnedMesh) return;
 				skinned.skeleton.update();
 				joints = skinned.skeleton.bones.length;
+				skinned.bind(skinned.skeleton, skinned.matrixWorld);
 				const pos = skinned.geometry.attributes.position as THREE.BufferAttribute;
-				const sIdx = skinned.geometry.attributes.skinIndex as THREE.BufferAttribute;
-				const sW = skinned.geometry.attributes.skinWeight as THREE.BufferAttribute;
-				const bm = skinned.skeleton.boneMatrices as unknown as Float32Array;
 				for (let vi = 0; vi < pos.count; vi++) {
-					skinM.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-					for (let k = 0; k < 4; k++) {
-						const w = sW.getComponent(vi, k);
-						if (!w) continue;
-						const j = sIdx.getComponent(vi, k);
-						m.fromArray(bm, j * 16);
-						for (let e = 0; e < 16; e++) skinM.elements[e] += m.elements[e] * w;
-					}
-					v.fromBufferAttribute(pos, vi).applyMatrix4(skinned.bindMatrix);
-					v.applyMatrix4(skinM).applyMatrix4(skinned.bindMatrixInverse);
+					v.fromBufferAttribute(pos, vi);
+					skinned.applyBoneTransform(vi, v);
 					v.applyMatrix4(skinned.matrixWorld);
 					pts.push(v.clone());
 				}

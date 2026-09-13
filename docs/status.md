@@ -88,20 +88,30 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
      clavicle breathing) drift from the bind and used to refuse
      amazon/rat/bear/cata_lion/badger/amb_blackcat — all of which deform
      cleanly (mean edge ratio 1.01-1.07) once mapped by name. Fallback
-     (filename) links keep the conservative offset gate. Coverage: **483
-     animate** (511 vetted, 28 refused by `skin_stretch`, 7 no mapping,
-     94 no link); the black cat's sitting `Idle` slot loses to its
-     `STAND_IDLE` (`resolve_anim_from_gamedata` penalizes sit/tailswipe).
+     (filename) links keep the conservative offset gate. The black cat's
+     sitting `Idle` slot loses to its `STAND_IDLE`
+     (`resolve_anim_from_gamedata` penalizes sit/tailswipe).
    - **All translations apply on a vetted pair** (`kfa_translation_trust`):
      the root track is the grounding (root bob with planted feet); dropping
      it made 2HWolf/3head/Zombie/Ettin/Wolf float 1-2.3 units — with it the
      min-Y span is <= 0.34 through the loop (verified in the viewer).
      `skeleton.py` stays a DFS reference only.
-   - Open: engine-exact skinning using the stored `NiSkinData` transforms
-     (`inverseBind = S·meshWorld⁻¹·axis⁻¹`, `formats.md` §3) would fix the
-     `skin_stretch`-refused rigs instead of binding them, but needs the
-     viewer grounding reworked (the engine bind of AfancB is rigidly shifted
-     302 units).
+   - **Type-4 Euler rotation channels are played** (`_channel_rotation_keys`):
+     classic KFAs store rotations as quaternion keys, 3 per-axis float tracks,
+     or both; 116 clips are Euler-only (Beetle, sharks, snakes, ballistas) and
+     were silently dropped before. They are now composed into quaternion
+     tracks (Beetle animates; see `formats.md` §3).
+   - **Engine-exact skinning (shipped)**: the exporter uses the stored
+     `NiSkinData` transform (`inverseBind = S·meshWorld⁻¹`, bake
+     `inv(meshWorld)·boneAnim·S`), which rescued the stored-bind class
+     (AfancB/dracolich/phoenix/soulkeeper/amb_bird/ambrat/CwHuman/Dragon01:
+     mean stretch 1.01-1.07, planted feet). `skin_stretch` now measures
+     against the engine bind (mean > 1.12 refuses, max > 25 as a loose net);
+     the viewer grounds on the engine bind and frames the idle's sampled
+     extent (flyers stay in frame). `rebindSkinnedMeshes` must keep passing
+     an explicit bindMatrix or three.js would recompute (and discard) the
+     exported inverse binds. Still refused (~35 links, mostly player-race
+     pairings with `I_HM`/`I_HF`, mean 1.14-1.57).
 4. **pyffi 10.1.0.0**: 2 housing files fail (see `formats.md` §7).
 5. **MPAK header checksum**: the two *open* header fields (`formats.md` §5)
    are written as deterministic placeholders; whether the game validates
@@ -139,13 +149,14 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
    CLI, unit + corpus repack tests, header `byte 13` decoded; the two
    *open* header checksums documented (`formats.md` §5).
 4. Idle coverage: Boar is proven end-to-end; the gamedata animation chain
-   (`monnifs → anims → animnifs`, Known limits #3) linked 475 figures and
-   **483 animate** with planted feet (511 vetted, 28 refused by
-   `skin_stretch`), including the formerly-refused amazon/rat/bear/
-   cata_lion/amb_blackcat/badger. All reported floats (2HWolf, 3head, Zombie,
-   Ettin, Wolf, items) are fixed and user-verified. Next: validate a few more
-   families with the `anim_check.mjs` pattern, then revisit the 28 refused
-   rigs via engine-exact skinning (stored `NiSkinData` transforms).
+   (`monnifs → anims → animnifs`, Known limits #3) links 523 figures, of
+   which ~475+ animate with planted feet after the engine-exact skinning
+   pass — including the formerly-refused amazon/rat/bear/cata_lion/
+   amb_blackcat/badger and the stored-bind class (AfancB/dracolich/phoenix/
+   soulkeeper/amb_bird/CwHuman/Dragon01). All reported floats (2HWolf,
+   3head, Zombie, Ettin, Wolf, items) are fixed and user-verified. Next:
+   validate a few more families with the `anim_check.mjs` pattern, then look
+   at the remaining player-race refusals (`I_HM`/`I_HF`, mean 1.14-1.57).
 5. ~~M1: Svelte + three.js viewer~~ — **idle playback delivered**: `web/`
    SvelteKit (Svelte 5 runes, Vite, Vitest) loads the skinned `.glb`
    (`GET /api/v1/assets/{id}/model?skinned=true`) plus joint rotation tracks

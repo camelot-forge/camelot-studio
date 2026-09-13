@@ -52,10 +52,14 @@ def test_biped_stands_feet_below_pelvis(client_dir, tmp_path, name):
     assert feet_below_pelvis(gltf, binary) is True
 
 
-@pytest.mark.parametrize("name", ["Boar.NIF", "Afanc.NIF", "7legspider.nif"])
+@pytest.mark.parametrize("name", ["Boar.NIF", "7legspider.nif"])
 def test_skinned_bind_matches_non_skinned(client_dir, tmp_path, name):
-    # The skinned bind pose must render exactly like the static export
-    # (otherwise the skin double-applies the axis and the mesh drifts).
+    # The skinned bind pose must render exactly like the static export for
+    # consistent rigs (otherwise the skin double-applies the axis and the
+    # mesh drifts). Afanc moved out of this list on purpose: its stored
+    # NiSkinData bind disagrees with its node tree, so the engine bind is a
+    # (slightly warped, mostly rigid) variant of the authored mesh — that is
+    # the faithful result now; see test_engine_skinning_rescues_stored_bind_rigs.
     g0, b0 = _export(client_dir, name, tmp_path)
     dims0, center0 = world_bbox(g0, b0)
     g1, b1 = _export(client_dir, name, tmp_path, emit_skinned=True)

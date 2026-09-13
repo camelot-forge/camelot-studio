@@ -396,15 +396,18 @@ def kfa_translation_trust(
 
 # A clip whose skinned pose stretches the mesh beyond this is refused (the
 # viewer keeps the bind pose instead of showing exploded limbs). The mean
-# ratio catches broad warping (AfancB 1.45, dracolich 1.40, phoenix 1.30,
-# soulkeeper 1.14) while sane clips stay at 1.00-1.05; the max ratio is a
-# loose net for a few exploded vertices (single degenerate edges spike it,
-# so it must stay high: Ettin's idle peaks at 6 on valid geometry).
+# ratio is the real gate: engine-exact skinning keeps sane clips at
+# 1.00-1.07 while genuinely broken pairings sit at 1.14+ (player-race rigs
+# with I_HM/I_HF reach 1.2-1.6). The max ratio only exists as a catastrophic
+# net; single degenerate edges spike it on valid geometry (Ettin idles at 6,
+# Dragon01 at 10), so it must stay loose.
 STRETCH_LIMIT_MEAN = 1.12
-STRETCH_LIMIT_MAX = 10.0
+STRETCH_LIMIT_MAX = 25.0
 
 
-def skin_stretch(data, pose, bone_names=None, samples: int = 4) -> tuple[float, float] | None:
+def skin_stretch(
+    data, pose, bone_names=None, samples: int = 4, prefer_table: bool = False
+) -> tuple[float, float] | None:
     """Worst skinned edge stretch of *data* posed by *pose* vs its bind.
 
     Reproduces the viewer's CPU skinning
@@ -446,7 +449,9 @@ def skin_stretch(data, pose, bone_names=None, samples: int = 4) -> tuple[float, 
                 children[pid].append(cid)
                 todo.append((ch, cid))
 
-    mapping, source = map_kfa_to_nodes(objs, names, pose, bone_names=bone_names, with_source=True)
+    mapping, source = map_kfa_to_nodes(
+        objs, names, pose, bone_names=bone_names, with_source=True, prefer_table=prefer_table
+    )
     if not mapping:
         return None
     trusted = kfa_translation_trust(pose, objs, mapping, source=source)
@@ -530,7 +535,8 @@ def skin_stretch(data, pose, bone_names=None, samples: int = 4) -> tuple[float, 
         verts = [vec3(v) for v in shp.vertices]
         Ws = np.asarray(bind.get(i, mat4_identity()), dtype=float)
         invWs = np.linalg.inv(Ws)
-        meshes.append((i, joints, weights, tris, verts, Ws, invWs))
+        S_mats = [_skin_transform(skin_data.bone_list[k]) for k in range(len(joints))]
+        meshes.append((i, joints, weights, tris, verts, Ws, invWs, S_mats))
 
     if not meshes:
         return None
@@ -545,14 +551,11 @@ def skin_stretch(data, pose, bone_names=None, samples: int = 4) -> tuple[float, 
         r = lens[valid] / base[valid]
         return float(r.mean()), float(r.max())
 
-    duration = max(pose.duration, 1e-3)
-    worst_mean, worst_max = 1.0, 1.0
-    times = [duration * k / max(1, samples - 1) for k in range(max(1, samples))]
-    for t in times:
-        world = posed_world(t)
-        for i, joints, weights, tris, verts, Ws, invWs in meshes:
-            positions = []
+    def skin_all(world) -> list[list[np.ndarray]]:
+        per_mesh = []
+        for i, joints, weights, _tris, verts, Ws, invWs, S_mats in meshes:
             cache: dict[int, np.ndarray] = {}
+            pts = []
             for vi, v in enumerate(verts):
                 acc = np.zeros(3)
                 tot = 0.0
@@ -564,17 +567,32 @@ def skin_stretch(data, pose, bone_names=None, samples: int = 4) -> tuple[float, 
                         jn = joints[sk]
                         Wb = np.asarray(bind.get(jn, mat4_identity()), dtype=float)
                         Wa = np.asarray(world.get(jn, Wb.tolist()), dtype=float)
-                        m = invWs @ Wa @ np.linalg.inv(Wb) @ Ws
+                        # engine-exact: Mb = inv(meshWorld) * boneAnim * S
+                        m = invWs @ Wa @ np.asarray(S_mats[sk], dtype=float)
                         cache[sk] = m
                     mh = m @ np.array((v[0], v[1], v[2], 1.0))
                     acc = acc + float(w) * mh[:3]
                     tot += float(w)
-                positions.append(acc / tot if tot > 0 else np.array(v))
-            # bind edge lengths in mesh-local space (same as baked positions)
-            local = np.asarray(verts)
-            t = np.asarray(tris, dtype=int).reshape(-1, 3)
-            base_lens = np.linalg.norm(local[t[:, 0]] - local[t[:, 1]], axis=1)
-            mean_r, max_r = edge_ratios(positions, tris, base_lens)
+                pts.append(acc / tot if tot > 0 else np.array(v))
+            per_mesh.append(pts)
+        return per_mesh
+
+    # Reference shape = the engine bind (Wa = boneBind), not the raw vertices:
+    # for rigs whose stored bind disagrees with the node tree the two differ
+    # by a rigid shift, and the gate must measure *animation* deformation.
+    base_lens = []
+    for mi, (i, _j, _w, tris, _v, _Ws, _invWs, _S) in enumerate(meshes):
+        t = np.asarray(tris, dtype=int).reshape(-1, 3)
+        pts = np.array(skin_all(bind)[mi])
+        base_lens.append(np.linalg.norm(pts[t[:, 0]] - pts[t[:, 1]], axis=1))
+
+    duration = max(pose.duration, 1e-3)
+    worst_mean, worst_max = 1.0, 1.0
+    times = [duration * k / max(1, samples - 1) for k in range(max(1, samples))]
+    for t in times:
+        positions = skin_all(posed_world(t))
+        for mi, (i, _j, _w, tris, _v, _Ws, _invWs, _S) in enumerate(meshes):
+            mean_r, max_r = edge_ratios(positions[mi], tris, base_lens[mi])
             worst_mean = max(worst_mean, mean_r)
             worst_max = max(worst_max, max_r)
     return worst_mean, worst_max
@@ -1000,9 +1018,15 @@ def export_gltf(
             stats["joints"] = max(stats["joints"], len(joints))
 
         if bake_pose and pose is not None and skinned and weights_global:
-            # CPU linear-blend skinning into NIF-local space (Gamebryo Mb).
+            # CPU linear-blend skinning into NIF-local space, engine-exact:
+            # Mb = inv(meshWorld) * boneAnim * skinToBone, using the *stored*
+            # NiSkinData transform (S). Identical to the old inv(boneBind)
+            # formula for consistent rigs, and faithful for the ones whose
+            # stored bind disagrees with the node tree (AfancB: S differs by
+            # 302 units; the old math stretched those limbs by 45%).
             Ws = np.asarray(nif_bind.get(i, mat4_identity()), dtype=float)
             invWs = np.linalg.inv(Ws)
+            S_mats = [_skin_transform(skin_data.bone_list[k]) for k in range(len(joints))]
             Mb_cache: dict[int, np.ndarray] = {}
             Rb_cache: dict[int, np.ndarray] = {}
 
@@ -1011,6 +1035,7 @@ def export_gltf(
                 _joints=joints,
                 _nif_bind=nif_bind,
                 _nif_posed=nif_posed,
+                _S=S_mats,
                 _Ws=Ws,
                 _invWs=invWs,
                 _Mb_cache=Mb_cache,
@@ -1021,7 +1046,7 @@ def export_gltf(
                     jn = _joints[skin_k] if skin_k < len(_joints) else -1
                     Wb = np.asarray(_nif_bind.get(jn, mat4_identity()), dtype=float)
                     Wa = np.asarray(_nif_posed.get(jn, Wb.tolist()), dtype=float)
-                    m = _invWs @ Wa @ np.linalg.inv(Wb) @ _Ws
+                    m = _invWs @ Wa @ np.asarray(_S[skin_k], dtype=float)
                     _Mb_cache[skin_k] = m
                     _Rb_cache[skin_k] = m[:3, :3]
                 return m
@@ -1119,12 +1144,16 @@ def export_gltf(
 
         meshes.append({"node": i, "name": names[i], "prim": prim})
         if skinned and emit_skinned:
-            # inverseBind = inv(bone world) in the skeleton-root space;
-            # the root node's axis matrix rotates the whole skeleton to Y-up.
-            ib = []
-            for jn in joints:
-                w = world.get(jn, mat4_identity())
-                ib.append(np.linalg.inv(np.asarray(w, dtype=float)).tolist())
+            # inverseBind = S * inv(meshWorld), the engine-exact form:
+            # three.js computes p = boneWorld * IB * meshWorld * v and the
+            # engine computes boneAnim * S * v; they match when
+            # IB = S * inv(meshWorld). For consistent rigs S = inv(boneBind) *
+            # meshWorld_nif, so this equals the previous inv(boneWorld).
+            mesh_inv = np.linalg.inv(np.asarray(world.get(i, mat4_identity()), dtype=float))
+            ib = [
+                (np.asarray(_skin_transform(skin_data.bone_list[k]), dtype=float) @ mesh_inv).tolist()
+                for k in range(len(joints))
+            ]
             ib_arr = np.array([_flatten_colmajor(m) for m in ib], dtype=np.float32)
             acc_ib = buf.add(ib_arr.tobytes(), F32, len(ib), "MAT4")
             skins.append(
@@ -1316,6 +1345,34 @@ def _fill_partition(part, weights_global: dict[int, list[tuple[int, float]]]) ->
         for bj, w in zip(bi, wts):
             jg = part_bones[bj] if bj < len(part_bones) else bj
             wl.append((jg, w))
+
+
+def _skin_transform(entry) -> list[list[float]]:
+    """Stored NiSkinData bone transform S (skin space -> bone space).
+
+    Row-major lists from our legacy reader, or a pyffi ``SkinTransform``
+    whose Matrix33 goes through :func:`nif_rot_cell`. This is the transform
+    the engine actually uses; for most files it equals
+    ``inv(boneBind) * meshWorld``, but some rigs (AfancB by 302 units) store
+    a different bind — see docs/formats.md §3.
+    """
+    t = entry["transform"] if isinstance(entry, dict) else getattr(entry, "skin_transform", None)
+    m = mat4_identity()
+    if isinstance(t, (tuple, list)):  # legacy reader: (row-major mat33, vec3, scale)
+        r, tv, s = t
+        for i in range(3):
+            for j in range(3):
+                m[i][j] = float(r[i][j]) * float(s)
+            m[i][3] = float(tv[i])
+        return m
+    if t is None or not hasattr(t, "rotation"):
+        return m
+    rot, tv, s = t.rotation, vec3(t.translation), float(t.scale)
+    for i in range(3):
+        for j in range(3):
+            m[i][j] = nif_rot_cell(rot, i, j) * s
+        m[i][3] = tv[i]
+    return m
 
 
 def _fill_weights_from_bonelist(skin_data, joints, weights_global) -> None:

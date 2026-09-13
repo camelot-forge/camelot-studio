@@ -46,14 +46,15 @@
 	let gridHelper: THREE.GridHelper | null = null;
 	let root: THREE.Group | null = null;
 	let frame = 0;
+	let frameBox: THREE.Box3 | null = null;
 
 	function fit() {
 		if (!camera || !controls || !root) return;
 		// Frame the model only: the grid/axes helpers must not drive the
 		// zoom (they span 10 units and were making every figure tiny).
-		// bindBoxOf, not setFromObject: the SkinnedMesh path folds the live
-		// skeleton into the measurement instead of the bind geometry.
-		const box = bindBoxOf(root);
+		// frameBox covers the whole idle loop (engine bind + sampled poses);
+		// without a clip it falls back to the engine bind measured live.
+		const box = frameBox ? frameBox.clone() : bindBoxOf(root);
 		const center = box.getCenter(new THREE.Vector3());
 		const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 0.5);
 		const vFov = THREE.MathUtils.degToRad(camera.fov);
@@ -72,6 +73,7 @@
 		if (!canvas) return;
 		const parent = canvas.parentElement;
 		if (!parent) return;
+		frameBox = null;
 
 		const w = parent.clientWidth;
 		const h = parent.clientHeight;
@@ -166,15 +168,42 @@
 		// DAoC uses its own unit scale (figures can span ~80 units) and offsets
 		// the model far from the origin. Normalise every figure to a consistent
 		// size, centred on the origin, so the three.js scene scale stays sane.
-		// bindBoxOf: Box3.setFromObject would measure skinned (posed)
-		// positions instead of the bind geometry.
+		// The reference box covers the whole idle loop, engine bind included:
+		// a root track that travels (amb_bird flies, the afanc dives) must
+		// stay in frame and never clip through the grid; for calm idles the
+		// union equals the bind box and nothing changes.
+		const applyPoseAt = (tGame: number) => {
+			if (!anim || anim.duration <= 0) return;
+			const tKey = gameToKeyTime(anim, tGame);
+			const pose = sampleClip(anim, tKey);
+			const placement = samplePositions(anim, tKey);
+			for (const [name, q] of pose) {
+				const joint = joints.get(name);
+				if (joint) joint.quaternion.set(q[1], q[2], q[3], q[0]);
+			}
+			for (const [name, p] of placement) {
+				const joint = joints.get(name);
+				if (joint) joint.position.set(p[0], p[1], p[2]);
+			}
+		};
 		const box = bindBoxOf(root);
+		if (anim && joints.size && anim.duration > 0) {
+			// Dense enough to catch the loop's lowest point (the root track
+			// can dip a few percent between keys); t=0 included so the
+			// starting frame is never below the grid.
+			for (let k = 0; k < 8; k++) {
+				applyPoseAt((anim.duration * k) / 8);
+				root.updateMatrixWorld(true);
+				box.union(bindBoxOf(root));
+			}
+		}
 		const center = box.getCenter(new THREE.Vector3());
 		const size = box.getSize(new THREE.Vector3());
 		const target = 5;
 		const scale = target / Math.max(size.x, size.y, size.z, 1e-6);
 		root.scale.setScalar(scale);
-		// Ground the model: centre horizontally but sit the feet on Y = 0.
+		// Ground the model: centre horizontally, put the loop's lowest point
+		// on Y = 0.
 		root.position.set(
 			-center.x * scale,
 			-center.y * scale + (size.y * scale) / 2,
@@ -186,6 +215,10 @@
 		// model is scaled/grounded so the captured bind world is final.
 		rebindSkinnedMeshes(scene);
 
+		// Frame on the full animation extent afterwards (fit() runs on
+		// resize / the frame button too).
+		root.updateMatrixWorld(true);
+		frameBox = box.clone().applyMatrix4(root.matrixWorld);
 		fit();
 
 		// render loop (drives the idle animation when present and playing)
@@ -196,17 +229,7 @@
 			const dt = Math.min(clock.getDelta(), 0.1);
 			if (anim && playing && joints.size && anim.duration > 0) {
 				animTime = (animTime + dt) % anim.duration;
-				const tKey = gameToKeyTime(anim, animTime);
-				const pose = sampleClip(anim, tKey);
-				const placement = samplePositions(anim, tKey);
-				for (const [name, q] of pose) {
-					const joint = joints.get(name);
-					if (joint) joint.quaternion.set(q[1], q[2], q[3], q[0]);
-				}
-				for (const [name, p] of placement) {
-					const joint = joints.get(name);
-					if (joint) joint.position.set(p[0], p[1], p[2]);
-				}
+				applyPoseAt(animTime);
 			}
 			controls?.update();
 			renderer?.render(scene as THREE.Scene, camera as THREE.PerspectiveCamera);

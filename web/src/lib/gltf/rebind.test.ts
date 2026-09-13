@@ -24,10 +24,13 @@ describe('rebindSkinnedMeshes', () => {
 		geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0], 4));
 		const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshBasicMaterial()) as THREE.SkinnedMesh;
 		holder.add(mesh);
-		const skeleton = new THREE.Skeleton([bone]);
-		// what GLTFLoader r186 does: identity bind matrix
-		mesh.bind(skeleton, new THREE.Matrix4());
 		scene.updateMatrixWorld(true);
+		// What GLTFLoader does: inverse bind matrices come from the file
+		// (here: the bone's bind world), never from the skeleton recalculating
+		// them; the loader also binds with an identity matrix (r186 trap).
+		const boneInverses = [bone.matrixWorld.clone().invert()];
+		const skeleton = new THREE.Skeleton([bone], boneInverses);
+		mesh.bind(skeleton, new THREE.Matrix4());
 		return { scene, mesh, bone };
 	}
 
@@ -40,6 +43,15 @@ describe('rebindSkinnedMeshes', () => {
 		expect(mesh.bindMatrix.equals(expected)).toBe(true);
 		const inv = expected.clone().invert();
 		expect(mesh.bindMatrixInverse.equals(inv)).toBe(true);
+	});
+
+	it('keeps the file inverse bind matrices while re-binding', () => {
+		const { scene, mesh } = makeRig();
+		const before = mesh.skeleton.boneInverses[0].clone();
+		rebindSkinnedMeshes(scene);
+		// `bind(skeleton)` without an explicit matrix calls
+		// calculateInverses() and would replace the file's inverses.
+		expect(mesh.skeleton.boneInverses[0].equals(before)).toBe(true);
 	});
 
 	it('renders skinned bind vertices at the mesh world', () => {

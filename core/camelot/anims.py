@@ -239,17 +239,61 @@ def resolve_idle_kfa(client_dir: str, nif_path: str) -> str | None:
     return os.path.join(anim_dir, ranked[0][1])
 
 
+def _channel_rotation_keys(ch) -> list:
+    """Rotation keys of a channel as (time, quat) pairs.
+
+    Gamebryo KFAs store rotations either as quaternion keys or as three
+    per-axis Euler float tracks (``rotation_type`` 4, kept in
+    ``xyz_rotations``); DAoC uses both, sometimes within the same file
+    (Beetle/shark/snake idles are xyz-only). The Euler tracks are sampled at
+    their union of key times and composed with :func:`camelot.kfa.evaluate`.
+    """
+    if ch.rotations:
+        return [(k.time, k.value) for k in ch.rotations]
+    if ch.xyz_rotations:
+        from .kfa import evaluate
+
+        key_times = sorted({k.time for group in ch.xyz_rotations for k in group})
+        # The engine interpolates the three angle tracks and composes; the
+        # viewer slerps between the quaternions we give it, which diverges
+        # between keys (Beetle's feet floated). Emit densely sampled keys
+        # (>= 30 Hz like the authored density) so the viewer follows the
+        # per-axis path: t_key = union of key times plus 1/30 s steps.
+        times = set(key_times)
+        for a, b in itertools.pairwise(key_times):
+            steps = int((b - a) * 30) + 1
+            for s in range(1, steps):
+                times.add(a + (b - a) * s / steps)
+        out = []
+        for t in sorted(times):
+            rot, _trans, _scale = evaluate(ch, t)
+            if rot is not None:
+                out.append((t, rot))
+        return out
+    return []
+
+
+def _channel_key_count(ch) -> int:
+    if ch.rotations:
+        return len(ch.rotations)
+    if ch.xyz_rotations:
+        return max((len(group) for group in ch.xyz_rotations), default=0)
+    return 0
+
+
 def native_fps(pose) -> float:
     """Authoring key rate of a KFA (15 classic, 30 CATA-era).
 
     Median rotation-key interval of the densest channel, snapped to the
     observed authoring rates (median resists sparse easing keys that would
-    fool a mean, e.g. spider_run). Falls back to 15.0 when degenerate.
+    fool a mean, e.g. spider_run). Each axis of type-4 Euler channels counts.
+    Falls back to 15.0 when degenerate.
     """
     best: list = []
     for ch in pose.channels.values():
-        if len(ch.rotations) > len(best):
-            best = list(ch.rotations)
+        keys = ch.rotations or max(ch.xyz_rotations, key=len, default=())
+        if len(keys) > len(best):
+            best = list(keys)
     if len(best) < 2:
         return 15.0
     gaps = sorted(
@@ -348,22 +392,28 @@ def animation_tracks(
     tracks = []
     for kfa_idx in sorted(mapping):
         ch = pose.channels.get(kfa_idx)
-        if ch is None or not ch.rotations:
+        if ch is None:
+            continue
+        rot_keys = _channel_rotation_keys(ch)
+        has_pos = bool(ch.translations and kfa_idx in trusted)
+        # A channel can be translation-only (Beetle's root bob has no rotation
+        # keys): dropping it left the body pinned while the legs animated —
+        # the feet floated. Serve rotation-less tracks with positions only.
+        if not rot_keys and not has_pos:
             continue
         node = names[mapping[kfa_idx]]
-        track: dict = {
-            "node": node,
-            "times": [k.time for k in ch.rotations],
-            "quats": [list(k.value) for k in ch.rotations],  # type: ignore[union-attr]
-        }
-        if ch.translations and kfa_idx in trusted:
+        track: dict = {"node": node}
+        if rot_keys:
+            track["times"] = [t for t, _q in rot_keys]
+            track["quats"] = [list(q) for _t, q in rot_keys]
+        if has_pos:
             track["ptimes"] = [k.time for k in ch.translations]
             track["positions"] = [list(k.value) for k in ch.translations]  # type: ignore[union-attr]
         tracks.append(track)
     # Refuse clips that explode the mesh under the viewer's skinning model
     # (rigs whose stored skin bind disagrees with their node tree — AfancB,
     # dracolich…): an empty track list sends the viewer to the bind pose.
-    stretch = skin_stretch(data, pose, bone_names=table)
+    stretch = skin_stretch(data, pose, bone_names=table, prefer_table=prefer_table)
     if stretch is not None and (stretch[0] > STRETCH_LIMIT_MEAN or stretch[1] > STRETCH_LIMIT_MAX):
         tracks = []
     rate, duration = 1.0, pose.duration
