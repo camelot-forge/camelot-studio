@@ -60,6 +60,22 @@ def test_unknown_figure_returns_empty(fake_client):
     assert resolve_figure_skins(client_dir, os.path.join(client_dir, "figures", "Nope.NIF")) == []
 
 
+def test_matches_monnifs_name_without_separators(tmp_path):
+    """The tables spell names differently from the files (FrostGiant)."""
+    write_mpak(str(tmp_path / "gamedata.mpk"), "gamedata.mpk", [
+        ("monsters.csv", b"Information,,,,,,\nID,name,#,Body,Head\n1,Frost Giant,10,5,0\n"),
+        ("monnifs.csv", b"Information,,NIF,Anim\nID,Textual Name,Name,Set\n10,Frost Giant,FrostGiant,1\n"),
+        ("skins.csv", b"Information,,Skin,,Archive\nID,Textual Name,Name,MULTI,Num\n5,Frost Giant,frost_giant.tga,0,3\n"),
+    ])
+    skin_dir = tmp_path / "figures" / "skins"
+    skin_dir.mkdir(parents=True)
+    dds = b"DDS " + b"\x00" * 124 + b"pixels"
+    write_mpak(str(skin_dir / "skin003.mpk"), "skin003.mpk", [("frost_giant.dds", dds)])
+    skins = resolve_figure_skins(str(tmp_path), str(tmp_path / "figures" / "Frost_Giant.NIF"))
+    assert [(s, n) for s, n, _b in skins] == [("Body", "frost_giant.tga")]
+    assert skins[0][2] == dds
+
+
 def test_missing_skin_archive_returns_empty(tmp_path):
     write_mpak(str(tmp_path / "gamedata.mpk"), "gamedata.mpk", [
         ("monsters.csv", b"Information,,NIF\nID,name,#,Body\n99,Thing,1,5\n"),

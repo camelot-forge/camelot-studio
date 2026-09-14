@@ -40,6 +40,16 @@ _SKIN_TABLES = ("skins.csv", "mskins.csv", "pskins.csv")
 _GAMEDATA = "gamedata.mpk"
 
 
+def norm_name(s: str) -> str:
+    """Case/separator-insensitive key for table name matching.
+
+    The tables spell names differently from the files (`FrostGiant` in
+    monnifs vs `Frost_Giant.NIF`, `Boar Keggars` vs `Boar_Keggers.nif`), so
+    exact string compares miss real links.
+    """
+    return "".join(ch for ch in s.lower() if ch.isalnum())
+
+
 def _read_table(client_dir: str, name: str) -> list[list[str]]:
     path = os.path.join(client_dir, _GAMEDATA)
     a = MpakArchive(path)
@@ -69,13 +79,22 @@ def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str,
     Only the slots the monster actually sets (non-zero skin IDs) are returned.
     """
     base = os.path.splitext(os.path.basename(nif_path))[0].lower()
+    base_norm = norm_name(base)
     tables = {n: _read_table(client_dir, n) for n in ("monnifs.csv", "monsters.csv", *_SKIN_TABLES)}
 
     monnifs_id = None
+    fallback = None
     for row in tables["monnifs.csv"]:
-        if len(row) > MONNIFS_NAME and row[MONNIFS_NAME].strip().lower() == base:
+        if len(row) <= MONNIFS_NAME or not row[MONNIFS_NAME].strip():
+            continue
+        name = row[MONNIFS_NAME].strip().lower()
+        if name == base:
             monnifs_id = row[0].strip()
             break
+        if fallback is None and norm_name(name) == base_norm:
+            fallback = row[0].strip()
+    if monnifs_id is None:
+        monnifs_id = fallback
     if monnifs_id is None:
         # pets / special figures are not in monnifs: fall back to the NIF's own
         # NiSourceTexture names, searching the skin archives for them.

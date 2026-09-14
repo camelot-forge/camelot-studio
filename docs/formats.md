@@ -25,7 +25,14 @@ Everything is resolved client-side through CSV tables packed in
 `monsters.csv:99 → monnifs:221 (Boar, set 12) → figures/Boar.NIF` +
 `anims.csv set 12 (Idle=320…) → animnifs:320-327 → anims/BOAR_*.kfa`.
 CSV headers span 2-3 lines; files on disk are case-insensitive to the client
-(`BOAR_idle.kfa` ↔ `boar_idle.kfa`).
+(`BOAR_idle.kfa` ↔ `boar_idle.kfa`). **Name matching is also
+separator-insensitive**: the tables spell names differently from the files
+(`FrostGiant` in monnifs vs `Frost_Giant.NIF`, `svartalfm` vs
+`Svartalf_M.NIF`), so lookups compare alphanumerics-only keys. And a few
+figures have **no monnifs row at all**: they are then linked by their
+animation *set* name (`Boar Keggars` ↔ `Boar_Keggers.nif`, including one
+edit-distance spelling variant), with the rig gates still validating the
+result.
 
 ## 2. NIF versions in the client
 

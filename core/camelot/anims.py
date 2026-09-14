@@ -55,6 +55,32 @@ def load_bone_table(figures_dir: str) -> list[str] | None:
     return [n for n in names if n] or None
 
 
+def _levenshtein1(a: str, b: str) -> bool:
+    """True when *a* and *b* differ by at most one edit (insert/delete/replace)."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    i = j = 0
+    seen = False
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+            continue
+        if seen:
+            return False
+        seen = True
+        if len(a) > len(b):
+            i += 1
+        elif len(b) > len(a):
+            j += 1
+        else:
+            i += 1
+            j += 1
+    return True
+
+
 def _score(stem: str, name: str) -> int | None:
     if stem == f"{name}_idle":
         return 0
@@ -110,7 +136,7 @@ def resolve_anim_from_gamedata(client_dir: str, nif_path: str) -> str | None:
     amazon -> ``Hoplite_Idle.kfa``, amb_bat -> ``amb_bat_fly.kfa``,
     b_avmon01 -> ``undead_idle.kfa``.
     """
-    from .gamedata import ANIMNIFS_FILE, MONNIFS_NAME, MONNIFS_SET
+    from .gamedata import ANIMNIFS_FILE, MONNIFS_NAME, MONNIFS_SET, norm_name
 
     base = os.path.splitext(os.path.basename(nif_path))[0].lower()
     try:
@@ -123,11 +149,38 @@ def resolve_anim_from_gamedata(client_dir: str, nif_path: str) -> str | None:
         return None
 
     set_ids: list[str] = []
+    fallback_sid = None
     for row in monnifs[2:]:
-        if len(row) > MONNIFS_SET and row[MONNIFS_NAME].strip().lower() == base:
+        if len(row) <= MONNIFS_SET or not row[MONNIFS_NAME].strip():
+            continue
+        name = row[MONNIFS_NAME].strip().lower()
+        if name == base:
             sid = row[MONNIFS_SET].strip()
             if sid and sid not in set_ids:
                 set_ids.append(sid)
+        elif fallback_sid is None and norm_name(name) == norm_name(base):
+            fallback_sid = row[MONNIFS_SET].strip()
+    if not set_ids and fallback_sid:
+        set_ids = [fallback_sid]
+    if not set_ids:
+        # Orphan models: no monnifs row, but the animation *set* names the
+        # figure (`Boar Keggars` vs Boar_Keggers.nif, Stingray, wolverine…).
+        # Normalised match first, then a unique one-character spelling
+        # variant (the tables say `Keggars` for `Keggers`); the rig gates
+        # still validate the result.
+        wanted = norm_name(base)
+        exact = [r[0].strip() for r in anims[2:] if r and len(r) > 1 and norm_name(r[1]) == wanted]
+        if exact:
+            set_ids = list(dict.fromkeys(exact))
+        else:
+            near = [
+                r[0].strip()
+                for r in anims[2:]
+                if r and len(r) > 1 and len(wanted) >= 6 and _levenshtein1(wanted, norm_name(r[1]))
+            ]
+            near = list(dict.fromkeys(near))
+            if len(near) == 1:
+                set_ids = near
     if not set_ids:
         return None
 

@@ -302,6 +302,50 @@ def test_boar_timing_from_client(client_dir):
     assert frames / fps == 16 / 3
 
 
+def test_anim_link_matches_monnifs_name_without_separators(tmp_path):
+    """FrostGiant in monnifs, Frost_Giant.NIF on disk: same skeleton."""
+    from camelot.anims import resolve_anim_from_gamedata
+
+    _write_gamedata(
+        tmp_path,
+        "Information,,NIF,Anim\n"
+        "ID,Textual Name,Name,Set\n"
+        "135,Frost Giant,FrostGiant,9\n",
+        ",,0,1\n"
+        "ID,name,Idle\n"
+        "9,Frost Giant,100\n",
+        "Anim,,,,\n"
+        "NIFS,name,NIF Name,frames,fps,fps,type\n"
+        "100,frost giant idle,FrostGiant_Idle.kfa,40,15,15,loop\n",
+    )
+    (tmp_path / "anims").mkdir()
+    (tmp_path / "anims" / "FrostGiant_idle.kfa").write_bytes(b"kfa")
+    got = resolve_anim_from_gamedata(str(tmp_path), str(tmp_path / "figures" / "Frost_Giant.NIF"))
+    assert got is not None and got.endswith("FrostGiant_idle.kfa")
+
+
+def test_anim_link_matches_orphan_set_name_with_typo(tmp_path):
+    """Boar_Keggers.nif has no monnifs row; the `Boar Keggars` set names it."""
+    from camelot.anims import resolve_anim_from_gamedata
+
+    _write_gamedata(
+        tmp_path,
+        "Information,,NIF,Anim\n"
+        "ID,Textual Name,Name,Set\n",
+        ",,0,1\n"
+        "ID,name,Idle,Idle2\n"
+        "425,Boar Keggars,100,101\n",
+        "Anim,,,,\n"
+        "NIFS,name,NIF Name,frames,fps,fps,type\n"
+        "100,boar keggers idle,Boar_CATA_IDLE.kfa,15,15,15,loop\n"
+        "101,other,Other_idle.kfa,15,15,15,loop\n",
+    )
+    (tmp_path / "anims").mkdir()
+    (tmp_path / "anims" / "Boar_CATA_IDLE.kfa").write_bytes(b"kfa")
+    got = resolve_anim_from_gamedata(str(tmp_path), str(tmp_path / "figures" / "Boar_Keggers.nif"))
+    assert got is not None and got.endswith("Boar_CATA_IDLE.kfa")
+
+
 def test_type4_xyz_idles_animate(client_dir):
     """Beetle (a classic mob) stores its idle as Euler tracks; it must play."""
     import os
@@ -327,6 +371,38 @@ def test_type4_xyz_idles_animate(client_dir):
             root = next(t for t in tracks["tracks"] if t["node"] == "Bip01")
             assert "quats" not in root
             assert len(root["ptimes"]) == len(root["positions"]) == 3
+
+
+def test_normalised_and_set_name_links_animate_from_client(client_dir):
+    """Names the tables spell differently, and orphan models named by their set.
+
+    Frost_Giant/Svartalf come from monnifs under another spelling;
+    Boar_Keggers (Keggars), Stingray, wolverine and the minecarts are linked
+    by their animation-set name. Boar_CATA has no such link and stays bind.
+    """
+    import os
+
+    from camelot.anims import animation_tracks, resolve_anim_from_gamedata
+
+    expected = {
+        "Frost_Giant.NIF": "FrostGiant_idle.kfa",
+        "Svartalf_M.NIF": "I_HM.kfa",
+        "Stingray.NIF": "stingray_idle.kfa",
+        "wolverine.NIF": "wolverine_IDLE.kfa",
+        "Boar_Keggers.nif": "Boar_CATA_IDLE.kfa",
+        "minecart_a.nif": "kobold_minecart_i.kfa",
+    }
+    for nif, want in expected.items():
+        path = os.path.join(client_dir, "figures", nif)
+        if not os.path.exists(path):
+            continue
+        got = resolve_anim_from_gamedata(client_dir, path)
+        assert got is not None, nif
+        assert os.path.basename(got).lower() == want.lower(), nif
+        assert len(animation_tracks(path, got, client_dir)["tracks"]) >= 5, nif
+    # no set/name link: still refused (offset subset not vetted)
+    cata = os.path.join(client_dir, "figures", "Boar_CATA.NIF")
+    assert resolve_anim_from_gamedata(client_dir, cata) is None
 
 
 def test_gamedata_links_creature_animations_from_client(client_dir):

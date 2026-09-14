@@ -63,9 +63,10 @@ pytest suite in `core/tests/` (AGENTS.md TDD rule):
 DAOC_CLIENT="/path/to/DAoC client" .venv/bin/python -m pytest core/tests -q
 ```
 
-97 tests: matrices/axis/CLI/legacy-reader/gLTF/MPAK units on synthetic
-buffers, plus corpus tests (parse expectations, kfa summaries, roundtrip,
-glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
+197 tests (131 run everywhere, 66 corpus): matrices/axis/CLI/legacy-reader/
+gLTF/MPAK/animation-mapping units on synthetic buffers, plus corpus tests
+(parse expectations, kfa summaries, roundtrip, glTF export, MPAK repack,
+grounding/skin-stretch regressions) that auto-skip without `DAOC_CLIENT`.
 
 ## Known limits
 
@@ -83,6 +84,11 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
      `sect_idle`, amazon -> `Hoplite_Idle`, amb_bat -> `amb_bat_fly`, 2HWolf
      -> `2HW_idle`…). Filename conventions + player aliases remain the
      fallback.
+   - **Name-tolerant links**: monnifs lookups match alphanumerics-only keys
+     (`FrostGiant`/`Frost_Giant.NIF`, `svartalfm`/`Svartalf_M.NIF` — these
+     gained both animation and textures), and figures without a monnifs row
+     link by their animation-set name (`Boar Keggars` ↔ `Boar_Keggers.nif`,
+     Stingray, wolverine, minecarts…), keeping the same rig gates.
    - **Gamedata-linked clips map by the engine's table** (`prefer_table`):
      offset heuristics must not judge them, since animated bones (root bob,
      clavicle breathing) drift from the bind and used to refuse
@@ -140,8 +146,8 @@ glTF export, MPAK repack) that auto-skip without `DAOC_CLIENT`.
 
 ## Next steps (priority order)
 
-1. ~~pytest suite~~ — **done**: 97 tests (unit + corpus tiers), see
-   `docs/status.md` §Testing.
+1. ~~pytest suite~~ — **done**: 197 core tests today (unit + corpus tiers,
+   plus 19 web tests), see `docs/status.md` §Testing.
 2. GitHub: org + repos created, first commits pushed; CI in place
    (`.github/workflows/ci.yml`: ruff lint + pytest on 3.11/3.12).
    Switch `camelot-studio` to public when ready.
