@@ -21,7 +21,7 @@ from .index import Asset, AssetIndex
 from .models import CharacterOptions
 
 # Export-cache schema/behaviour version (bump when export output changes).
-_EXPORT_VERSION = "11"
+_EXPORT_VERSION = "12"
 from .models import AssetDetail, AssetPage, AssetSummary, Health, RootInfo
 from .watcher import IndexWatcher
 
@@ -288,24 +288,40 @@ def build_router(config: ServeConfig, index: AssetIndex,
         skin_tone: int = 1,
     ) -> Response:
         """Fine-grained appearance update: return the *texture bytes* of the
-        one slot the change affects, so the web builder can swap it live
-        (DAoC-Tools behaviour: only the hair texture re-forms on a colour
-        change, never the whole model). Kinds that change geometry —
-        face / hair_style — fall back to a full rebuild client-side."""
+        one slot the change affects (with its engine tint in
+        ``X-Camelot-Tint`` when the sheet is tinted), so the web builder can
+        swap it live (DAoC-Tools behaviour: only the hair/face texture
+        re-forms on a colour change, never the whole model). Kinds that
+        change geometry — face / hair_style — fall back to a full rebuild
+        client-side."""
         from .. import appearance as app
         from .. import gamedata
         from ..dxt import viewer_dds
 
+        def sheet_response(name: str, raw: bytes, tint) -> Response:
+            headers = {}
+            if tint is not None:
+                headers["X-Camelot-Tint"] = ",".join(str(channel) for channel in tint)
+            return Response(content=viewer_dds(raw), media_type="image/x-dds", headers=headers)
+
+        root = str(config.root)
         if kind == "hair_color":
-            triplet = app._hair_triplets(str(config.root), race_id, hair_style)
+            triplet = app._hair_triplets(root, race_id, hair_style)
             cell = triplet[min(max(hair_color, 1), len(triplet)) - 1]
-            out = gamedata.skin_texture(str(config.root), cell[0])
+            out = gamedata.skin_texture(root, cell[0])
             if out:
-                return Response(content=viewer_dds(out[1]), media_type="image/x-dds")
-        if kind == "eye_color":
-            found = app.eye_sheet(str(config.root), race_id, eye_color)
+                tint = app.hair_tint_rgb(root, race_id, hair_style, hair_color)
+                return sheet_response(out[0], out[1], tint)
+        if kind == "skin_tone":
+            # The tone is a pure tint: the face sheet re-serves unchanged.
+            found = app.face_sheet(root, race_id, face)
             if found:
-                return Response(content=viewer_dds(found[1]), media_type="image/x-dds")
+                tint = app.skin_tint_rgb(root, race_id, skin_tone)
+                return sheet_response(found[0], found[1], tint)
+        if kind == "eye_color":
+            found = app.eye_sheet(root, race_id, eye_color)
+            if found:
+                return sheet_response(found[0], found[1], None)
         raise HTTPException(
             status_code=501,
             detail="this kind triggers a full rebuild (geometry change)",

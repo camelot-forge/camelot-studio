@@ -3,7 +3,13 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 	import { Axis3d, Grid3x3, Maximize2, Pause, Play, Rotate3d } from '@lucide/svelte';
-	import { rebindSkinnedMeshes, bindBoxOf, textureFromDds, type LoadedModel } from '$lib/gltf/load';
+	import {
+		rebindSkinnedMeshes,
+		bindBoxOf,
+		textureFromDds,
+		tintColor,
+		type LoadedModel
+	} from '$lib/gltf/load';
 	import { sampleClip, samplePositions, gameToKeyTime, type AnimClip } from '$lib/anim';
 
 	interface Props {
@@ -151,7 +157,7 @@
 				const dt = textureFromDds(tex.bytes);
 				const mat = mesh.material as THREE.MeshStandardMaterial;
 				mat.map = dt;
-				mat.color = new THREE.Color(0xffffff);
+				mat.color = tintColor(tex.tint);
 				if (tex.alpha) {
 					// Alpha-cut sheet (Catacombs hair strands): hard cut, and
 					// double-sided when the exporter flagged the mesh (fig3 hair

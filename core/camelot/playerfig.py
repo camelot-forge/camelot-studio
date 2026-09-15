@@ -110,17 +110,22 @@ def pieces_for(client_dir: str, tables, race_id: int, *, face: int = 1,
 def textures_for(client_dir: str, tables, race_id: int, female: bool,
                  *, face: int = 1, hair_style_key: int = 1,
                  hair_color: int = 1, eye_color: int = 1, skin_tone: int = 1):
-    """(slot, name, bytes) for the picked appearance."""
-    out: list[tuple[str, str, bytes]] = []
+    """`SlotTexture`s for the picked appearance (sheets + engine tints).
 
-    def add(slot: str, target: str | None):
+    The skin tone and most hair colours are tints (`fig3tints.csv`): the
+    viewer multiplies the sheet by the RGB the engines packs.
+    """
+    out: list[gamedata.SlotTexture] = []
+
+    def add(slot: str, target: tuple[str, bytes] | None, tint=None):
         if target is None:
             return
         name, raw = target
         if raw is not None:
-            out.append((slot, name, raw))
+            out.append(gamedata.SlotTexture(slot, name, raw, tint))
 
-    add("Head", app.face_sheet(client_dir, race_id, face))
+    add("Head", app.face_sheet(client_dir, race_id, face),
+        tint=app.skin_tint_rgb(client_dir, race_id, skin_tone))
     add("Eyes", app.eye_sheet(client_dir, race_id, eye_color))
     triplets = app._hair_triplets(client_dir, race_id, style=hair_style_key)
     if triplets:
@@ -131,14 +136,15 @@ def textures_for(client_dir: str, tables, race_id: int, female: bool,
         cell = chosen if chosen[0] else next(
             (t for t in triplets if t[0]), None)
 
-        add("Hair", gamedata.skin_texture(client_dir, cell[0]))
+        add("Hair", gamedata.skin_texture(client_dir, cell[0]),
+            tint=app.hair_tint_rgb(client_dir, race_id, hair_style_key, hair_color))
     for slot, stem in _SLOT_SHEETS.items():
         gendered = client_sheet(client_dir, f"{stem}_f.dds" if female
                                 else f"{stem}_m.dds")
         plain = client_sheet(client_dir, f"{stem}.dds")
         found = gendered or plain
         if found:
-            out.append((slot, found[0], found[1]))
+            out.append(gamedata.SlotTexture(slot, found[0], found[1]))
     return out
 
 

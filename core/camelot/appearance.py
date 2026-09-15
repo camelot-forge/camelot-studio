@@ -110,6 +110,53 @@ def skin_tint(client_dir: str, race_e_id: int, tone: int):
     return int(cell) if cell.isdigit() else None
 
 
+_WHITE = (255, 255, 255)
+
+
+def tint_rgb(client_dir: str, tint_id: int) -> tuple[int, int, int] | None:
+    """(Red, Green, Blue) of a `fig3tints.csv` id — the engine's packed tint.
+
+    The engine reads the three ints per row and packs them `(R<<16)+(G<<8)+B`;
+    a white tint is the no-op (the sheet keeps its authored colours).
+    """
+    for row in gamedata._read_table(client_dir, "fig3tints.csv"):
+        if len(row) < 5 or row[0].strip() != str(tint_id):
+            continue
+        try:
+            return (int(row[2]), int(row[3]), int(row[4]))
+        except ValueError:
+            return None
+    return None
+
+
+def skin_tint_rgb(client_dir: str, race_e_id: int, tone: int) -> tuple[int, int, int] | None:
+    """The skin-tone tint of (race, tone) — `fig3skincolormap` id → tints."""
+    tint_id = skin_tint(client_dir, race_e_id, tone)
+    if tint_id is None:
+        return None
+    rgb = tint_rgb(client_dir, tint_id)
+    return rgb if rgb and rgb != _WHITE else None
+
+
+def hair_tint_rgb(client_dir: str, race_e_id: int, style: int,
+                  color: int) -> tuple[int, int, int] | None:
+    """The hair-colour tint of (race, style, colour) — the triplet's T cell.
+
+    Races distribute colour differently: Saracen keeps one sheet per style and
+    varies the tint across the 16 colours, Lurikeen pre-colours the sheets and
+    ships `No tint` (white) in T.
+    """
+    triplets = _hair_triplets(client_dir, race_e_id, style)
+    if not triplets:
+        return None
+    cell = triplets[min(max(color, 1), len(triplets)) - 1]
+    raw = cell[1].strip() if len(cell) > 1 else ""
+    if not raw.isdigit():
+        return None
+    rgb = tint_rgb(client_dir, int(raw))
+    return rgb if rgb and rgb != _WHITE else None
+
+
 def decal_ids(client_dir: str, race_e_id: int):
     """The race's decal ids; the corpus alpha maps (first few races) ship empty rows."""
     out: dict[int, str] = {}

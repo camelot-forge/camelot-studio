@@ -455,11 +455,11 @@ def _hide_classic_body(data) -> list:
 
 def _attach_body(
     client_dir: str, tables: fig3.Tables, rid: int, data, reference
-) -> list[tuple[str, str, bytes]]:
+) -> list[gamedata.SlotTexture]:
     """Attach the first fig3 piece of every body slot, with its pskin sheet."""
     desc = (tables.race_desc.get(rid) or "").lower()
     female = "female" in desc
-    textures: list[tuple[str, str, bytes]] = []
+    textures: list[gamedata.SlotTexture] = []
     attached_any = False
     for slot, stem in _BODY_SLOTS:
         parts = fig3.parts_of(tables, rid, slot)
@@ -473,7 +473,7 @@ def _attach_body(
             continue
         attached_any = True
         if sheet is not None:
-            textures.append((slot, sheet[0], sheet[1]))
+            textures.append(gamedata.SlotTexture(slot, sheet[0], sheet[1]))
     return textures if attached_any else []
 
 
@@ -541,7 +541,10 @@ def prepare(client_dir: str, nif_path: str):
     if attached < 2:
         return None
     _hide_shapes(data, heads)
-    textures = [("Head", face[0], face[1]), ("Hair", hair[0], hair[1])]
+    textures = [
+        gamedata.SlotTexture("Head", face[0], face[1]),
+        gamedata.SlotTexture("Hair", hair[0], hair[1]),
+    ]
     # Smooth Catacombs body parts on the classic skeleton: the per-bone bind
     # compensation absorbs the small (≤2.5u) classic/fig3 rig offsets — each
     # bone maps through its own offset, as with the head, so the progressive
@@ -564,7 +567,7 @@ def prepare(client_dir: str, nif_path: str):
         and source_eye_vertices
         and _split_eyes(data, head_shapes[0], source_eye_vertices)
     ):
-        textures.append(("Eyes", eye[0], eye[1]))
+        textures.append(gamedata.SlotTexture("Eyes", eye[0], eye[1]))
     return data, textures
 
 
@@ -575,7 +578,7 @@ def export_figure(
     *,
     verbose: bool = False,
     emit_skinned: bool = False,
-    textures: list[tuple[str, str, bytes]] | None = None,
+    textures: list[gamedata.SlotTexture] | None = None,
     fig3_head: bool = True,
     **kwargs,
 ) -> dict:
@@ -588,7 +591,7 @@ def export_figure(
     from .mpak import MpakError
 
     data = None
-    extra: list[tuple[str, str, bytes]] = []
+    extra: list[gamedata.SlotTexture] = []
     if fig3_head:
         # Native fig3 assembly first (the live client's way); the classic
         # hybrid is the fallback for layouts no fig3 race covers.

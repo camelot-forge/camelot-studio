@@ -50,6 +50,30 @@ def test_skin_tint_varies(client_dir):
     assert app.skin_tint(client_dir, 1, 1) != app.skin_tint(client_dir, 3, 1)
 
 
+def test_tint_rgb_reads_fig3tints(client_dir):
+    # `fig3tints.csv` rows are id + name + Red + Green + Blue (engine packs
+    # them (R<<16)+(G<<8)+B); the tables also carry header rows.
+    assert app.tint_rgb(client_dir, 143) == (223, 207, 166)  # Saracen Skin 2
+    assert app.tint_rgb(client_dir, 121) == (110, 107, 59)  # Hair Tint 25
+    assert app.tint_rgb(client_dir, 188) == (255, 255, 255)  # "No tint"
+    assert app.tint_rgb(client_dir, 999999) is None
+
+
+def test_skin_tone_tints(client_dir):
+    # Saracen female tones are the ids 41 (white, no-op) then 143..149.
+    assert app.skin_tint_rgb(client_dir, 4, 1) is None
+    assert app.skin_tint_rgb(client_dir, 4, 2) == (223, 207, 166)
+    assert app.skin_tint_rgb(client_dir, 4, 8) == (24, 0, 0)
+
+
+def test_hair_colour_tints(client_dir):
+    # Saracen varies the tint across the 16 colours of a style…
+    assert app.hair_tint_rgb(client_dir, 4, 1, 1) == (145, 145, 145)
+    assert app.hair_tint_rgb(client_dir, 4, 1, 2) == (110, 107, 59)
+    # …while Lurikeen pre-colours the sheets and ships "No tint" (white).
+    assert app.hair_tint_rgb(client_dir, 18, 1, 1) is None
+
+
 def test_decal_ids_where_shipped(client_dir):
     # decalmap rows are sparse (only the Shar/Midgard tribes + 235 bp);
     # char-engine rows 7/8/31..33 carry data (pass-8 probe).

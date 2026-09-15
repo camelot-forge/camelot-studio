@@ -270,7 +270,7 @@ def test_gamedata_resolves_boar_texture(client_dir):
 
     skins = resolve_figure_skins(client_dir, _path(client_dir, "figures/Boar.NIF"))
     assert skins, "expected at least one skin texture for the Boar"
-    slot, _name, data = skins[0]
+    slot, _name, data = skins[0][:3]
     assert slot == "Body"
     assert data[:4] == b"DDS "
 
@@ -280,9 +280,9 @@ def test_gamedata_resolves_multi_slot(client_dir):
     from camelot.gamedata import resolve_figure_skins
 
     skins = resolve_figure_skins(client_dir, _path(client_dir, "figures/2HDragon.NIF"))
-    slots = {s for s, _, _ in skins}
+    slots = {s.slot for s in skins}
     assert {"Body", "Head", "Arms"} <= slots
-    assert all(d[:4] == b"DDS " for _, _, d in skins)
+    assert all(s.data[:4] == b"DDS " for s in skins)
 
 
 def test_gamedata_nif_name_fallback(client_dir):

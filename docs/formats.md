@@ -123,6 +123,15 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   fig3 hair/beard UVs may leave the unit square (Highlander male beard:
   v ≈ -0.9) — Gamebryo wraps them, so viewers must sample with wrap; the
   three.js clamp default smears the edge texel over the beard.
+  **Tints** (`fig3tints.csv`: id + name + Red/Green/Blue; the engine packs
+  them `(R<<16)+(G<<8)+B`) are per-slot *multiplicative* colours:
+  `fig3skincolormap` rows (8 per race) are tint ids applied to the face
+  sheet (tone 1 is usually the white no-op), and each `fig3haircolormap`
+  triplet's T is the hair tint — races differ (Saracen keeps one sheet per
+  style and varies T across the 16 colours; Lurikeen pre-colours the sheets
+  and ships "No tint" white in T). The exporter carries the tint on the
+  slot's `CS_camelot_texture` (`tint: [r, g, b]`) and the viewer multiplies
+  the sheet by it.
 - **Only some hair styles have colour sheets** (Avalonian male: style 4;
   Highlander female: 2 and 4; Inconnu male: 2-4; Saracen female: 1-4), and
   `fig3haircolormap.csv` even points some race/style rows at another style's

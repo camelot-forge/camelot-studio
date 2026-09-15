@@ -211,9 +211,14 @@ classification/selection.
    weight), with the default face, hair sheet (colour map, `_dkbrown`)
    and eye sheet (`fig3eyecolormap`, split into its own `Eyes` mesh).
    Merged-mesh undead/zombie models (single "Editable Mesh") and NPC/
-   class models keep their classic geometry; face/hair/eye pickers and
-   armor material textures (`pskins`) are next (see
-   `workspace/notes/player-character-builder.md`).
+   class models keep their classic geometry. The `/builder` web route
+   drives the appearance pickers (race/gender, face, hair style/colour,
+   eye colour, skin tone, cloak) against the `/character/…` endpoints:
+   geometry changes rebuild, colour changes re-texture one slot live
+   (the route returns the sheet plus the engine tint in `X-Camelot-Tint`
+   — skin tones and tint-based hair colours are the `fig3tints.csv`
+   multiply the viewer applies). Armor material textures (`pskins`) are
+   next (see `workspace/notes/player-character-builder.md`).
 6. M2: Blender addon + server-bridge (artifact injection, in-game testing).
 
 ## Command cheat sheet

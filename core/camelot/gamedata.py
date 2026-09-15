@@ -27,8 +27,24 @@ from __future__ import annotations
 import csv
 import io
 import os
+from typing import NamedTuple
 
 from .mpak import MpakArchive
+
+
+class SlotTexture(NamedTuple):
+    """One sheet to embed: export slot, file name, DDS bytes, optional tint.
+
+    The tint is the engine's packed per-slot colour (``fig3tints.csv``):
+    the viewer *multiplies* the sheet by it, which is how the client paints
+    skin tones and most hair colours.
+    """
+
+    slot: str
+    name: str
+    data: bytes
+    tint: tuple[int, int, int] | None = None
+
 
 # Column indices (the CSVs carry two header rows: a group row then names).
 MONNIFS_DESC = 1
@@ -191,8 +207,8 @@ def figure_desc(client_dir: str, nif_path: str) -> str | None:
     return fallback
 
 
-def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str, bytes]]:
-    """Resolve a figure's skin textures -> [(slot, name, dds_bytes), ...].
+def resolve_figure_skins(client_dir: str, nif_path: str) -> list[SlotTexture]:
+    """Resolve a figure's skin sheets -> [SlotTexture, ...] (no tints).
 
     Only the slots the monster actually sets (non-zero skin IDs) are returned.
     """
@@ -226,7 +242,7 @@ def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str,
     if monster is None:
         return _resolve_from_nif_names(client_dir, nif_path)
 
-    out: list[tuple[str, str, bytes]] = []
+    out: list[SlotTexture] = []
     for slot, idx in MONSTERS_SLOTS.items():
         skin_id = monster[idx].strip() if len(monster) > idx else ""
         if skin_id in ("", "0"):
@@ -235,7 +251,7 @@ def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str,
         if found is None:
             continue
         tex_name, data = found
-        out.append((slot, tex_name, data))
+        out.append(SlotTexture(slot, tex_name, data))
     return out or _resolve_from_nif_names(client_dir, nif_path)
 
 
@@ -256,12 +272,12 @@ def _nif_texture_names(nif_path: str) -> list[str]:
     return names
 
 
-def _resolve_from_nif_names(client_dir: str, nif_path: str) -> list[tuple[str, str, bytes]]:
+def _resolve_from_nif_names(client_dir: str, nif_path: str) -> list[SlotTexture]:
     names = _nif_texture_names(nif_path)
     if not names:
         return []
     bases = {os.path.splitext(n)[0].lower(): n for n in names}
-    out: list[tuple[str, str, bytes]] = []
+    out: list[SlotTexture] = []
     seen: set[str] = set()
     for sub in _TEXTURE_DIRS:
         root = os.path.join(client_dir, *sub)
@@ -276,7 +292,7 @@ def _resolve_from_nif_names(client_dir: str, nif_path: str) -> list[tuple[str, s
                     stem = os.path.splitext(entry)[0].lower()
                     if stem in bases and stem not in seen:
                         seen.add(stem)
-                        out.append(("Body", bases[stem], a.read(entry)))
+                        out.append(SlotTexture("Body", bases[stem], a.read(entry)))
             finally:
                 a.close()
     return out

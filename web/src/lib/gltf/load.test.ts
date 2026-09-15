@@ -132,6 +132,29 @@ function makeA8r8g8b8Dds(width: number, height: number): ArrayBuffer {
 	return out.buffer;
 }
 
+describe('extractMeshTextures', () => {
+	it('reads the engine tint out of CS_camelot_texture', () => {
+		const bin = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+		const gltf = {
+			meshes: [
+				{
+					extensions: {
+						CS_camelot_texture: {
+							bufferView: 0,
+							name: 'face.dds',
+							tint: [223, 207, 166]
+						}
+					}
+				}
+			],
+			bufferViews: [{ byteOffset: 2, byteLength: 4 }]
+		};
+		const out = extractMeshTextures(gltf, bin.buffer);
+		expect(out.get(0)?.tint).toEqual([223, 207, 166]);
+		expect([...new Uint8Array(out.get(0)!.bytes)]).toEqual([3, 4, 5, 6]);
+	});
+});
+
 describe('textureFromDds', () => {
 	it('decodes the server A8R8G8B8 DDS into an uncompressed RGBA texture', () => {
 		const tex = textureFromDds(makeA8r8g8b8Dds(4, 4));

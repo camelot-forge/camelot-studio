@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from .dxt import viewer_dds
+from .gamedata import SlotTexture
 from .nifutil import (
     mat4_axis,
     mat4_identity,
@@ -765,7 +766,7 @@ def export_gltf(
     emit_skinned: bool = False,
     texture: str | None = None,
     texture_data: tuple[str, bytes] | None = None,
-    textures: list[tuple[str, str, bytes]] | None = None,
+    textures: list[SlotTexture] | None = None,
     pose=None,
     pose_time: float = 0.0,
     bake_pose: bool = False,
@@ -1226,15 +1227,15 @@ def export_gltf(
     # standard glTF images. Embed each skin-slot DDS as a bufferView and map
     # every mesh node to its slot (by node name: body/head/arms/...); the
     # viewer loads it with three.js DDSLoader. GLTFLoader ignores the views.
-    tex_list = list(textures or [])
+    tex_list = [t if isinstance(t, SlotTexture) else SlotTexture(*t) for t in (textures or [])]
     if texture:
         with open(texture, "rb") as fh:
-            tex_list.append(("Body", os.path.basename(texture), fh.read()))
+            tex_list.append(SlotTexture("Body", os.path.basename(texture), fh.read()))
     elif texture_data is not None:
-        tex_list.append(("Body", texture_data[0], texture_data[1]))
+        tex_list.append(SlotTexture("Body", texture_data[0], texture_data[1]))
 
-    slot_views: dict[str, tuple[int, str]] = {}
-    for slot, name, data in tex_list:
+    slot_views: dict[str, tuple[int, str, tuple[int, int, int] | None]] = {}
+    for slot, name, data, tint in tex_list:
         if slot in slot_views:
             continue
         # DXT1 sheets cutting texels with 1-bit alpha must not reach the
@@ -1246,7 +1247,7 @@ def export_gltf(
         buf.views.append({"buffer": 0, "byteOffset": buf.size, "byteLength": len(data)})
         buf.chunks.append(data)
         buf.size += len(data)
-        slot_views[slot] = (vi, name)
+        slot_views[slot] = (vi, name, tint)
 
     parent: dict[int, int] = {}
     for i, ch in enumerate(children):
@@ -1270,8 +1271,12 @@ def export_gltf(
         gltf_nodes[node]["mesh"] = k
         if slot_views:
             slot = _mesh_slot(node)
-            vi, nm = slot_views[slot]
+            vi, nm, tint = slot_views[slot]
             ext = {"bufferView": vi, "name": nm}
+            if tint is not None:
+                # Engine tint (`fig3tints.csv`): the viewer multiplies the
+                # sheet by it (skin tones, tint-based hair colours).
+                ext["tint"] = list(tint)
             if slot == "Hair":
                 # Catacombs hair sheets carry 1-bit/smooth alpha (strand cuts)
                 # and the fig3 hair mesh is authored double-sided (fig3parts

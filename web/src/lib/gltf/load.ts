@@ -20,6 +20,17 @@ export interface LoadedTexture {
 	alpha?: boolean;
 	// Fig3 hair meshes are authored double-sided (fig3parts "Double Sided").
 	doubleSided?: boolean;
+	// Engine tint (`fig3tints.csv`, R/G/B 0-255): the viewer multiplies the
+	// sheet by it (skin tones, tint-based hair colours).
+	tint?: [number, number, number];
+}
+
+// Engine sheet tint -> material multiply colour. DAoC tints are authored in
+// display space and three works in linear space, so convert like any colour.
+export function tintColor(tint?: [number, number, number]): THREE.Color {
+	const color = new THREE.Color(0xffffff);
+	if (tint) color.setRGB(tint[0] / 255, tint[1] / 255, tint[2] / 255, THREE.SRGBColorSpace);
+	return color;
 }
 
 // Player base figures stack every equipment variant as separate meshes; the
@@ -80,14 +91,18 @@ export function textureFromDds(bytes: ArrayBuffer): THREE.Texture {
 // Re-apply a single slot's texture from a URL: the builder's fine-grained
 // update path (DAoC Tools swaps the *texture* too when only the hair colour
 // changes — no full model reload). Throws on HTTP failure so the caller can
-// fall back to a full rebuild.
+// fall back to a full rebuild. The route carries the engine tint of the
+// sheet in X-Camelot-Tint (skin tones and tint-based hair colours).
 async function loadDdsIntoMesh(mesh: THREE.Mesh, url: string): Promise<void> {
 	const res = await fetch(url);
 	if (!res.ok) throw new Error(`texture swap failed (${res.status})`);
+	const header = res.headers.get('x-camelot-tint');
+	const tint = header ? (header.split(',').map(Number) as [number, number, number]) : undefined;
 	const tex = textureFromDds(await res.arrayBuffer());
 	const mat = mesh.material as THREE.MeshStandardMaterial;
 	mat.map?.dispose();
 	mat.map = tex;
+	mat.color = tintColor(tint);
 	mat.needsUpdate = true;
 }
 
@@ -234,7 +249,13 @@ export function extractMeshTextures(
 		const ext = (
 			mesh.extensions as Record<
 				string,
-				{ bufferView: number; name?: string; alpha?: boolean; doubleSided?: boolean }
+				{
+					bufferView: number;
+					name?: string;
+					alpha?: boolean;
+					doubleSided?: boolean;
+					tint?: [number, number, number];
+				}
 			>
 		)?.CS_camelot_texture;
 		if (!ext) return;
@@ -245,7 +266,8 @@ export function extractMeshTextures(
 			name: ext.name ?? 'texture',
 			bytes: binBytes.slice(off, off + bv.byteLength),
 			alpha: ext.alpha,
-			doubleSided: ext.doubleSided
+			doubleSided: ext.doubleSided,
+			tint: ext.tint
 		});
 	});
 	return out;

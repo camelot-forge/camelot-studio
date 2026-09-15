@@ -49,7 +49,7 @@ def test_resolves_monster_texture(fake_client):
     client_dir, dds = fake_client
     skins = resolve_figure_skins(client_dir, os.path.join(client_dir, "figures", "Boar.NIF"))
     assert len(skins) == 1
-    slot, name, data = skins[0]
+    slot, name, data = skins[0][:3]
     assert slot == "Body"
     assert name == "boar.tga"
     assert data == dds
@@ -72,7 +72,7 @@ def test_matches_monnifs_name_without_separators(tmp_path):
     dds = b"DDS " + b"\x00" * 124 + b"pixels"
     write_mpak(str(skin_dir / "skin003.mpk"), "skin003.mpk", [("frost_giant.dds", dds)])
     skins = resolve_figure_skins(str(tmp_path), str(tmp_path / "figures" / "Frost_Giant.NIF"))
-    assert [(s, n) for s, n, _b in skins] == [("Body", "frost_giant.tga")]
+    assert [(s.slot, s.name) for s in skins] == [("Body", "frost_giant.tga")]
     assert skins[0][2] == dds
 
 

@@ -68,10 +68,10 @@
 		await rebuild();
 	}
 
-	async function swapTexture(kind: 'hair_style' | 'hair_color' | 'eye_color' | 'skin_tone') {
-		// The server exposes a per-slot texture swap route; re-apply the
-		// single texture to the live scene (same trick DAoC Tools uses for
-		// hair-colour changes).
+	async function swapTexture(kind: 'hair_color' | 'eye_color' | 'skin_tone') {
+		// The server exposes a per-slot texture swap route (sheet + engine
+		// tint header); re-apply the single texture to the live scene (the
+		// same trick DAoC Tools uses for hair-colour changes).
 		if (!model) return;
 		const url = api.characterTextureUrl(raceId, female, {
 			face: face,
@@ -81,7 +81,7 @@
 			skin_tone: skinTone,
 			kind
 		});
-		const slot = kind === 'hair_color' ? 'Hair' : 'Eyes';
+		const slot = { hair_color: 'Hair', eye_color: 'Eyes', skin_tone: 'Head' }[kind];
 		await model.swapSlotTexture?.(slot, url).catch(() => rebuild());
 	}
 
@@ -214,7 +214,7 @@
 									`Tone ${v}/${(raceOptions as CharacterOptions | null)?.skin_tones ?? OPT_FALLBACK.skin_tones}`}
 								onchange={(v: number) => {
 									skinTone = v;
-									rebuild();
+									swapTexture('skin_tone');
 								}}
 							/>
 						</div>

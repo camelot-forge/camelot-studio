@@ -3,7 +3,13 @@
 	import * as THREE from 'three';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-	import { loadFromGlb, rebindSkinnedMeshes, bindBoxOf, textureFromDds } from '$lib/gltf/load';
+	import {
+		loadFromGlb,
+		rebindSkinnedMeshes,
+		bindBoxOf,
+		textureFromDds,
+		tintColor
+	} from '$lib/gltf/load';
 	import { sampleClip, samplePositions, gameToKeyTime, type AnimClip } from '$lib/anim';
 
 	// Diagnostic page: /render?glb=<url> draws a model with fixed axes/grid so
@@ -138,7 +144,7 @@
 				const dt = textureFromDds(tex.bytes);
 				const mat = mesh.material as THREE.MeshStandardMaterial;
 				mat.map = dt;
-				mat.color = new THREE.Color(0xffffff);
+				mat.color = tintColor(tex.tint);
 				// glTF's default material is fully metallic; without an env
 				// map that renders near-black. Match the Viewer's shading.
 				mat.metalness = 0.05;

@@ -135,7 +135,7 @@ def test_prepare_swaps_the_classic_head(client_dir):
     prepared = figure.prepare(client_dir, os.path.join(client_dir, SARACEN))
     assert prepared is not None
     data, textures = prepared
-    slots = {name: tex for name, tex, _ in textures}
+    slots = {tex.slot: tex.name for tex in textures}
     assert {"Head", "Hair", "Eyes"} <= set(slots)
     assert slots["Head"].lower() == "sar_f_head01.dds"
     assert slots["Hair"].lower().startswith("sar_f_hair01")
@@ -147,12 +147,12 @@ def test_prepare_assembles_the_fig3_body(client_dir):
     prepared = figure.prepare(client_dir, os.path.join(client_dir, SARACEN))
     assert prepared is not None
     data, textures = prepared
-    slots = {name for name, _t, _b in textures}
+    slots = {tex.slot for tex in textures}
     for slot in ("Body", "Legs", "Boots", "Arms", "Gloves"):
         assert slot in slots, f"{slot}: no fig3 piece attached"
         assert figure._shapes_named(data, slot) if hasattr(figure, "_shapes_named") else True
     assert _shapes_named(data, "Body") and _shapes_named(data, "Gloves")
-    tex_by_slot = {n: t for n, t, _b in textures}
+    tex_by_slot = {tex.slot: tex.name for tex in textures}
     assert tex_by_slot["Body"].lower() == "cthbody01_01_f.dds"
     assert tex_by_slot["Gloves"].lower() == "leagloves01_01.dds"
 
@@ -180,7 +180,7 @@ def test_prepare_covers_player_figures(client_dir, nif):
     prepared = figure.prepare(client_dir, os.path.join(client_dir, "figures", nif))
     assert prepared is not None, f"{nif}: fig3 head assembly failed"
     data, textures = prepared
-    names = [name for name, _tex, _b in textures]
+    names = [tex.slot for tex in textures]
     assert names[:2] == ["Head", "Hair"]
     assert "Eyes" in names
     assert figure.has_classic_heads(data) is False
@@ -294,7 +294,7 @@ def test_playerfig_assembles_the_lbody_slot(client_dir):
     assert prepared is not None
     data, textures = prepared
     assert _shapes_named(data, "Lbody"), "LBody piece was not attached"
-    assert "Lbody" in {name for name, _tex, _bytes in textures}
+    assert "Lbody" in {tex.slot for tex in textures}
     # races with an empty fig3map LBody row attach no phantom mesh
     saracen, _textures = playerfig.build(client_dir, "Saracen Female")
     assert not _shapes_named(saracen, "Lbody")
