@@ -3,7 +3,7 @@
 	import * as THREE from 'three';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-	import { loadFromGlb, rebindSkinnedMeshes, bindBoxOf } from '$lib/gltf/load';
+	import { loadFromGlb, rebindSkinnedMeshes, bindBoxOf, textureFromDds } from '$lib/gltf/load';
 	import { sampleClip, samplePositions, gameToKeyTime, type AnimClip } from '$lib/anim';
 
 	// Diagnostic page: /render?glb=<url> draws a model with fixed axes/grid so
@@ -130,21 +130,42 @@
 			scl: root.scale.toArray().map((x) => +x.toFixed(6))
 		};
 		rebindSkinnedMeshes(scene);
-		const flatShading = params.get('flat') === '1';
-		root.traverse((obj) => {
-			const mesh = obj as THREE.Mesh;
-			if (mesh.isMesh) {
-				mesh.material = flatShading
-					? new THREE.MeshBasicMaterial({ color: 0x9fd8c8, side: THREE.DoubleSide })
-					: new THREE.MeshStandardMaterial({
-							color: 0x9fd8c8,
-							flatShading: true,
-							side: THREE.DoubleSide
-						});
-				const skinned = obj as THREE.SkinnedMesh;
-				if (skinned.isSkinnedMesh) skinned.normalizeSkinWeights();
+		// ?textured=1 keeps the embedded DAoC DDS textures (same path as the
+		// Viewer) so head/face texture regressions can be validated headlessly;
+		// otherwise every mesh is overridden with a solid diagnostic colour.
+		if (params.get('textured') === '1' && model.meshTextures.size) {
+			for (const [mesh, tex] of model.meshTextures) {
+				const dt = textureFromDds(tex.bytes);
+				const mat = mesh.material as THREE.MeshStandardMaterial;
+				mat.map = dt;
+				mat.color = new THREE.Color(0xffffff);
+				// glTF's default material is fully metallic; without an env
+				// map that renders near-black. Match the Viewer's shading.
+				mat.metalness = 0.05;
+				mat.roughness = 0.9;
+				if (tex.alpha) {
+					mat.alphaTest = 0.5;
+					mat.side = tex.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+				}
+				mat.needsUpdate = true;
 			}
-		});
+		} else {
+			const flatShading = params.get('flat') === '1';
+			root.traverse((obj) => {
+				const mesh = obj as THREE.Mesh;
+				if (mesh.isMesh) {
+					mesh.material = flatShading
+						? new THREE.MeshBasicMaterial({ color: 0x9fd8c8, side: THREE.DoubleSide })
+						: new THREE.MeshStandardMaterial({
+								color: 0x9fd8c8,
+								flatShading: false,
+								side: THREE.DoubleSide
+							});
+					const skinned = obj as THREE.SkinnedMesh;
+					if (skinned.isSkinnedMesh) skinned.normalizeSkinWeights();
+				}
+			});
+		}
 		const posedJoints = clip ? applyPoseAt(Number.isFinite(at) ? at : 0) : 0;
 		if (clip) root.updateMatrixWorld(true);
 
@@ -155,9 +176,22 @@
 		const center = box.getCenter(new THREE.Vector3());
 		const size = box.getSize(new THREE.Vector3());
 		const radius = Math.max(size.length() / 2, 1);
+		let target = center;
 		if (params.get('fixedcam') === '1') {
 			camera.position.set(90, 70, 150);
 			camera.lookAt(0, 18, 8);
+			target = new THREE.Vector3(0, 18, 8);
+		} else if (params.get('focus') === 'head') {
+			// Close-up on the head bone: head/hair regressions are invisible
+			// in a full-body shot.
+			const head =
+				root.getObjectByName('Bip01 Head') ??
+				root.getObjectByName('Bip01_Head') ??
+				root.getObjectByName('Head');
+			target = head ? new THREE.Vector3().setFromMatrixPosition(head.matrixWorld) : center;
+			const d = Math.max(size.length() * 0.3, 1e-3);
+			camera.position.set(target.x + d * 0.45, target.y + d * 0.12, target.z + d);
+			camera.lookAt(target);
 		} else {
 			camera.position.set(center.x + radius, center.y + radius * 0.6, center.z + radius);
 			camera.lookAt(center);
@@ -165,7 +199,7 @@
 		renderer.render(scene, camera);
 
 		const controls = new OrbitControls(camera, canvas);
-		controls.target.copy(center);
+		controls.target.copy(target);
 		controls.update();
 		const loop = () => {
 			requestAnimationFrame(loop);
@@ -187,9 +221,11 @@
 			__posed?: number;
 		};
 		win.__ready = true;
+		(window as unknown as { __scene?: object }).__scene = scene;
 		win.__dims = [wsize.x, wsize.y, wsize.z];
 		win.__center = [wcenter.x, wcenter.y, wcenter.z];
 		win.__posed = posedJoints;
+		(window as unknown as { __textures?: number }).__textures = model.meshTextures.size;
 
 		// Diagnostic (?debug=1): true deformed bounds via a CPU skinning
 		// replicate (Box3 ignores GPU skinning), for the anim_check harness.

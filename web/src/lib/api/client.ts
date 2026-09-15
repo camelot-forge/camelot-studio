@@ -37,6 +37,19 @@ export interface AssetDetail extends AssetSummary {
 	metadata: Record<string, unknown>;
 }
 
+export interface CharacterOptions {
+	race: string;
+	race_id: number;
+	female: boolean;
+	faces: number;
+	hair_styles: number;
+	hair_colors: number;
+	eye_colors: number;
+	skin_tones: number;
+	has_decal: boolean;
+	cloak_variants: number;
+}
+
 export interface AssetPage {
 	items: AssetSummary[];
 	total: number;
@@ -120,6 +133,22 @@ export const api = {
 		`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/model${skinned ? '?skinned=true' : ''}`,
 	skinUrl: (id: string) => `${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/skin`,
 	animUrl: (id: string) => `${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim`,
+	characterOptions: (raceId: number, female: boolean, signal?: AbortSignal) =>
+		get<CharacterOptions>(`/character/${raceId}/${female ? 'true' : 'false'}/options`, signal),
+	characterTextureUrl: (
+		raceId: number,
+		female: boolean,
+		appearance: Record<string, string | number>
+	) => {
+		const qs = new URLSearchParams();
+		for (const [k, v] of Object.entries(appearance)) qs.set(k, String(v));
+		return `${getApiBase()}/api/v1/character/${raceId}/${female ? 'true' : 'false'}/texture?${qs}`;
+	},
+	characterModelUrl: (raceId: number, female: boolean, appearance: Record<string, number>) => {
+		const qs = new URLSearchParams();
+		for (const [k, v] of Object.entries(appearance)) qs.set(k, String(v));
+		return `${getApiBase()}/api/v1/character/${raceId}/${female ? 'true' : 'false'}/model?${qs}`;
+	},
 	anim: async (id: string, signal?: AbortSignal): Promise<AnimClip | null> => {
 		const res = await fetch(`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim`, {
 			signal

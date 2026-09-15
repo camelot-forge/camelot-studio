@@ -35,6 +35,34 @@ class CamelotFormatError(ValueError):
     """Raised when a DAoC-format file cannot be read or written."""
 
 
+def skin_transform_matrix(entry) -> list[list[float]]:
+    """Stored NiSkinData bone transform S (skin space -> bone space).
+
+    Row-major lists from our legacy reader, or a pyffi ``SkinTransform``
+    whose Matrix33 goes through :func:`nif_rot_cell`. This is the transform
+    the engine actually uses; for most files it equals
+    ``inv(boneBind) * meshWorld``, but some rigs (AfancB by 302 units) store
+    a different bind — see docs/formats.md §3.
+    """
+    t = entry["transform"] if isinstance(entry, dict) else getattr(entry, "skin_transform", None)
+    m = mat4_identity()
+    if isinstance(t, (tuple, list)):  # legacy reader: (row-major mat33, vec3, scale)
+        r, tv, s = t
+        for i in range(3):
+            for j in range(3):
+                m[i][j] = float(r[i][j]) * float(s)
+            m[i][3] = float(tv[i])
+        return m
+    if t is None or not hasattr(t, "rotation"):
+        return m
+    rot, tv, s = t.rotation, vec3(t.translation), float(t.scale)
+    for i in range(3):
+        for j in range(3):
+            m[i][j] = nif_rot_cell(rot, i, j) * s
+        m[i][3] = tv[i]
+    return m
+
+
 def load(path: str) -> NifFormat.Data:
     data = NifFormat.Data()
     import contextlib

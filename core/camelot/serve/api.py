@@ -18,6 +18,12 @@ from ..mpak import MpakArchive, MpakError
 from .cache import read_json, write_json
 from .config import ServeConfig
 from .index import Asset, AssetIndex
+from .models import CharacterOptions
+
+# Export-cache schema/behaviour version (bump when export output changes).
+# Experiment hook: the anchor variant joins the key so each CAMELOT_HEAD_ANCHOR
+# value gets its own cache slot during the head-anchor measurements.
+_EXPORT_VERSION = f"11-{__import__('os').environ.get('CAMELOT_HEAD_ANCHOR', 'neck')}"
 from .models import AssetDetail, AssetPage, AssetSummary, Health, RootInfo
 from .watcher import IndexWatcher
 
@@ -114,23 +120,25 @@ def _metadata(config: ServeConfig, asset: Asset, tmpdir: str) -> dict[str, Any]:
 def _export_model(
     config: ServeConfig, asset: Asset, tmpdir: str, skinned: bool = False
 ) -> tuple[bytes, bytes]:
-    """Export *asset* to (glb_bytes, skin_json_bytes), with auto textures."""
-    from ..gltf import export_gltf
+    """Export *asset* to (glb_bytes, skin_json_bytes), with auto textures.
+
+    Player base figures go through :func:`camelot.figure.export_figure`, which
+    swaps the classic head shells for the Catacombs fig3 head/hair when the
+    client archives carry them; every other asset exports directly.
+    """
+    from ..figure import export_figure
 
     source = _materialize(config, asset, tmpdir)
     out_prefix = str(Path(tmpdir) / "model")
 
-    textures = None
-    try:
-        from ..gamedata import resolve_figure_skins
-
-        skins = resolve_figure_skins(str(config.root), source)
-        if skins:
-            textures = list(skins)
-    except (MpakError, OSError, ValueError, KeyError, IndexError):
-        textures = None
-
-    export_gltf(source, out_prefix, verbose=False, textures=textures, emit_skinned=skinned)
+    export_figure(
+        str(config.root),
+        source,
+        out_prefix,
+        verbose=False,
+        emit_skinned=skinned,
+        fig3_head=os.environ.get("CAMELOT_HEAD_ANCHOR", "neck") != "classic",
+    )
     gltf = json.loads(Path(out_prefix + ".gltf").read_text(encoding="utf-8"))
     bin_bytes = Path(out_prefix + ".bin").read_bytes()
     skin_path = Path(out_prefix + ".skin.json")
@@ -139,7 +147,12 @@ def _export_model(
 
 
 def _cached_model(config: ServeConfig, asset: Asset, skinned: bool = False) -> tuple[bytes, bytes]:
-    """Export with a disk cache keyed on the source mtime (and skin flag)."""
+    """Export with a disk cache keyed on the source mtime (and skin flag).
+
+    ``_EXPORT_VERSION`` must be bumped whenever the exported glTF changes
+    (e.g. the fig3 player-head assembly): the source mtime alone would keep
+    serving stale models built by an older exporter.
+    """
     out_dir = config.cache_dir / "exports"
     suffix = ".skinned" if skinned else ""
     glb_path = out_dir / f"{asset.id}{suffix}.glb"
@@ -150,6 +163,7 @@ def _cached_model(config: ServeConfig, asset: Asset, skinned: bool = False) -> t
     if (
         isinstance(meta, dict)
         and meta.get("mtime") == asset.mtime
+        and meta.get("exporter") == _EXPORT_VERSION
         and glb_path.exists()
         and skin_path.exists()
     ):
@@ -160,7 +174,15 @@ def _cached_model(config: ServeConfig, asset: Asset, skinned: bool = False) -> t
     out_dir.mkdir(parents=True, exist_ok=True)
     glb_path.write_bytes(glb)
     skin_path.write_bytes(skin)
-    write_json(meta_path, {"mtime": asset.mtime, "size": asset.size, "version": __version__})
+    write_json(
+        meta_path,
+        {
+            "mtime": asset.mtime,
+            "size": asset.size,
+            "version": __version__,
+            "exporter": _EXPORT_VERSION,
+        },
+    )
     return glb, skin
 
 
@@ -170,6 +192,127 @@ def _cached_model(config: ServeConfig, asset: Asset, skinned: bool = False) -> t
 def build_router(config: ServeConfig, index: AssetIndex,
                  watcher: IndexWatcher | None = None) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
+
+    @router.get("/character/{race_id}/{female}/options", response_model=CharacterOptions)
+    def character_options(race_id: int, female: bool) -> CharacterOptions:
+        """The appearance-picker shape of one (race, gender) — counts straight
+        from the client's `fig3descriptions`/`fig3*colormap` tables."""
+        from .. import appearance as app
+        from .. import fig3
+
+        tables = fig3.read_tables(str(config.root))
+        desc = tables.race_desc.get(race_id)
+        if desc is None or ("female" in desc.lower()) != female:
+            raise HTTPException(status_code=404, detail="unknown race")
+        hair_styles = len(fig3.parts_of(tables, race_id, "Hair"))
+        cloak_variants = len(fig3.parts_of(tables, race_id, "Cloak"))
+        body_variants = len(fig3.parts_of(tables, race_id, "Body"))
+        triplets = app._hair_triplets(str(config.root), race_id, 1)
+        face_row = app._facemap(str(config.root)).get(race_id, [])
+        faces = max(1, len([c for c in face_row[2:] if c.strip()])) if face_row else 1
+        skin_row = app._skincolormap(str(config.root)).get(race_id, None)
+        skin_tones = len([c for c in skin_row[2:] if c.strip()]) if skin_row else 0
+        eye_row = app._eyecolormap(str(config.root)).get(race_id, None)
+        eye_colors = (
+            len([c for c in eye_row[2:] if c.strip()]) if eye_row else 0
+        )
+        decals = app.decal_ids(str(config.root), race_id)
+        return CharacterOptions(
+            race=desc,
+            race_id=race_id,
+            female=female,
+            faces=faces,
+            hair_styles=hair_styles,
+            hair_colors=len(triplets) or 0,
+            eye_colors=eye_colors,
+            skin_tones=skin_tones,
+            has_decal=bool(decals),
+            cloak_variants=cloak_variants,
+            body_variants=body_variants,
+        )
+
+    @router.get("/character/{race_id}/{female}/model")
+    def character_model(
+        race_id: int,
+        female: bool,
+        face: int = 1,
+        hair_style: int = 1,
+        hair_color: int = 1,
+        eye_color: int = 1,
+        skin_tone: int = 1,
+        cloak: int = 0,
+    ) -> Response:
+        """A preview glb of a player figure assembled with the appearance
+        picked: rig from the client sfig archives; pieces by slot; sheets
+        from the colormaps; textures through pskins (§8.15 doctrine)."""
+        import tempfile
+        from pathlib import Path as _Path
+
+        from .. import fig3
+        from ..gltf import export_gltf
+        from ..playerfig import build as build_figure
+
+        tables = fig3.read_tables(str(config.root))
+        desc = tables.race_desc.get(race_id)
+        if desc is None or ("female" in desc.lower()) != female:
+            raise HTTPException(status_code=404, detail="unknown race")
+        appearance = {
+            "face": face,
+            "hair_style": hair_style,
+            "hair_color": hair_color,
+            "eye_color": eye_color,
+            "skin_tone": skin_tone,
+            "cloak": cloak,
+        }
+        try:
+            prepared = build_figure(str(config.root), desc, **appearance)
+        except (MpakError, OSError, ValueError, AttributeError, KeyError, IndexError):
+            prepared = None
+        if prepared is None:
+            raise HTTPException(status_code=500, detail="assembly failed")
+        data, textures = prepared
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = str(_Path(tmpdir) / "preview")
+            export_gltf("character-preview.nif", out, data=data, textures=textures)
+            glb_doc = json.loads(Path(out + ".gltf").read_text())
+            glb_bin = Path(out + ".bin").read_bytes()
+        return Response(content=pack_glb(glb_doc, glb_bin),
+                            media_type="model/gltf-binary")
+
+    @router.get("/character/{race_id}/{female}/texture")
+    def character_texture(
+        race_id: int,
+        female: bool,
+        kind: str,
+        face: int = 1,
+        hair_style: int = 1,
+        hair_color: int = 1,
+        eye_color: int = 1,
+        skin_tone: int = 1,
+    ) -> Response:
+        """Fine-grained appearance update: return the *texture bytes* of the
+        one slot the change affects, so the web builder can swap it live
+        (DAoC-Tools behaviour: only the hair texture re-forms on a colour
+        change, never the whole model). Kinds that change geometry —
+        face / hair_style — fall back to a full rebuild client-side."""
+        from .. import appearance as app
+        from .. import gamedata
+        from ..dxt import viewer_dds
+
+        if kind == "hair_color":
+            triplet = app._hair_triplets(str(config.root), race_id, hair_style)
+            cell = triplet[min(max(hair_color, 1), len(triplet)) - 1]
+            out = gamedata.skin_texture(str(config.root), cell[0])
+            if out:
+                return Response(content=viewer_dds(out[1]), media_type="image/x-dds")
+        if kind == "eye_color":
+            found = app.eye_sheet(str(config.root), race_id, eye_color)
+            if found:
+                return Response(content=viewer_dds(found[1]), media_type="image/x-dds")
+        raise HTTPException(
+            status_code=501,
+            detail="this kind triggers a full rebuild (geometry change)",
+        )
 
     @router.get("/health", response_model=Health)
     def health() -> Health:

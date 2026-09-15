@@ -16,6 +16,11 @@ The archive number is the skin table's ``Num`` column (e.g. Boar body skin
 109 -> Num 3 -> ``figures/skins/skin003.mpk`` -> ``boar.dds``). Texture names
 in the tables use ``.tga`` while the archive entry is ``.dds``; matching is
 done on the basename without extension.
+
+Each skin table has its own archive directory (case varies on disk) and its
+own prefix, so lookups go through :data:`_SKIN_TABLE_DIRS`. The Catacombs
+appearance sheets (faces, hair) are not always in the archive the tables
+claim — :func:`texture_bytes` falls back to a scan of the skin archives.
 """
 from __future__ import annotations
 
@@ -26,6 +31,7 @@ import os
 from .mpak import MpakArchive
 
 # Column indices (the CSVs carry two header rows: a group row then names).
+MONNIFS_DESC = 1
 MONNIFS_NAME = 2
 MONNIFS_SET = 3  # Anim Set id -> anims.csv row (animations live there too)
 MONSTERS_NIF = 2
@@ -37,7 +43,18 @@ SKINS_NAME = 2
 SKINS_ARCHIVE = 4
 
 _SKIN_TABLES = ("skins.csv", "mskins.csv", "pskins.csv")
+# table -> (top folder, folder, file prefix)
+_SKIN_TABLE_DIRS = {
+    "skins.csv": ("figures", "skins", "skin"),
+    "mskins.csv": ("figures", "Mskins", "mskin"),
+    "pskins.csv": ("items", "pskins", "pskin"),
+}
+_TEXTURE_DIRS = (("figures", "skins"), ("figures", "Mskins"), ("items", "pskins"))
 _GAMEDATA = "gamedata.mpk"
+
+# Tables are static once the client is installed; the exporter reads them
+# several times per figure (skins, face map, hair colour map…).
+_TABLE_CACHE: dict[tuple[str, str], list[list[str]]] = {}
 
 
 def norm_name(s: str) -> str:
@@ -51,26 +68,128 @@ def norm_name(s: str) -> str:
 
 
 def _read_table(client_dir: str, name: str) -> list[list[str]]:
+    key = (client_dir, name.lower())
+    cached = _TABLE_CACHE.get(key)
+    if cached is not None:
+        return cached
     path = os.path.join(client_dir, _GAMEDATA)
     a = MpakArchive(path)
     try:
         if name.lower() not in a.entries:
-            return []
-        raw = a.read(name)
+            rows: list[list[str]] = []
+        else:
+            raw = a.read(name)
+            rows = list(csv.reader(io.StringIO(raw.decode("latin-1"))))
     finally:
         a.close()
-    return list(csv.reader(io.StringIO(raw.decode("latin-1"))))
+    _TABLE_CACHE[key] = rows
+    return rows
 
 
 def _find_skin(skin_id: str, tables: dict[str, list[list[str]]]):
+    """(texture name, archive num, table name) for a skin id, or None."""
     for name in _SKIN_TABLES:
         table = tables.get(name)
         if not table:
             continue
         for row in table:
             if len(row) > SKINS_ARCHIVE and row[0].strip() == skin_id:
-                return row[SKINS_NAME].strip(), row[SKINS_ARCHIVE].strip()
+                return row[SKINS_NAME].strip(), row[SKINS_ARCHIVE].strip(), name
     return None
+
+
+def _archive_path(client_dir: str, table_name: str, archive_num: str) -> str | None:
+    sub = _SKIN_TABLE_DIRS.get(table_name)
+    if sub is None:
+        return None
+    try:
+        num = int(archive_num)
+    except ValueError:
+        return None
+    top, folder, prefix = sub
+    root = os.path.join(client_dir, top, folder)
+    if not os.path.isdir(root):
+        return None
+    want = f"{prefix}{num:03d}.mpk".lower()
+    for filename in os.listdir(root):
+        if filename.lower() == want:
+            return os.path.join(root, filename)
+    return None
+
+
+def _read_skin_archive(client_dir: str, table_name: str, archive_num: str,
+                       texture_name: str) -> bytes | None:
+    path = _archive_path(client_dir, table_name, archive_num)
+    if path is None:
+        return None
+    base = os.path.splitext(texture_name)[0].lower()
+    a = MpakArchive(path)
+    try:
+        for entry in a.entries:
+            if os.path.splitext(os.path.basename(entry))[0].lower() == base:
+                return a.read(entry)
+    finally:
+        a.close()
+    return None
+
+
+def texture_bytes(client_dir: str, texture_name: str) -> bytes | None:
+    """Search every skin archive for a texture, whatever the tables claim.
+
+    The Catacombs face sheets (`Sar_f_Head01.dds`) list archive 0 in the
+    tables but ship in a later archive of the matching directory.
+    """
+    base = os.path.splitext(os.path.basename(texture_name))[0].lower()
+    for sub in _TEXTURE_DIRS:
+        root = os.path.join(client_dir, *sub)
+        if not os.path.isdir(root):
+            continue
+        for archive in sorted(os.listdir(root)):
+            if not archive.lower().endswith((".mpk", ".npk")):
+                continue
+            a = MpakArchive(os.path.join(root, archive))
+            try:
+                for entry in a.entries:
+                    if os.path.splitext(os.path.basename(entry))[0].lower() == base:
+                        return a.read(entry)
+            finally:
+                a.close()
+    return None
+
+
+def _read_table_skin(client_dir: str, tables: dict[str, list[list[str]]],
+                     skin_id: str) -> tuple[str, bytes] | None:
+    """(texture name, bytes) for a skin id, table archive then scan fallback."""
+    found = _find_skin(skin_id.strip(), tables)
+    if not found:
+        return None
+    tex_name, archive_num, table_name = found
+    data = _read_skin_archive(client_dir, table_name, archive_num, tex_name)
+    if data is None:
+        data = texture_bytes(client_dir, tex_name)
+    return (tex_name, data) if data is not None else None
+
+
+def skin_texture(client_dir: str, skin_id: str) -> tuple[str, bytes] | None:
+    """(texture name, bytes) for a skins/mskins/pskins id."""
+    tables = {n: _read_table(client_dir, n) for n in _SKIN_TABLES}
+    return _read_table_skin(client_dir, tables, skin_id)
+
+
+def figure_desc(client_dir: str, nif_path: str) -> str | None:
+    """The monnifs description of a figure NIF (e.g. 'Saracen Female')."""
+    base = os.path.splitext(os.path.basename(nif_path))[0].lower()
+    base_norm = norm_name(base)
+    fallback: str | None = None
+    for row in _read_table(client_dir, "monnifs.csv"):
+        if len(row) <= MONNIFS_NAME or not row[MONNIFS_NAME].strip():
+            continue
+        name = row[MONNIFS_NAME].strip().lower()
+        if name == base:
+            return row[MONNIFS_DESC].strip() if len(row) > MONNIFS_DESC else ""
+        if fallback is None and norm_name(name) == base_norm:
+            fallback = row[MONNIFS_DESC].strip() if len(row) > MONNIFS_DESC else ""
+    return fallback
 
 
 def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str, bytes]]:
@@ -113,13 +232,11 @@ def resolve_figure_skins(client_dir: str, nif_path: str) -> list[tuple[str, str,
         skin_id = monster[idx].strip() if len(monster) > idx else ""
         if skin_id in ("", "0"):
             continue
-        found = _find_skin(skin_id, tables)
-        if not found:
+        found = _read_table_skin(client_dir, tables, skin_id)
+        if found is None:
             continue
-        tex_name, archive_num = found
-        data = _read_skin_archive(client_dir, archive_num, tex_name)
-        if data is not None:
-            out.append((slot, tex_name, data))
+        tex_name, data = found
+        out.append((slot, tex_name, data))
     return out or _resolve_from_nif_names(client_dir, nif_path)
 
 
@@ -144,41 +261,39 @@ def _resolve_from_nif_names(client_dir: str, nif_path: str) -> list[tuple[str, s
     names = _nif_texture_names(nif_path)
     if not names:
         return []
-    skins_dir = os.path.join(client_dir, "figures", "skins")
-    if not os.path.isdir(skins_dir):
-        return []
     bases = {os.path.splitext(n)[0].lower(): n for n in names}
     out: list[tuple[str, str, bytes]] = []
     seen: set[str] = set()
-    for arch in sorted(os.listdir(skins_dir)):
-        if not arch.lower().endswith(".mpk"):
+    for sub in _TEXTURE_DIRS:
+        root = os.path.join(client_dir, *sub)
+        if not os.path.isdir(root):
             continue
-        a = MpakArchive(os.path.join(skins_dir, arch))
-        try:
-            for entry in a.entries:
-                stem = os.path.splitext(entry)[0].lower()
-                if stem in bases and stem not in seen:
-                    seen.add(stem)
-                    out.append(("Body", bases[stem], a.read(entry)))
-        finally:
-            a.close()
+        for arch in sorted(os.listdir(root)):
+            if not arch.lower().endswith(".mpk"):
+                continue
+            a = MpakArchive(os.path.join(root, arch))
+            try:
+                for entry in a.entries:
+                    stem = os.path.splitext(entry)[0].lower()
+                    if stem in bases and stem not in seen:
+                        seen.add(stem)
+                        out.append(("Body", bases[stem], a.read(entry)))
+            finally:
+                a.close()
     return out
 
 
-def _read_skin_archive(client_dir: str, archive_num: str, texture_name: str) -> bytes | None:
-    try:
-        num = int(archive_num)
-    except ValueError:
+def figure_code(client_dir: str, race_id: int, female: bool) -> str | None:
+    """The `fig3` short race code (e.g. 'sar_f') for an eRace id / gender.
+
+    `fig3map.csv` descriptions carry the race wording used by the client's
+    creation screen ('Saracen Female'), and the sfig archive names the
+    skeleton `<code>_<gender>_skeleton.nif` — mapping table in §11.2 of
+    notes/character-rules.md."""
+    from . import fig3 as _fig3  # late import: fig3 depends on gamedata
+
+    tables = _fig3.read_tables(client_dir)
+    desc = tables.race_desc.get(race_id)
+    if desc is None or ("female" in desc.lower()) != female:
         return None
-    path = os.path.join(client_dir, "figures", "skins", f"skin{num:03d}.mpk")
-    if not os.path.exists(path):
-        return None
-    base = os.path.splitext(texture_name)[0].lower()
-    a = MpakArchive(path)
-    try:
-        for entry in a.entries:
-            if os.path.splitext(entry)[0].lower() == base:
-                return a.read(entry)
-    finally:
-        a.close()
-    return None
+    return _fig3.race_short(tables, race_id, female)

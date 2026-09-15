@@ -85,22 +85,20 @@ def cmd_gltf(args) -> int:
     from .gltf import export_gltf
 
     out = args.out or args.path.rsplit(".", 1)[0]
+    client = os.environ.get("DAOC_CLIENT")
     textures = None
-    if args.texture is None and not args.no_texture:
-        client = os.environ.get("DAOC_CLIENT")
-        if client:
-            from .gamedata import resolve_figure_skins
+    if args.texture is None and not args.no_texture and client:
+        from .gamedata import resolve_figure_skins
 
-            skins = resolve_figure_skins(client, args.path)
-            if skins:
-                textures = list(skins)
+        skins = resolve_figure_skins(client, args.path)
+        if skins:
+            textures = list(skins)
     pose = None
     pose_time = args.pose_time
     if getattr(args, "pose", None):
         from .kfa import load_kfa
 
         pose = load_kfa(args.pose)
-        client = os.environ.get("DAOC_CLIENT")
         if client:
             from .anims import anim_timing, native_fps
 
@@ -112,9 +110,22 @@ def cmd_gltf(args) -> int:
                 if not args.quiet:
                     print(f"  anim timing: {frames:g} frames @ {fps:g}fps "
                           f"(rate {rate:.3g}, loop {frames / fps:.3g}s)")
-    export_gltf(args.path, out, verbose=not args.quiet, emit_skinned=args.skinned,
-                texture=args.texture, textures=textures,
-                pose=pose, pose_time=pose_time, bake_pose=args.bake_pose)
+    kwargs = {
+        "verbose": not args.quiet,
+        "emit_skinned": args.skinned,
+        "texture": args.texture,
+        "textures": textures,
+        "pose": pose,
+        "pose_time": pose_time,
+        "bake_pose": args.bake_pose,
+    }
+    if client and args.texture is None and not args.no_texture and not args.no_fig3_head:
+        # Player base figures get the Catacombs fig3 head/hair (see figure.py).
+        from .figure import export_figure
+
+        export_figure(client, args.path, out, **kwargs)
+    else:
+        export_gltf(args.path, out, **kwargs)
     return 0
 
 
@@ -340,6 +351,9 @@ def main(argv=None) -> int:
     p.add_argument("--texture", help="embed a .dds texture (CS_camelot_texture extension)")
     p.add_argument("--no-texture", action="store_true",
                    help="skip automatic gamedata texture resolution")
+    p.add_argument("--no-fig3-head", action="store_true",
+                   help="keep the classic (headless) player head instead of "
+                        "attaching the Catacombs fig3 head/hair")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_gltf)
 

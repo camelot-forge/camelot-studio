@@ -84,3 +84,10 @@ def test_missing_skin_archive_returns_empty(tmp_path):
     ])
     (tmp_path / "figures").mkdir()
     assert resolve_figure_skins(str(tmp_path), os.path.join(str(tmp_path), "Thing.NIF")) == []
+
+def test_figure_desc_reads_the_monnifs_description(fake_client):
+    from camelot.gamedata import figure_desc
+
+    client_dir, _ = fake_client
+    assert figure_desc(client_dir, os.path.join(client_dir, "figures", "Boar.NIF")) == "Boar"
+    assert figure_desc(client_dir, os.path.join(client_dir, "figures", "Nope.NIF")) is None

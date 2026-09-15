@@ -22,7 +22,9 @@ for (const name of names) {
 		continue;
 	}
 	const glb = `/api/v1/assets/${encodeURIComponent(hit.id)}/model`;
-	await page.goto(`${base}/render?glb=${encodeURIComponent(glb)}`, { waitUntil: 'load' });
+	await page.goto(`${base}/render?glb=${encodeURIComponent(glb)}&textured=1&norm=1`, {
+		waitUntil: 'load'
+	});
 	await page.waitForFunction('window.__ready === true', { timeout: 30000 }).catch(() => {});
 	await page.waitForTimeout(300);
 	const file = `${outDir}/${hit.name.replace(/[^a-z0-9_.-]/gi, '_')}.png`;

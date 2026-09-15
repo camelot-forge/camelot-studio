@@ -26,6 +26,41 @@ Guidelines for humans and AI agents working in this repository.
     export DAOC_CLIENT=/path/to/DAoC/client
     ```
 
+## Code navigation (MCP)
+
+Two MCP servers overlap on purpose; use each for its strength:
+
+- **`codegraph` — discovery and impact.** One `codegraph_explore` call replaces
+  a grep/glob/read loop: "where is X", "who calls X", routes, and the blast
+  radius of a change. It is auto-synced, so trust it as current. Use it
+  **first** to locate code across Python, TypeScript and Svelte.
+- **`serena` — precise symbol work.** LSP-backed read and edit:
+  `find_symbol` (exact body), `find_referencing_symbols` (authoritative
+  references), `replace_symbol_body` / `insert_*_symbol`. Use it to edit at
+  the symbol level instead of rewriting whole files, after codegraph told you
+  where to look.
+- When both could answer "find a symbol": locate with `codegraph`, then edit
+  with `serena`.
+- Keep raw grep/read for what neither can answer (binary research, docs,
+  configs, `work/` scripts).
+
+## Browser verification (web/)
+
+- After a change that affects the running UI, verify it in a real browser
+  instead of guessing: delegate to the `web-verifier` subagent
+  (`Task` / `@web-verifier`). It reports console and network errors and
+  captures screenshots.
+- **Playwright is the default browser tool** (headless, deterministic, already
+  a devDependency of `web/`). It drives the bundled Chromium headlessly, so no
+  browser window pops up on the host and results are CI-reproducible.
+- **Chrome DevTools MCP is reserved for real-user sessions** — inspecting a
+  page in an authenticated/logged-in state (cookies, session, extensions) that
+  is too costly to reproduce via Playwright `storageState`. Don't use it for
+  routine UI checks: it opens a browser on the host, which is noisy and not
+  headless by default.
+- The subagent is read-only — it reports issues, the main agent fixes them.
+  Do the browser pass yourself only when explicitly needed in-thread.
+
 ## Comments
 
 - Don't over-comment. Comments must explain **intent, constraints or
@@ -69,3 +104,7 @@ Guidelines for humans and AI agents working in this repository.
   DDS/NIF originals). Tests must read the client through `$DAOC_CLIENT`,
   never embed it.
 - The repo ships tools and docs only.
+
+## Misc
+
+- If you use a tool and have an issue with it, stop what you are doing and tell the user about it. We must have a perfect workflow and not fallback to another tool.

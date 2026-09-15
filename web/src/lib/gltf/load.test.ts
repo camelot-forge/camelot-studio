@@ -1,7 +1,15 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { embedBuffers, extractMeshTextures, parseGlbContainer } from './load';
+import * as THREE from 'three';
+import {
+	embedBuffers,
+	extractMeshTextures,
+	parseGlbContainer,
+	setCharacterVariant,
+	textureFromDds,
+	type CharacterRig
+} from './load';
 
 function makeGlb(json: object, bin?: Uint8Array): ArrayBuffer {
 	const enc = new TextEncoder();
@@ -91,5 +99,91 @@ describe.skipIf(!present)('glTF loading', () => {
 				new Uint8Array([0x44, 0x44, 0x53, 0x20])
 			);
 		});
+	});
+});
+
+// Minimal uncompressed A8R8G8B8 DDS, byte-for-byte the layout the server's
+// `dxt.encode_a8r8g8b8` emits (masks DDSLoader reads back as RGBAFormat).
+function makeA8r8g8b8Dds(width: number, height: number): ArrayBuffer {
+	const header = new ArrayBuffer(128);
+	const dv = new DataView(header);
+	const u32 = (off: number, value: number) => dv.setUint32(off, value, true);
+	dv.setUint8(0, 0x44);
+	dv.setUint8(1, 0x44);
+	dv.setUint8(2, 0x53);
+	dv.setUint8(3, 0x20);
+	u32(4, 124);
+	u32(8, 0x1 | 0x2 | 0x4 | 0x1000);
+	u32(12, height);
+	u32(16, width);
+	u32(20, width * 4);
+	u32(76, 32);
+	u32(80, 0x1 | 0x40);
+	u32(88, 32);
+	u32(92, 0x00ff0000);
+	u32(96, 0x0000ff00);
+	u32(100, 0x000000ff);
+	u32(104, 0xff000000);
+	u32(108, 0x1000);
+	const pixels = new Uint8Array(width * height * 4);
+	const out = new Uint8Array(header.byteLength + pixels.length);
+	out.set(new Uint8Array(header), 0);
+	out.set(pixels, 128);
+	return out.buffer;
+}
+
+describe('textureFromDds', () => {
+	it('decodes the server A8R8G8B8 DDS into an uncompressed RGBA texture', () => {
+		const tex = textureFromDds(makeA8r8g8b8Dds(4, 4));
+		const mip = tex.mipmaps[0] as unknown as {
+			width: number;
+			height: number;
+			data: Uint8Array;
+		};
+		expect(mip.width).toBe(4);
+		expect(mip.height).toBe(4);
+		expect(mip.data.length).toBe(64);
+		expect(tex.format).toBe(THREE.RGBAFormat);
+		expect(tex.colorSpace).toBe(THREE.SRGBColorSpace);
+		// fig3 hair/beard UVs can leave [0,1] (Highlander Male: v=-0.9):
+		// clamping would smear the edge texel over the beard.
+		expect(tex.wrapS).toBe(THREE.RepeatWrapping);
+		expect(tex.wrapT).toBe(THREE.RepeatWrapping);
+	});
+});
+
+function rigOf(variantCounts: number[]): CharacterRig {
+	return {
+		slots: variantCounts.map((count, si) => ({
+			id: `s${si}`,
+			label: `S${si}`,
+			defaultIndex: 0,
+			variants: Array.from({ length: count }, (_, vi) => ({
+				label: `S${si}V${vi}`,
+				meshes: [{ visible: true } as unknown as THREE.Object3D]
+			}))
+		}))
+	};
+}
+
+describe('setCharacterVariant', () => {
+	it('shows exactly one variant per slot', () => {
+		const rig = rigOf([3, 2]);
+		setCharacterVariant(rig, 0, 2);
+		setCharacterVariant(rig, 1, 0);
+		expect(rig.slots[0].variants.map((v) => v.meshes[0].visible)).toEqual([false, false, true]);
+		expect(rig.slots[1].variants.map((v) => v.meshes[0].visible)).toEqual([true, false]);
+	});
+
+	it('hides the whole slot with -1 (LOD default)', () => {
+		const rig = rigOf([2]);
+		setCharacterVariant(rig, 0, -1);
+		expect(rig.slots[0].variants.map((v) => v.meshes[0].visible)).toEqual([false, false]);
+	});
+
+	it('leaves other slots untouched', () => {
+		const rig = rigOf([2, 2]);
+		setCharacterVariant(rig, 1, -1);
+		expect(rig.slots[0].variants.map((v) => v.meshes[0].visible)).toEqual([true, true]);
 	});
 });

@@ -35,6 +35,20 @@ class AssetSummary(BaseModel):
     entry: str | None = None
 
 
+class CharacterOptions(BaseModel):
+    race: str
+    race_id: int
+    female: bool
+    faces: int
+    hair_styles: int
+    hair_colors: int
+    eye_colors: int
+    skin_tones: int
+    has_decal: bool
+    cloak_variants: int
+    body_variants: int
+
+
 class AssetDetail(AssetSummary):
     metadata: dict[str, Any] = {}
 

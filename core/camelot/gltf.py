@@ -16,12 +16,14 @@ from typing import Any
 
 import numpy as np
 
+from .dxt import viewer_dds
 from .nifutil import (
     mat4_axis,
     mat4_identity,
     mat4_mul,
     nif_rot_cell,
     node_local_matrix,
+    skin_transform_matrix,
     vec3,
 )
 
@@ -535,7 +537,7 @@ def skin_stretch(
         verts = [vec3(v) for v in shp.vertices]
         Ws = np.asarray(bind.get(i, mat4_identity()), dtype=float)
         invWs = np.linalg.inv(Ws)
-        S_mats = [_skin_transform(skin_data.bone_list[k]) for k in range(len(joints))]
+        S_mats = [skin_transform_matrix(skin_data.bone_list[k]) for k in range(len(joints))]
         meshes.append((i, joints, weights, tris, verts, Ws, invWs, S_mats))
 
     if not meshes:
@@ -643,7 +645,10 @@ def _slot_for_name(name: str) -> str | None:
     n = name.lower()
     for slot, keys in (
         ("Head", ("head", "helm")),
-        ("Arms", ("arm", "wing", "hand", "glove")),
+        ("Hair", ("hair",)),
+        ("Eyes", ("eye",)),
+        ("Arms", ("arm", "wing", "hand")),
+        ("Gloves", ("glove",)),
         ("Legs", ("leg",)),
         ("Boots", ("boot", "foot", "feet", "shoe")),
         ("Cloak", ("cloak",)),
@@ -765,6 +770,7 @@ def export_gltf(
     pose_time: float = 0.0,
     bake_pose: bool = False,
     bone_names: list[str] | None = None,
+    data=None,
 ) -> dict:
     """
     emit_skinned=False (default): bind-pose geometry + skeleton, plus a
@@ -781,10 +787,13 @@ def export_gltf(
     map comes from the client's ``animnode.dat`` table when available, else
     from bind-translation matching (:func:`map_kfa_to_nodes`), so proportions
     survive. The viewer receives a plain posed mesh.
+    data: pre-loaded (possibly assembled) NIF data; when given, ``nif_path``
+    is only used for orientation overrides and animation table lookup.
     """
     from .nifutil import load
 
-    data = load(nif_path)
+    if data is None:
+        data = load(nif_path)
     # Every DAoC exporter (NetImmerse 4.x through Gamebryo 10.1) composes the
     # node tree Z-up in NIF world space: the skeleton's feet are lowest along
     # +Z and the pelvis->neck direction is +Z for bipeds, verified across the
@@ -968,6 +977,7 @@ def export_gltf(
     buf = Buffer()
     meshes: list[dict[str, Any]] = []  # node_index, name, accessors
     skins: list[dict[str, Any]] = []  # joints, invbind (acc), node_index
+    gltf_materials: list[dict[str, Any]] = []  # one per emitted mesh
     stats = {"meshes": 0, "skinned": 0, "vertices": 0, "triangles": 0, "joints": 0, "skipped": 0}
     sidecar: dict[str, Any] = {"meshes": []}
 
@@ -1026,7 +1036,7 @@ def export_gltf(
             # 302 units; the old math stretched those limbs by 45%).
             Ws = np.asarray(nif_bind.get(i, mat4_identity()), dtype=float)
             invWs = np.linalg.inv(Ws)
-            S_mats = [_skin_transform(skin_data.bone_list[k]) for k in range(len(joints))]
+            S_mats = [skin_transform_matrix(skin_data.bone_list[k]) for k in range(len(joints))]
             Mb_cache: dict[int, np.ndarray] = {}
             Rb_cache: dict[int, np.ndarray] = {}
 
@@ -1141,6 +1151,20 @@ def export_gltf(
         if skinned and emit_skinned:
             prim["attributes"]["JOINTS_0"] = acc_j
             prim["attributes"]["WEIGHTS_0"] = acc_w
+        # One material per mesh: three.js GLTFLoader shares a single cached
+        # default material across primitives without a material index, and the
+        # viewer's per-mesh DAoC texture would then overwrite that shared map
+        # (every mesh rendering with the last-applied texture).
+        prim["material"] = len(gltf_materials)
+        gltf_materials.append(
+            {
+                "pbrMetallicRoughness": {
+                    "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+                    "metallicFactor": 0.0,
+                    "roughnessFactor": 1.0,
+                }
+            }
+        )
 
         meshes.append({"node": i, "name": names[i], "prim": prim})
         if skinned and emit_skinned:
@@ -1151,7 +1175,7 @@ def export_gltf(
             # meshWorld_nif, so this equals the previous inv(boneWorld).
             mesh_inv = np.linalg.inv(np.asarray(world.get(i, mat4_identity()), dtype=float))
             ib = [
-                (np.asarray(_skin_transform(skin_data.bone_list[k]), dtype=float) @ mesh_inv).tolist()
+                (np.asarray(skin_transform_matrix(skin_data.bone_list[k]), dtype=float) @ mesh_inv).tolist()
                 for k in range(len(joints))
             ]
             ib_arr = np.array([_flatten_colmajor(m) for m in ib], dtype=np.float32)
@@ -1213,6 +1237,10 @@ def export_gltf(
     for slot, name, data in tex_list:
         if slot in slot_views:
             continue
+        # DXT1 sheets cutting texels with 1-bit alpha must not reach the
+        # viewer as-is: DDSLoader reads DXT1 as opaque (transparent texels
+        # paint black). Re-encode those sheets to A8R8G8B8.
+        data = viewer_dds(data)
         buf._pad()
         vi = len(buf.views)
         buf.views.append({"buffer": 0, "byteOffset": buf.size, "byteLength": len(data)})
@@ -1241,8 +1269,16 @@ def export_gltf(
         node = mesh["node"]
         gltf_nodes[node]["mesh"] = k
         if slot_views:
-            vi, nm = slot_views[_mesh_slot(node)]
-            mesh_ext[k] = {"CS_camelot_texture": {"bufferView": vi, "name": nm}}
+            slot = _mesh_slot(node)
+            vi, nm = slot_views[slot]
+            ext = {"bufferView": vi, "name": nm}
+            if slot == "Hair":
+                # Catacombs hair sheets carry 1-bit/smooth alpha (strand cuts)
+                # and the fig3 hair mesh is authored double-sided (fig3parts
+                # "Double Sided" column).
+                ext["alpha"] = True
+                ext["doubleSided"] = True
+            mesh_ext[k] = {"CS_camelot_texture": ext}
 
     for k, skin in enumerate(skins):
         gltf_nodes[skin["node"]]["skin"] = k
@@ -1265,6 +1301,7 @@ def export_gltf(
             {"joints": s["joints"], "inverseBindMatrices": s["invbind"], "skeleton": synth}
             for s in skins
         ],
+        "materials": gltf_materials,
         "buffers": [{"byteLength": len(b), "uri": os.path.basename(out_prefix) + ".bin"}],
         "bufferViews": buf.views,
         "accessors": buf.accessors,
@@ -1345,34 +1382,6 @@ def _fill_partition(part, weights_global: dict[int, list[tuple[int, float]]]) ->
         for bj, w in zip(bi, wts):
             jg = part_bones[bj] if bj < len(part_bones) else bj
             wl.append((jg, w))
-
-
-def _skin_transform(entry) -> list[list[float]]:
-    """Stored NiSkinData bone transform S (skin space -> bone space).
-
-    Row-major lists from our legacy reader, or a pyffi ``SkinTransform``
-    whose Matrix33 goes through :func:`nif_rot_cell`. This is the transform
-    the engine actually uses; for most files it equals
-    ``inv(boneBind) * meshWorld``, but some rigs (AfancB by 302 units) store
-    a different bind — see docs/formats.md §3.
-    """
-    t = entry["transform"] if isinstance(entry, dict) else getattr(entry, "skin_transform", None)
-    m = mat4_identity()
-    if isinstance(t, (tuple, list)):  # legacy reader: (row-major mat33, vec3, scale)
-        r, tv, s = t
-        for i in range(3):
-            for j in range(3):
-                m[i][j] = float(r[i][j]) * float(s)
-            m[i][3] = float(tv[i])
-        return m
-    if t is None or not hasattr(t, "rotation"):
-        return m
-    rot, tv, s = t.rotation, vec3(t.translation), float(t.scale)
-    for i in range(3):
-        for j in range(3):
-            m[i][j] = nif_rot_cell(rot, i, j) * s
-        m[i][3] = tv[i]
-    return m
 
 
 def _fill_weights_from_bonelist(skin_data, joints, weights_global) -> None:

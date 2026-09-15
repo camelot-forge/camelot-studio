@@ -79,6 +79,92 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   (e.g. `Bip01 L/R UpperArm/BicepTwist/Forearm/ForeTwist`) + a base-set
   marker (`cthArms01`). fig3 meshes attach **by bone names**, KFAs reference
   bones **by index** — the two constraints of the game.
+- **Player base figures** (`figures/B*.NIF`, e.g. `BSaracenF.NIF`) stack
+  **every equipment variant of every slot in one file**: 10 `Body`
+  (`Body1..Body5` + `b` variants, ~8-15 extra shoulder verts each), 6 `Arms`,
+  5 `Boots`, 4 `Legs`, 3 `Gloves`, 4 `Lbody`, `HeadA1..5` + `HeadB1..5`,
+  3 `Cloak`, plus 4 whole-body `Lod1a..d` levels (distant-only). The game
+  shows exactly one variant per slot (the 9 `monsters.csv` gear slots:
+  Body/Head/Arms/Gloves/Lbody/Legs/Boots/Cloak/Helm); the *texture* comes
+  from `pskins.csv` (armor material × part × gender), not from the figure's
+  `monsters.csv` row (that row is the NPC default outfit).
+- **The classic `HeadA*/HeadB*` pair cannot be composed with one texture
+  pass**: projecting both meshes in world space shows two *overlapping head
+  shells* of the same size (z ≈ 57-68 for `BSaracenF.NIF`), and `HeadB`'s UV
+  set 0 is another face mapping (ear/teeth/eye islands), not a hair layout —
+  the live engine blends them with the decal/multitexture hair shader
+  (`ps_HairMaterialShader1x`, `MultiTexture Decal Map`). Any single-texture
+  choice renders a blob or a face on the back of the skull, so the viewer
+  does **not** draw them: the exporter hides `HeadA*/HeadB*` and attaches the
+  Catacombs fig3 head/hair instead (`core/camelot/figure.py`,
+  `core/camelot/fig3.py`). This is what the live client and game-accurate
+  viewers do — see the fig3 entries below.
+- **fig3 player head/hair**: one head mesh per race (`Sar_f_Head01`, full
+  Bip01 skeleton embedded, 541 verts / 800 tris for Saracen female) rendered
+  with one of the 7 face sheets `fig3facemap.csv` → skins
+  (`Sar_f_Head01..07.dds`), plus one of the hair styles
+  (`sar_f_Hair01..04`, 269 verts / 310 tris for style 1, `Double Sided = 1`)
+  with its base sheet `<style>.dds` (`sar_f_Hair01.dds`, DXT5) or a colour
+  variant (`_dkbrown`, `_darkbrown`, `_blonde`, `_white`, `_bluebase`).
+  Hair colour = base texture (S) + tint (`tints.csv`, T) + decal
+  (`hair_decal_Sar_f_Hair01.dds`, M) per `fig3haircolormap.csv`. Every
+  style of a race shares the same UV layout, so the colour map is
+  authoritative even when it lists another style's or race's sheet (Celt
+  female → Briton sheets, Highlander female → Norseman ones) and when the
+  styles ship no sheet under their own names. The **eyes are separate
+  geometry** inside the head mesh (vertices bound to `Bip01 L/R Eyeball`)
+  that samples a dedicated `eyecolor_*` sheet from `fig3eyecolormap.csv` —
+  the face sheet is plain skin there. The exporter splits those triangles
+  into their own `Eyes` mesh so both sheets render. The authored eye UVs are
+  the engine mapping: the eyeball's *front cap* lands within 1-3 px of the
+  eye sheet's artwork (a ~7 px iris drawing on a nearly all-white 128²
+  sheet) — remapping the eye island onto that artwork magnifies it and
+  renders faceted, so the UVs are copied as authored.
+  fig3 hair/beard UVs may leave the unit square (Highlander male beard:
+  v ≈ -0.9) — Gamebryo wraps them, so viewers must sample with wrap; the
+  three.js clamp default smears the edge texel over the beard.
+- **Only some hair styles have colour sheets** (Avalonian male: style 4;
+  Highlander female: 2 and 4; Inconnu male: 2-4; Saracen female: 1-4), and
+  `fig3haircolormap.csv` even points some race/style rows at another style's
+  or another race's sheets — a mismatched sheet does not sit on the mesh UVs.
+  The assembler therefore keeps each style's own sheet
+  (`<filename>[ _colour].dds`) and picks the first style whose sheet ships.
+  Likewise, some fig3 head pieces are **skeleton-less** (`sar_m_Head01`,
+  bonelist-driven like hair/body) while others embed the canonical fig3
+  skeleton; the embedded one is the bind reference for all pieces
+  (`fig3.load_reference`), and every piece lands exactly where its own file
+  authored it: `fig3.attach_part` compensates each `NiSkinData` bone
+  transform with `S' = inv(boneWorld_target) @ boneWorld_part @ S` and
+  resolves `bonelist` names against the reference skeleton (bones missing
+  from the target follow their nearest ancestor, `Bip01 EyeLids` →
+  `Bip01 Head`). Attaching is *aligned on the target's head bone*
+  (`Wb_target @ inv(Wb_ref)`): the Catacombs head bone sits ~2.8 units
+  higher than the classic one, so the rigid-attach puts the head on the
+  classic neck instead of floating above it.
+- **`fig3parts.csv` reuses ids** for different files (id 199 is both
+  `hal_m_Hair01` and `hig_m_Hair03`), so an id maps to several candidates
+  and `fig3.parts_of` filters them by race description. `monnifs.csv`
+  descriptions also come with reversed word order ("Male Half Ogre" vs
+  fig3map's "Half Ogre Male"); `fig3.race_id` matches on word sets as a
+  fallback, and requires multi-word races for partial matches so a
+  one-word description like "Heavy" does not capture "Half Orc Heavy".
+- Skin archives live per table: `figures/skins/skinNNN.mpk` (skins.csv),
+  `figures/Mskins/mskinNNN.mpk` (mskins.csv, case varies on disk) and
+  `items/pskins/pskinNNN.mpk` (pskins.csv); Cata face sheets ship in a
+  later archive than the tables claim, so lookups fall back to a scan.
+  DXT1 sheets that cut texels with the 1-bit alpha mode are re-encoded to
+  uncompressed A8R8G8B8 before embedding: three.js `DDSLoader` maps DXT1 to
+  an opaque RGB format, which would paint the cut texels black.
+- **Slot naming**: fig3map slot 2 is `LBody` (attached as `Lbody`, the
+  classic mesh spelling); for Highlander/Norse sets its UVs cover the upper
+  half of the legs sheet, so it takes the same `lealegs01_01` family. The
+  skeleton stem (`fig3.race_short`) uses the fig3map description: Norseman
+  rows are spelled `Norse Male/Female` in fig3map but "Norseman" in
+  monnifs, so both tokens map to `nor`.
+- The viewer classifies these meshes by name and hides the rest
+  (`web/src/lib/character.ts`); note the GLTFLoader name mangling — it
+  strips `:` so `Body1:0` becomes `Body10`, hence the classifier reads the
+  glTF document's mesh names, not the THREE object names.
 - Skeletons: `%s_skeleton.nif` (game.dll string) + `figures/skeleton.nif` =
   canonical human Bip01, **51 bones** (`Scene Root → Bip01 → Footsteps →
   Pelvis → Spine1/2 → Neck → Head`, full arms/fingers, Held/Shield/Back/

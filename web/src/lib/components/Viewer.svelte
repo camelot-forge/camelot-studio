@@ -2,9 +2,8 @@
 	import * as THREE from 'three';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-	import { DDSLoader } from 'three/addons/loaders/DDSLoader.js';
 	import { Axis3d, Grid3x3, Maximize2, Pause, Play, Rotate3d } from '@lucide/svelte';
-	import { rebindSkinnedMeshes, bindBoxOf, type LoadedModel } from '$lib/gltf/load';
+	import { rebindSkinnedMeshes, bindBoxOf, textureFromDds, type LoadedModel } from '$lib/gltf/load';
 	import { sampleClip, samplePositions, gameToKeyTime, type AnimClip } from '$lib/anim';
 
 	interface Props {
@@ -117,7 +116,10 @@
 					color: 0x9fd8c8,
 					metalness: 0.05,
 					roughness: 0.9,
-					flatShading: true,
+					// Smooth shading: the NIF exporter authors smooth normals and
+					// DAoC's engine renders with them — flatShading would re-facet
+					// every figure into the low-poly preview look.
+					flatShading: false,
 					side: THREE.DoubleSide
 				});
 				const skinned = obj as THREE.SkinnedMesh;
@@ -143,24 +145,20 @@
 			}
 		}
 
-		// Apply embedded DAoC textures (DDS via DDSLoader), one per mesh (skin slot).
+		// Apply embedded DAoC textures (DDS via the shared decode path), one per mesh (skin slot).
 		if (model.meshTextures.size) {
-			const dds = new DDSLoader();
 			for (const [mesh, tex] of model.meshTextures) {
-				const data = dds.parse(tex.bytes, true);
-				const dt = new THREE.CompressedTexture(
-					data.mipmaps,
-					data.width,
-					data.height,
-					data.format as THREE.CompressedPixelFormat,
-					THREE.UnsignedByteType
-				);
-				dt.colorSpace = THREE.SRGBColorSpace;
-				dt.anisotropy = 4;
-				dt.needsUpdate = true;
+				const dt = textureFromDds(tex.bytes);
 				const mat = mesh.material as THREE.MeshStandardMaterial;
 				mat.map = dt;
 				mat.color = new THREE.Color(0xffffff);
+				if (tex.alpha) {
+					// Alpha-cut sheet (Catacombs hair strands): hard cut, and
+					// double-sided when the exporter flagged the mesh (fig3 hair
+					// pieces are authored double-sided).
+					mat.alphaTest = 0.5;
+					mat.side = tex.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+				}
 				mat.needsUpdate = true;
 			}
 		}

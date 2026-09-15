@@ -2,6 +2,7 @@
 	import { Bone, ChevronDown, FileBox } from '@lucide/svelte';
 	import type { LoadedModel } from '$lib/gltf/load';
 	import { BONE_INDEX, MAX_VERIFIED } from '$lib/skeleton';
+	import CharacterPanel from './CharacterPanel.svelte';
 
 	interface Props {
 		model: LoadedModel;
@@ -49,6 +50,12 @@
 			</div>
 		</dl>
 	</section>
+
+	{#if model.character}
+		{#key model.character}
+			<CharacterPanel rig={model.character} />
+		{/key}
+	{/if}
 
 	<section class="card">
 		<h3><Bone size={14} /> Bones</h3>

@@ -63,10 +63,13 @@ pytest suite in `core/tests/` (AGENTS.md TDD rule):
 DAOC_CLIENT="/path/to/DAoC client" .venv/bin/python -m pytest core/tests -q
 ```
 
-197 tests (131 run everywhere, 66 corpus): matrices/axis/CLI/legacy-reader/
-gLTF/MPAK/animation-mapping units on synthetic buffers, plus corpus tests
-(parse expectations, kfa summaries, roundtrip, glTF export, MPAK repack,
-grounding/skin-stretch regressions) that auto-skip without `DAOC_CLIENT`.
+230 core tests (149 run everywhere, 81 corpus): matrices/axis/CLI/
+legacy-reader/gLTF/MPAK/animation-mapping/fig3 units on synthetic buffers,
+plus corpus tests (parse expectations, kfa summaries, roundtrip, glTF
+export, MPAK repack, grounding/skin-stretch regressions, fig3 head/hair
+attachment) that auto-skip without `DAOC_CLIENT`; 27 web tests (vitest)
+cover the animation sampling, the bone table and the player-figure mesh
+classification/selection.
 
 ## Known limits
 
@@ -130,6 +133,9 @@ grounding/skin-stretch regressions) that auto-skip without `DAOC_CLIENT`.
 
 ## Environment gotchas
 
+- **Browser verification**: Playwright is the default tool (headless, via the
+  `web-verifier` subagent). Chrome DevTools MCP is reserved for real logged-in
+  sessions only — routine UI checks must not open a browser on the host.
 - The venv (`camelot-studio/.venv`) is created by `bootstrap.sh`, which
   patches pyffi for Python ≥3.12: `setuptools` (distutils shim) and
   `time.clock() → time.perf_counter()` in pyffi's
@@ -146,8 +152,8 @@ grounding/skin-stretch regressions) that auto-skip without `DAOC_CLIENT`.
 
 ## Next steps (priority order)
 
-1. ~~pytest suite~~ — **done**: 197 core tests today (unit + corpus tiers,
-   plus 19 web tests), see `docs/status.md` §Testing.
+1. ~~pytest suite~~ — **done**: 230 core tests today (unit + corpus tiers,
+   plus 27 web tests), see `docs/status.md` §Testing.
 2. GitHub: org + repos created, first commits pushed; CI in place
    (`.github/workflows/ci.yml`: ruff lint + pytest on 3.11/3.12).
    Switch `camelot-studio` to public when ready.
@@ -186,6 +192,28 @@ grounding/skin-stretch regressions) that auto-skip without `DAOC_CLIENT`.
    Likewise `Box3.setFromObject` on a `SkinnedMesh` measures CPU-skinned
    positions (not bind geometry), which grounded models ~0.5 units high —
    grounding/camera use `bindBoxOf` (geometry bounds × mesh world) instead.
+   **Player figures render as chosen equipment**: base `B*.NIF` files stack
+   every variant of every slot, so the viewer classifies mesh names into
+   slots (`Body`, `Cloak`, …) and shows one variant per slot by default —
+   the rest (including the whole-body `Lod*` levels, now off) is a pick in
+   the new Character panel (Body/Cloak/Arms/Gloves/Lbody/Legs/Boots/LOD
+   selects, Off + Reset). Hidden meshes no longer drive grounding/framing.
+   **Heads are no longer classic**: the `HeadA*/HeadB*` shells need the
+   engine's decal shader, so the exporter hides them and attaches the
+   Catacombs fig3 head/hair pieces instead (`core/camelot/fig3.py`,
+   `core/camelot/figure.py`, bound by `bonelist` with a per-bone bind
+   compensation; skeleton-less head pieces take the canonical fig3
+   skeleton as their bind reference, and the head is aligned on the
+   classic head bone so it sits on the neck). This covers 24 figures —
+   the standard `B*/H*.NIF` player layouts (Saracen/Briton/Avalonian/
+   Highlander/Inconnu/Half-Ogre male+female, including the `Figure:N`
+   exports of `HFirbolgF`/`HLurikeenF`/`BHalfOgreM`, detected by bone
+   weight), with the default face, hair sheet (colour map, `_dkbrown`)
+   and eye sheet (`fig3eyecolormap`, split into its own `Eyes` mesh).
+   Merged-mesh undead/zombie models (single "Editable Mesh") and NPC/
+   class models keep their classic geometry; face/hair/eye pickers and
+   armor material textures (`pskins`) are next (see
+   `workspace/notes/player-character-builder.md`).
 6. M2: Blender addon + server-bridge (artifact injection, in-game testing).
 
 ## Command cheat sheet

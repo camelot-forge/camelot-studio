@@ -206,3 +206,18 @@ class TestOrientationOverrides:
         assert m[0][0] == pytest.approx(0.0, abs=1e-6)
         assert m[0][2] == pytest.approx(1.0)
         assert m[2][0] == pytest.approx(-1.0)
+
+
+class TestSlotForName:
+    def test_monster_head_stays_one_slot(self):
+        from camelot.gltf import _slot_for_name
+
+        assert _slot_for_name("Head") == "Head"
+        assert _slot_for_name("helm3") == "Head"
+        assert _slot_for_name("Bip01 Head") == "Head"
+
+    def test_fig3_hair_piece_maps_to_the_hair_slot(self):
+        from camelot.gltf import _slot_for_name
+
+        assert _slot_for_name("Hair") == "Hair"
+        assert _slot_for_name("sar_f_hair01") == "Hair"
