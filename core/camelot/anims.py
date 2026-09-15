@@ -383,17 +383,19 @@ def anim_timing(client_dir: str, kfa_path: str) -> tuple[float, float] | None:
 
 def animation_tracks(
     nif_path: str, kfa_path: str, client_dir: str | None = None,
-    prefer_table: bool | None = None, animated_only: bool = False,
+    prefer_table: bool | None = None,
 ) -> dict:
     """Joint rotation tracks for posing *nif_path* with *kfa_path*.
 
     *prefer_table* forces the engine's canonical bone table for the channel
     mapping (``None`` keeps the gamedata heuristic): the native fig3 runtime
     rigs are not listed in monnifs, but they are exactly what the table
-    describes. *animated_only* drops channels whose keys never vary: those
-    store the *authoring rig's* rest pose, which fights a different rig's
-    bind (a static ``Bip01 L Hand``/finger channel is 15-37 degrees off the
-    fig3 rig and shears the gloves under an otherwise valid idle).
+    describes. Every channel is applied **absolute**, translations and
+    rotations alike: the engine overwrites the node transforms wholesale, and
+    the values form a consistent pose — dropping the "static" ones or
+    rebasing a few bones onto the target bind breaks the chain (a dropped
+    neck/hand rest tilted the head and sheared the gloves). Partial fixes
+    are the bug; fidelity is the rule.
 
     Returns ``{"kfa", "duration", "rate", "tracks": [...]}`` where each track
     carries ``{node, times, quats}`` (rotation locals in KFA key seconds) and,
@@ -450,14 +452,7 @@ def animation_tracks(
         if ch is None:
             continue
         rot_keys = _channel_rotation_keys(ch)
-        if animated_only and len({tuple(q) for _t, q in rot_keys}) < 2:
-            rot_keys = []
         has_pos = bool(ch.translations and kfa_idx in trusted)
-        if animated_only and has_pos:
-            distinct = {
-                tuple(round(float(v), 6) for v in key.value) for key in ch.translations
-            }
-            has_pos = len(distinct) > 1
         # A channel can be translation-only (Beetle's root bob has no rotation
         # keys): dropping it left the body pinned while the legs animated —
         # the feet floated. Serve rotation-less tracks with positions only.

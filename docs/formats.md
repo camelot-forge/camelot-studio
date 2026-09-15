@@ -222,17 +222,17 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   `kfa_translation_trust` now trusts **every** translated channel of a vetted
   pair, and only falls back to the old "a key must return to the bind" test
   for partial mappings.
-- **Player idles: classic KFAs, and never their static channels.** The
-  classic player sets (`I_HM/I_HF`, `I_SVM`…) fit the runtime fig3 rig:
-  their animated channels carry the idle (head/spine/forearms breathe) and
-  their key-0 rests sit within ~5° of the rig bind. The Catacombs sets
-  (`Cat_I_*`, linked from the Cata monnifs rows) resolve too, but their
-  absolute rests disagree with this rig (the head key-0 is ~19° off and
-  bows the head) — they stay a fallback. Either way, *static* (1-key)
-  channels are dropped (`animated_only`): they store the authoring rig's
-  rest pose, 15-37° off the fig3 bind on `Bip01 L/R Hand` and the fingers,
-  which sheared the gloves; non-varying channels now leave their bone at
-  the rig bind.
+- **Player idles: the Catacombs clips, applied engine-faithful.** The
+  character builder resolves the race's Cata figure (`sar_f` & co, whose
+  monnifs rows link the `Cat_I_*` sets the live client plays) and serves
+  **every channel the KFA carries, absolute** — rotations and translations,
+  statics included, exactly like the engine overwriting its node transforms.
+  This is the first rule of the project (AGENTS.md): dropping the "static"
+  channels or rebasing a few bones onto our bind *looked* like a cleanup but
+  broke the pose chain (a dropped neck/hand rest bowed the head and sheared
+  the gloves); applying everything as authored rendered the male and female
+  idles correctly. The classic sets (`I_HM/I_HF`, `I_SVM`…) stay a fallback —
+  they were authored on the pre-fig3 rigs and distort the hands/arms here.
 - **Two-tier mapping: the client's link decides, the physics gates judge.**
   A **gamedata-linked** clip (`kfa_comes_from_gamedata`, i.e. the pair comes
   from `monnifs -> anims -> animnifs`) is mapped through the engine's own

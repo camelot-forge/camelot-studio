@@ -13,6 +13,13 @@ textures, animations) — built for the private-server community.
 > mesh — the game's data decides, the physics gates judge.
 > State: `docs/status.md`. Format reference: `docs/formats.md`.
 
+**Principle: engine fidelity.** Everything here reproduces the client's own
+behaviour — same tables, same order, same values, no approximations, no
+partial fixes. Animation channels are applied absolute (statics included,
+the way the engine overwrites node transforms); when the engine composites
+passes we don't have (base + decal / dark map), we bake the composite instead
+of faking it with a single sheet.
+
 ## Why this project?
 
 The Niftools ecosystem (official Blender addon) has been inactive since 2024

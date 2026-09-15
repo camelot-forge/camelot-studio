@@ -2,6 +2,26 @@
 
 Guidelines for humans and AI agents working in this repository.
 
+## Engine fidelity (the first rule)
+
+Camelot Studio reproduces **what the DAoC client itself does** — same tables,
+same order, same values. No approximations, and above all **no partial
+fixes**:
+
+- The engine overwrites node transforms wholesale: animation channels are
+  applied **absolute, statics included**. Dropping "static" channels or
+  rebasing a few bones onto our bind broke the pose chain (a dropped
+  neck/hand rest bowed the head and sheared the gloves); the fix was to apply
+  everything the way the client does.
+- When the engine composites passes we don't have (base + decal / dark map),
+  **bake the composite** instead of approximating with a single sheet.
+- Wrap, tint multiply, sRGB… follow the engine's texture stage, not the
+  convenient default.
+- When the engine's behaviour is unclear, **stop and find it** (Ghidra on
+  `game.dll`, the client tables, the emulator packets) — never guess. The
+  proof corpus is `workspace/notes/character-rules.md`; the session
+  ground rules ship as the `camelot-forge` skill at the workspace root.
+
 ## Language
 
 - **Everything in this repository is written in English**: code comments,

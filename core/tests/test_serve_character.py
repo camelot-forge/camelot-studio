@@ -87,18 +87,19 @@ def test_player_rows_resolve_a_figure_and_idle(client_dir):
     [(1, False), (4, True), (18, True), (29, False)],
 )
 def test_character_anim_serves_the_player_idle(client_dir, tmp_path, race_id, female):
+    """The clip is engine-faithful: every channel the KFA carries is served
+    absolute, statics included (the values form a consistent pose; dropping
+    or rebasing single channels broke the chain — the skill's first rule)."""
     client = _client(client_dir, tmp_path)
     r = client.get(f"/api/v1/character/{race_id}/{female}/anim")
     assert r.status_code == 200, r.text
     clip = r.json()
-    assert clip["duration"] > 0 and clip["kfa"]
+    assert clip["duration"] > 0 and clip["kfa"].lower().startswith("cat_")
     nodes = {track["node"] for track in clip["tracks"]}
-    assert clip["tracks"] and any(node.startswith("Bip01") for node in nodes)
-    # static channels are dropped: they hold the authoring rig's rest pose
-    # (the hands sheared on the 15-37 degree finger/hand rests)
-    for track in clip["tracks"]:
-        if "times" in track:
-            assert len({tuple(q) for q in track["quats"]}) > 1, track["node"]
+    assert len(clip["tracks"]) > 40, f"{len(clip['tracks'])} tracks"
+    assert any(node.startswith("Bip01") for node in nodes)
+    # the hands are posed by the clip (the male idles animate one hand)
+    assert any("Hand" in node for node in nodes)
 
 
 def test_character_model_skinned_emits_joints(client_dir, tmp_path):
