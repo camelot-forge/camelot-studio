@@ -287,13 +287,15 @@ def build_router(config: ServeConfig, index: AssetIndex,
     def character_anim(race_id: int, female: bool) -> Response:
         """The player idle of (race, gender) as viewer tracks.
 
-        The clip is resolved through the client's own tables — the *Cata*
-        figure of the race (`sar_f` & co), whose monnifs rows link the
-        Catacombs-era KFAs the live client plays — and mapped onto the
-        runtime fig3 skeleton with the canonical bone table, so the tracks
-        name exactly the bones the assembled model exports. Static channels
-        are dropped: they store the authoring rig's rest pose, which fights
-        our rig's bind (the gloves sheared on the hands)."""
+        The clip is resolved through the client's tables (the classic player
+        figure's monnifs row → its animation set) and mapped onto the runtime
+        fig3 skeleton with the canonical bone table, so the tracks name
+        exactly the bones the assembled model exports. Static channels are
+        dropped: they store the authoring rig's rest pose, which fights our
+        rig's bind (the gloves sheared on the hands). The Catacombs sets
+        (`Cat_I_*`) are only a fallback — their absolute rests (head ~19°
+        off) bow the head on this rig, while the classic sets sit within
+        ~5°. """
         import tempfile
         from pathlib import Path as _Path
 
@@ -305,8 +307,8 @@ def build_router(config: ServeConfig, index: AssetIndex,
         desc = tables.race_desc.get(race_id)
         if desc is None or ("female" in desc.lower()) != female:
             raise HTTPException(status_code=404, detail="unknown race")
-        name = fig3.race_short(tables, race_id, female) or gamedata.figure_name_for_desc(
-            str(config.root), desc
+        name = gamedata.figure_name_for_desc(str(config.root), desc) or fig3.race_short(
+            tables, race_id, female
         )
         if name is None:
             raise HTTPException(status_code=404, detail="no player figure for this race")

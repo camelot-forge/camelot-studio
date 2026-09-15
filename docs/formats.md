@@ -222,17 +222,17 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   `kfa_translation_trust` now trusts **every** translated channel of a vetted
   pair, and only falls back to the old "a key must return to the bind" test
   for partial mappings.
-- **Player idles: the Cata KFAs, and never their static channels.** The live
-  client plays players with the Catacombs animation sets (`Cat_I_HM/HF`,
-  linked from the *Cata* monnifs rows — the fig3 code figures like `sar_f`),
-  not the classic `I_HM/I_HF` (authored on the old rig: their absolute
-  translations/hand rests disagree with the fig3 skeleton, which sheared the
-  gloves). Even the Cata idles carry *static* (1-key) channels whose value is
-  the authoring rig's rest pose — 15-37 degrees off the fig3 bind on
-  `Bip01 L/R Hand` and the fingers. The character endpoint therefore maps by
-  the canonical table and drops non-varying channels (`animated_only`), which
-  keeps the idle motion (head/spine/forearms breathe) and leaves every other
-  bone at the rig bind.
+- **Player idles: classic KFAs, and never their static channels.** The
+  classic player sets (`I_HM/I_HF`, `I_SVM`…) fit the runtime fig3 rig:
+  their animated channels carry the idle (head/spine/forearms breathe) and
+  their key-0 rests sit within ~5° of the rig bind. The Catacombs sets
+  (`Cat_I_*`, linked from the Cata monnifs rows) resolve too, but their
+  absolute rests disagree with this rig (the head key-0 is ~19° off and
+  bows the head) — they stay a fallback. Either way, *static* (1-key)
+  channels are dropped (`animated_only`): they store the authoring rig's
+  rest pose, 15-37° off the fig3 bind on `Bip01 L/R Hand` and the fingers,
+  which sheared the gloves; non-varying channels now leave their bone at
+  the rig bind.
 - **Two-tier mapping: the client's link decides, the physics gates judge.**
   A **gamedata-linked** clip (`kfa_comes_from_gamedata`, i.e. the pair comes
   from `monnifs -> anims -> animnifs`) is mapped through the engine's own
