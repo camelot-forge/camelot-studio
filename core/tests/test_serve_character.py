@@ -94,6 +94,11 @@ def test_character_anim_serves_the_player_idle(client_dir, tmp_path, race_id, fe
     assert clip["duration"] > 0 and clip["kfa"]
     nodes = {track["node"] for track in clip["tracks"]}
     assert clip["tracks"] and any(node.startswith("Bip01") for node in nodes)
+    # static channels are dropped: they hold the authoring rig's rest pose
+    # (the hands sheared on the 15-37 degree finger/hand rests)
+    for track in clip["tracks"]:
+        if "times" in track:
+            assert len({tuple(q) for q in track["quats"]}) > 1, track["node"]
 
 
 def test_character_model_skinned_emits_joints(client_dir, tmp_path):
