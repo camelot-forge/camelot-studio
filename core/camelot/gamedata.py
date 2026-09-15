@@ -35,7 +35,6 @@ MONNIFS_DESC = 1
 MONNIFS_NAME = 2
 MONNIFS_SET = 3  # Anim Set id -> anims.csv row (animations live there too)
 MONSTERS_NIF = 2
-ANIMNIFS_ID = 0
 ANIMNIFS_FILE = 2  # .kfa filename
 MONSTERS_SLOTS = {"Body": 3, "Head": 4, "Arms": 5, "Gloves": 6,
                   "Lbody": 7, "Legs": 8, "Boots": 9, "Cloak": 10, "Helm": 11}
@@ -281,19 +280,3 @@ def _resolve_from_nif_names(client_dir: str, nif_path: str) -> list[tuple[str, s
             finally:
                 a.close()
     return out
-
-
-def figure_code(client_dir: str, race_id: int, female: bool) -> str | None:
-    """The `fig3` short race code (e.g. 'sar_f') for an eRace id / gender.
-
-    `fig3map.csv` descriptions carry the race wording used by the client's
-    creation screen ('Saracen Female'), and the sfig archive names the
-    skeleton `<code>_<gender>_skeleton.nif` — mapping table in §11.2 of
-    notes/character-rules.md."""
-    from . import fig3 as _fig3  # late import: fig3 depends on gamedata
-
-    tables = _fig3.read_tables(client_dir)
-    desc = tables.race_desc.get(race_id)
-    if desc is None or ("female" in desc.lower()) != female:
-        return None
-    return _fig3.race_short(tables, race_id, female)

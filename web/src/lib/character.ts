@@ -15,7 +15,6 @@ export interface CharacterSlot {
 	label: string;
 	variants: CharacterVariant[]; // engine order (Body1, Body1b, Body2, ...)
 	defaultIndex: number; // -1 = hidden by default (LOD levels are distance-only)
-	hiddenNames?: string[]; // glTF mesh names that should never be visible
 }
 
 interface SlotSpec {

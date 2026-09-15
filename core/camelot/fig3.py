@@ -382,20 +382,6 @@ def shape_weights(shape) -> dict[int, list[tuple[int, float]]]:
     return out
 
 
-def dominant_bone(shape) -> str | None:
-    """The bone with the most skin weight on a shape."""
-    names = skin_bone_names(shape)
-    weights = shape_weights(shape)
-    if not names or not weights:
-        return None
-    totals: dict[str, float] = {}
-    for vertex_weights in weights.values():
-        for skin_index, weight in vertex_weights:
-            name = names[skin_index] if skin_index < len(names) else "?"
-            totals[name] = totals.get(name, 0.0) + weight
-    return max(totals, key=totals.get) if totals else None
-
-
 def head_dominated(shape, threshold: float = 0.5) -> bool:
     """True when most of the shape's skin weight sits on the head/eye bones.
 

@@ -16,21 +16,15 @@ variants, textures) stays classic.
 """
 from __future__ import annotations
 
-import os
-
 from . import fig3, gamedata
-from .fig3 import SLOT_NAMES  # noqa: F401 — re-exported for callers/tests
 
-# Experiment hook: which bone anchors the fig3 head onto the classic rig.
-# "none" keeps the piece at its authored Catacombs position, "head" aligns
-# Bip01 Head, "neck" aligns Bip01 Neck, "classic" keeps the classic heads.
-_ANCHOR = {"none": None, "head": "Bip01 Head", "neck": "Bip01 Neck", "classic": "Bip01 Head"}[
-    os.environ.get("CAMELOT_HEAD_ANCHOR", "neck")
-]
+# Which bone anchors the fig3 head onto the classic rig: the Catacombs head
+# bone sits ~2.8 units higher, so the rigid attach maps the piece's frame
+# onto the classic neck instead of floating at its fig3 height.
+_HEAD_ANCHOR = "Bip01 Neck"
 
-# Defaults until the appearance picker lands (face 1 / hair style 1).
+# Default face until the appearance picker lands.
 DEFAULT_FACE_INDEX = 1
-DEFAULT_HAIR_STYLE = 1
 
 # Hair colour variants shipped with the styles (naming varies by race:
 # `_dkbrown` for most, `_darkbrown` for some Inconnu sheets).
@@ -540,9 +534,9 @@ def prepare(client_dir: str, nif_path: str):
     # the classic neck instead of floating at its fig3 height.
     reference = fig3.load_reference(client_dir, tables)
     attached = fig3.attach_part(
-        data, head_data, "Head", reference=reference, align_bone=_ANCHOR
+        data, head_data, "Head", reference=reference, align_bone=_HEAD_ANCHOR
     ) + fig3.attach_part(
-        data, hair_data, "Hair", reference=reference or head_data, align_bone=_ANCHOR
+        data, hair_data, "Hair", reference=reference or head_data, align_bone=_HEAD_ANCHOR
     )
     if attached < 2:
         return None

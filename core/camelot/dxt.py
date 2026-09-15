@@ -1,10 +1,11 @@
-"""Camelot Studio — DXT1 (BC1) / DXT3 (BC2) decoding, for sheets with alpha.
+"""Camelot Studio — DXT1 (BC1) decoding, for sheets with alpha.
 
 DAoC's Cata hair sheets (``sar_f_hair01_dkbrown.dds``) are DXT1 textures whose
 transparent texels cut the hair silhouette. three.js `DDSLoader` maps DXT1 to
 an opaque RGB format, so those texels would render as garbage or hide the
 face; untangling that is easier upstream: decode DXT1 here and re-emit an
-uncompressed A8R8G8B8 DDS the loader reads with a real alpha channel.
+uncompressed A8R8G8B8 DDS the loader reads with a real alpha channel
+(:func:`viewer_dds`).
 """
 from __future__ import annotations
 
@@ -70,51 +71,6 @@ def decode_dxt1(data: bytes, width: int, height: int) -> bytes:
                     o = (y * width + x) * 4
                     out[o:o + 4] = bytes(pal[idx])
     return bytes(out)
-
-
-def decode_dxt3(data: bytes, width: int, height: int) -> bytes:
-    """RGBA bytes of a DXT3 (explicit 4-bit alpha) block stream."""
-    out = bytearray(width * height * 4)
-    blocks_x = (width + 3) // 4
-    blocks_y = (height + 3) // 4
-    pos = 0
-    for by in range(blocks_y):
-        for bx in range(blocks_x):
-            a0, a1 = struct.unpack_from("<II", data, pos)
-            pos += 8
-            c0, c1, bits = struct.unpack_from("<HHI", data, pos)
-            pos += 8
-            col0 = _rgb565(c0)
-            col1 = _rgb565(c1)
-            pal = [
-                (*col0, 255),
-                (*col1, 255),
-                (*((2 * col0[i] + col1[i]) // 3 for i in range(3)), 255),
-                (*((col0[i] + 2 * col1[i]) // 3 for i in range(3)), 255),
-            ]
-            alpha_bits = a0 | (a1 << 32)
-            for py in range(4):
-                y = by * 4 + py
-                if y >= height:
-                    continue
-                row = (bits >> (py * 8)) & 0xFF
-                for px in range(4):
-                    x = bx * 4 + px
-                    if x >= width:
-                        continue
-                    idx = (row >> (px * 2)) & 0x3
-                    o = (y * width + x) * 4
-                    a = (alpha_bits >> ((py * 4 + px) * 4)) & 0xF
-                    out[o:o + 4] = (*pal[idx][:3], a * 17)
-    return bytes(out)
-
-
-def decode_dxt3_to_a8r8g8b8(dds: bytes) -> bytes | None:
-    """Decode a DXT3 DDS to uncompressed RGBA (alpha is real, always needed)."""
-    width, height, fourcc = parse_dds_header(dds)
-    if fourcc != b"DXT3":
-        return None
-    return encode_a8r8g8b8(width, height, decode_dxt3(dds[_HEADER_SIZE:], width, height))
 
 
 def dxt1_has_alpha(data: bytes, width: int, height: int) -> bool:

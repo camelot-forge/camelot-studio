@@ -5,7 +5,8 @@ semantics documented in ``notes/character-rules.md`` §8.15 and §11.
 """
 import pytest
 
-from camelot import appearance as app, gamedata
+from camelot import appearance as app
+from camelot import gamedata
 
 pytestmark = pytest.mark.usefixtures("client_dir")
 

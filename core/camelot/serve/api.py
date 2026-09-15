@@ -21,9 +21,7 @@ from .index import Asset, AssetIndex
 from .models import CharacterOptions
 
 # Export-cache schema/behaviour version (bump when export output changes).
-# Experiment hook: the anchor variant joins the key so each CAMELOT_HEAD_ANCHOR
-# value gets its own cache slot during the head-anchor measurements.
-_EXPORT_VERSION = f"11-{__import__('os').environ.get('CAMELOT_HEAD_ANCHOR', 'neck')}"
+_EXPORT_VERSION = "11"
 from .models import AssetDetail, AssetPage, AssetSummary, Health, RootInfo
 from .watcher import IndexWatcher
 
@@ -137,7 +135,6 @@ def _export_model(
         out_prefix,
         verbose=False,
         emit_skinned=skinned,
-        fig3_head=os.environ.get("CAMELOT_HEAD_ANCHOR", "neck") != "classic",
     )
     gltf = json.loads(Path(out_prefix + ".gltf").read_text(encoding="utf-8"))
     bin_bytes = Path(out_prefix + ".bin").read_bytes()

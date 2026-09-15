@@ -36,7 +36,6 @@ export interface CharacterRigSlot {
 	label: string;
 	variants: CharacterVariant[];
 	defaultIndex: number; // -1 = hidden by default (LOD)
-	hiddenMeshes?: THREE.Object3D[]; // meshes that should stay invisible
 }
 export interface CharacterRig {
 	slots: CharacterRigSlot[];
@@ -139,15 +138,9 @@ function buildCharacter(
 			variants: slot.variants.map((variant) => ({
 				label: variant.label,
 				meshes: variant.names.flatMap((name) => byIndex.get(meshIndex.get(name) ?? -1) ?? [])
-			})),
-			hiddenMeshes: slot.hiddenNames?.flatMap(
-				(name) => byIndex.get(meshIndex.get(name) ?? -1) ?? []
-			)
+			}))
 		}))
 	};
-	for (const slot of rig.slots) {
-		for (const mesh of slot.hiddenMeshes ?? []) mesh.visible = false;
-	}
 	for (let si = 0; si < rig.slots.length; si++)
 		setCharacterVariant(rig, si, rig.slots[si].defaultIndex);
 	return rig;

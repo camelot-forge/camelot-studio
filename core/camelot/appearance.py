@@ -18,17 +18,7 @@ All ids are `skins.csv`/`monnifs.csv`-reflective ids resolvable via
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
-from . import fig3, gamedata
-
-# Appearance settings the builder exposes (1-based indices).
-DEFAULTS = {"face": 1, "hair_style": 1, "hair_color": 1, "eye_color": 1,
-            "skin_tone": 1}
-
-
-def _female(desc: str) -> bool:
-    return "female" in (desc or "").lower()
+from . import gamedata
 
 
 def _col_row_map(client_dir: str, csv_name: str) -> dict[int, list[str]]:
@@ -137,22 +127,3 @@ def decal_ids(client_dir: str, race_e_id: int):
     ids = out.get(race_e_id, {})
     return ids
 
-
-@dataclass
-class FigureAppearance:
-    race_e_id: int
-    female: bool
-    face: int = 1
-    hair_style: int = 1
-    hair_color: int = 1
-    eye_color: int = 1
-    skin_tone: int = 1
-    # convenience: the slot piece id the caller wants (0 = auto)
-    cloak_variant: int = 0
-    # engine storage reporting
-    hair_sheet_name: str | None = None
-    hair_sheet: dict | None = None
-    face_sheet: str | None = None
-    eye_sheet: str | None = None
-    pieces: dict = field(default_factory=dict)
-    errors: list = field(default_factory=list)

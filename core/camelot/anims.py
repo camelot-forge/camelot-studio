@@ -326,14 +326,6 @@ def _channel_rotation_keys(ch) -> list:
     return []
 
 
-def _channel_key_count(ch) -> int:
-    if ch.rotations:
-        return len(ch.rotations)
-    if ch.xyz_rotations:
-        return max((len(group) for group in ch.xyz_rotations), default=0)
-    return 0
-
-
 def native_fps(pose) -> float:
     """Authoring key rate of a KFA (15 classic, 30 CATA-era).
 

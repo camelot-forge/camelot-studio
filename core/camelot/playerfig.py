@@ -37,9 +37,6 @@ _SLOT_SHEETS = {
     "Gloves": "leagloves01_01",
 }
 
-_RIG_CACHE: dict[tuple[str, str], bytes | None] = {}
-
-
 _RIG_PATH_CACHE: dict[tuple[str, str], str | None] = {}
 
 
