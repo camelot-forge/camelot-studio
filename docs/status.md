@@ -217,8 +217,13 @@ classification/selection.
    geometry changes rebuild, colour changes re-texture one slot live
    (the route returns the sheet plus the engine tint in `X-Camelot-Tint`
    — skin tones and tint-based hair colours are the `fig3tints.csv`
-   multiply the viewer applies). Armor material textures (`pskins`) are
-   next (see `workspace/notes/player-character-builder.md`).
+   multiply the viewer applies). The builder plays each race's **idle**:
+   the model is served skinned (`?skinned=true`) and the clip is resolved
+   through the client's own tables (the player figure's monnifs row → its
+   animation set) and mapped onto the runtime fig3 skeleton with the
+   canonical bone table — 30/30 builder race rows animate. Armor material
+   textures (`pskins`) are next (see
+   `workspace/notes/player-character-builder.md`).
 6. M2: Blender addon + server-bridge (artifact injection, in-game testing).
 
 ## Command cheat sheet

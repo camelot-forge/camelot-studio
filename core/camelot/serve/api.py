@@ -238,10 +238,14 @@ def build_router(config: ServeConfig, index: AssetIndex,
         eye_color: int = 1,
         skin_tone: int = 1,
         cloak: int = 0,
+        skinned: bool = False,
     ) -> Response:
         """A preview glb of a player figure assembled with the appearance
         picked: rig from the client sfig archives; pieces by slot; sheets
-        from the colormaps; textures through pskins (§8.15 doctrine)."""
+        from the colormaps; textures through pskins (§8.15 doctrine).
+
+        ``skinned=true`` emits joints/weights so the viewer can play the
+        figure's idle (`/character/…/anim`)."""
         import tempfile
         from pathlib import Path as _Path
 
@@ -270,11 +274,56 @@ def build_router(config: ServeConfig, index: AssetIndex,
         data, textures = prepared
         with tempfile.TemporaryDirectory() as tmpdir:
             out = str(_Path(tmpdir) / "preview")
-            export_gltf("character-preview.nif", out, data=data, textures=textures)
+            export_gltf(
+                "character-preview.nif", out, data=data, textures=textures,
+                emit_skinned=skinned,
+            )
             glb_doc = json.loads(Path(out + ".gltf").read_text())
             glb_bin = Path(out + ".bin").read_bytes()
         return Response(content=pack_glb(glb_doc, glb_bin),
                             media_type="model/gltf-binary")
+
+    @router.get("/character/{race_id}/{female}/anim")
+    def character_anim(race_id: int, female: bool) -> Response:
+        """The player idle of (race, gender) as viewer tracks.
+
+        The clip is resolved through the client's own tables (the classic
+        player figure's monnifs row → its animation set) and mapped onto the
+        *runtime* fig3 skeleton with the canonical bone table, so the tracks
+        name exactly the bones the assembled model exports."""
+        import tempfile
+        from pathlib import Path as _Path
+
+        from .. import fig3, gamedata
+        from ..anims import animation_tracks, resolve_idle_kfa
+        from ..playerfig import rig_bytes
+
+        tables = fig3.read_tables(str(config.root))
+        desc = tables.race_desc.get(race_id)
+        if desc is None or ("female" in desc.lower()) != female:
+            raise HTTPException(status_code=404, detail="unknown race")
+        name = gamedata.figure_name_for_desc(str(config.root), desc)
+        if name is None:
+            raise HTTPException(status_code=404, detail="no player figure for this race")
+        virtual = os.path.join(str(config.root), "figures", name + ".NIF")
+        kfa_path = resolve_idle_kfa(str(config.root), virtual)
+        if kfa_path is None:
+            raise HTTPException(status_code=404, detail="no idle animation for this race")
+        raw = rig_bytes(str(config.root), race_id, female)
+        if raw is None:
+            raise HTTPException(status_code=404, detail="no runtime rig for this race")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            rig_path = str(_Path(tmpdir) / f"{name}_skeleton.nif")
+            Path(rig_path).write_bytes(raw)
+            try:
+                tracks = animation_tracks(
+                    rig_path, kfa_path, str(config.root), prefer_table=True
+                )
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=500, detail=f"anim failed: {exc}") from exc
+        if not tracks["tracks"]:
+            raise HTTPException(status_code=404, detail="no idle animation for this race")
+        return Response(content=json.dumps(tracks), media_type="application/json")
 
     @router.get("/character/{race_id}/{female}/texture")
     def character_texture(

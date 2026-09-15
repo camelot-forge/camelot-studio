@@ -1,5 +1,6 @@
 """Serve-api character endpoints (corpus tests)."""
 import json
+import os
 import struct
 
 import pytest
@@ -56,6 +57,52 @@ def test_character_model_carries_engine_tints(client_dir, tmp_path):
     assert ext["Hair"]["tint"] == [110, 107, 59]  # Hair Tint 25 (style 1, colour 2)
     assert "tint" not in ext["Eyes"]
     assert "tint" not in ext["Body"]  # armour sheets stay untinted
+
+
+def test_player_rows_resolve_a_figure_and_idle(client_dir):
+    """Every playable race row finds its monnifs figure and idle KFA.
+
+    The rows differ in spelling ("Male Norse", "Hibernian Elf male",
+    "Cata … Stone Male"): the matcher tolerates word order and realm
+    prefixes and prefers the player rows over the Cata monster ones.
+    """
+    from camelot import fig3, gamedata
+    from camelot.anims import resolve_idle_kfa
+
+    tables = fig3.read_tables(str(client_dir))
+    for race_id in range(1, 31):
+        desc = tables.race_desc.get(race_id)
+        if not desc:
+            continue
+        name = gamedata.figure_name_for_desc(str(client_dir), desc)
+        assert name, f"{desc}: no monnifs figure"
+        kfa = resolve_idle_kfa(
+            str(client_dir), os.path.join(str(client_dir), "figures", f"{name}.NIF")
+        )
+        assert kfa, f"{desc}: no idle KFA"
+
+
+@pytest.mark.parametrize(
+    ("race_id", "female"),
+    [(1, False), (4, True), (18, True), (29, False)],
+)
+def test_character_anim_serves_the_player_idle(client_dir, tmp_path, race_id, female):
+    client = _client(client_dir, tmp_path)
+    r = client.get(f"/api/v1/character/{race_id}/{female}/anim")
+    assert r.status_code == 200, r.text
+    clip = r.json()
+    assert clip["duration"] > 0 and clip["kfa"]
+    nodes = {track["node"] for track in clip["tracks"]}
+    assert clip["tracks"] and any(node.startswith("Bip01") for node in nodes)
+
+
+def test_character_model_skinned_emits_joints(client_dir, tmp_path):
+    client = _client(client_dir, tmp_path)
+    r = client.get("/api/v1/character/4/true/model?skinned=true")
+    assert r.status_code == 200, r.text
+    doc = _glb_json(r.content)
+    prim = doc["meshes"][0]["primitives"][0]
+    assert "JOINTS_0" in prim["attributes"] and "WEIGHTS_0" in prim["attributes"]
 
 
 def test_character_texture_swap_ships_the_tint(client_dir, tmp_path):

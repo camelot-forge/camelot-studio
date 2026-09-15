@@ -4,6 +4,7 @@
 	import Stepper from '$lib/components/Stepper.svelte';
 	import { api } from '$lib/api/client';
 	import { loadFromGlb as loadGlb, type LoadedModel } from '$lib/gltf/load';
+	import type { AnimClip } from '$lib/anim';
 	import type { CharacterOptions } from '$lib/api/client';
 
 	// The 18 playable races, ids from the client's own enumeration (eRace
@@ -49,6 +50,7 @@
 	let raceOptions = $state<CharacterOptions | null>(null);
 
 	let model = $state<LoadedModel | null>(null);
+	let anim = $state<AnimClip | null>(null);
 	let error = $state<string | null>(null);
 	let loading = $state(false);
 
@@ -101,9 +103,11 @@
 			if (!res.ok) throw new Error(`model failed (${res.status})`);
 			const buf = await res.arrayBuffer();
 			model = await loadGlb(buf, `character-${raceId}-${female ? 'f' : 'm'}.glb`);
+			anim = await api.characterAnim(raceId, female).catch(() => null);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 			model = null;
+			anim = null;
 		} finally {
 			loading = false;
 		}
@@ -242,7 +246,7 @@
 			{#if loading}
 				<div class="center"><LoaderCircle class="spin" size={22} /> Building…</div>
 			{:else if model}
-				<Viewer {model} />
+				<Viewer {model} {anim} />
 			{:else}
 				<div class="center">
 					{#if error}<p class="err">{error}</p>{/if}

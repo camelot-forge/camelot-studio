@@ -144,10 +144,29 @@ export const api = {
 		for (const [k, v] of Object.entries(appearance)) qs.set(k, String(v));
 		return `${getApiBase()}/api/v1/character/${raceId}/${female ? 'true' : 'false'}/texture?${qs}`;
 	},
-	characterModelUrl: (raceId: number, female: boolean, appearance: Record<string, number>) => {
+	characterModelUrl: (
+		raceId: number,
+		female: boolean,
+		appearance: Record<string, number>,
+		skinned = true
+	) => {
 		const qs = new URLSearchParams();
 		for (const [k, v] of Object.entries(appearance)) qs.set(k, String(v));
+		if (skinned) qs.set('skinned', 'true');
 		return `${getApiBase()}/api/v1/character/${raceId}/${female ? 'true' : 'false'}/model?${qs}`;
+	},
+	characterAnim: async (
+		raceId: number,
+		female: boolean,
+		signal?: AbortSignal
+	): Promise<AnimClip | null> => {
+		const res = await fetch(
+			`${getApiBase()}/api/v1/character/${raceId}/${female ? 'true' : 'false'}/anim`,
+			{ signal }
+		);
+		if (res.status === 404) return null;
+		if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+		return (await res.json()) as AnimClip;
 	},
 	anim: async (id: string, signal?: AbortSignal): Promise<AnimClip | null> => {
 		const res = await fetch(`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim`, {

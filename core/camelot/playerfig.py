@@ -40,12 +40,8 @@ _SLOT_SHEETS = {
 _RIG_PATH_CACHE: dict[tuple[str, str], str | None] = {}
 
 
-def rig_for(client_dir: str, race_id: int, female: bool):
-    """The runtime rig of (race, gender) — a *fresh* NIF each call.
-
-    The archives are cached as paths (each export must re-load the tree:
-    attaching mutates it, two previews sharing one object would stack
-    meshes on top of each other)."""
+def rig_bytes(client_dir: str, race_id: int, female: bool) -> bytes | None:
+    """The runtime rig NIF bytes of (race, gender), or None."""
     code = fig3.race_short(fig3.read_tables(client_dir), race_id, female)
     if code is None:
         return None
@@ -55,14 +51,24 @@ def rig_for(client_dir: str, race_id: int, female: bool):
     path = _RIG_PATH_CACHE[key]
     if path is None:
         return None
-    entry = f"{code}_skeleton.nif"
-    from pyffi.formats.nif import NifFormat
-
     arch = MpakArchive(path)
     try:
-        raw = arch.read(entry)
+        return arch.read(f"{code}_skeleton.nif")
     finally:
         arch.close()
+
+
+def rig_for(client_dir: str, race_id: int, female: bool):
+    """The runtime rig of (race, gender) — a *fresh* NIF each call.
+
+    The archives are cached as paths (each export must re-load the tree:
+    attaching mutates it, two previews sharing one object would stack
+    meshes on top of each other)."""
+    raw = rig_bytes(client_dir, race_id, female)
+    if raw is None:
+        return None
+    from pyffi.formats.nif import NifFormat
+
     data = NifFormat.Data()
     data.read(io.BytesIO(raw))
     return data

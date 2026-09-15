@@ -382,9 +382,15 @@ def anim_timing(client_dir: str, kfa_path: str) -> tuple[float, float] | None:
 
 
 def animation_tracks(
-    nif_path: str, kfa_path: str, client_dir: str | None = None
+    nif_path: str, kfa_path: str, client_dir: str | None = None,
+    prefer_table: bool | None = None,
 ) -> dict:
     """Joint rotation tracks for posing *nif_path* with *kfa_path*.
+
+    *prefer_table* forces the engine's canonical bone table for the channel
+    mapping (``None`` keeps the gamedata heuristic): the native fig3 runtime
+    rigs are not listed in monnifs, but they are exactly what the table
+    describes.
 
     Returns ``{"kfa", "duration", "rate", "tracks": [...]}`` where each track
     carries ``{node, times, quats}`` (rotation locals in KFA key seconds) and,
@@ -422,9 +428,10 @@ def animation_tracks(
             stack.extend(reversed(list(getattr(obj, "children", []) or [])))
     pose = load_kfa(kfa_path)
     table = load_bone_table(os.path.join(client_dir, "figures")) if client_dir else None
-    prefer_table = bool(
-        client_dir and kfa_comes_from_gamedata(client_dir, nif_path, kfa_path)
-    )
+    if prefer_table is None:
+        prefer_table = bool(
+            client_dir and kfa_comes_from_gamedata(client_dir, nif_path, kfa_path)
+        )
     mapping, source = map_kfa_to_nodes(
         objs, names, pose, bone_names=table, with_source=True, prefer_table=prefer_table
     )

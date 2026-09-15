@@ -207,6 +207,38 @@ def figure_desc(client_dir: str, nif_path: str) -> str | None:
     return fallback
 
 
+_RACE_ROW_MARKERS = ("cata", "stone", "shade", "mummy", "undead", "old", "king", "skeleton")
+_REALM_PREFIXES = {"albion", "midgard", "hibernia", "hibernian"}
+
+
+def figure_name_for_desc(client_dir: str, desc: str) -> str | None:
+    """A monnifs figure Name matching a race description (`Saracen Female`).
+
+    `monnifs.csv` spells the player rows differently from fig3map: word order
+    varies ("Male Norse" vs "Norse Male") and the Hibernian rows carry a
+    realm prefix ("Hibernian Elf male"). Word-set equality, plus a realm-only
+    prefix tolerance and a player-row preference, picks the classic player
+    figure, whose animation set is the player idle.
+    """
+    target = frozenset(norm_name(word) for word in desc.split() if word)
+    fallback = None
+    for row in _read_table(client_dir, "monnifs.csv")[2:]:
+        if len(row) <= MONNIFS_NAME or not row[MONNIFS_NAME].strip():
+            continue
+        row_desc = row[MONNIFS_DESC].strip() if len(row) > MONNIFS_DESC else ""
+        if not row_desc:
+            continue
+        words = frozenset(norm_name(word) for word in row_desc.split() if word)
+        if words != target and not (target <= words and words - target <= _REALM_PREFIXES):
+            continue
+        name = row[MONNIFS_NAME].strip()
+        if not any(marker in row_desc.lower() for marker in _RACE_ROW_MARKERS):
+            return name
+        if fallback is None:
+            fallback = name
+    return fallback
+
+
 def resolve_figure_skins(client_dir: str, nif_path: str) -> list[SlotTexture]:
     """Resolve a figure's skin sheets -> [SlotTexture, ...] (no tints).
 
