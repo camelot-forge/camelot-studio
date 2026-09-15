@@ -73,6 +73,13 @@ def test_character_texture_swap_ships_the_tint(client_dir, tmp_path):
     r = client.get(f"{base}?kind=eye_color&eye_color=2")
     assert r.status_code == 200 and "x-camelot-tint" not in r.headers
 
+    # the eye swap serves the baked face×eyecolor composite (per eye colour)
+    r1 = client.get(f"{base}?kind=eye_color&face=1&eye_color=1")
+    r2 = client.get(f"{base}?kind=eye_color&face=1&eye_color=2")
+    assert r1.status_code == r2.status_code == 200
+    assert r1.content[:4] == b"DDS " and r1.content != r2.content
+    assert "x-camelot-tint" not in r1.headers
+
     # white tints are the no-op: the sheet keeps its authored colours
     r = client.get(f"{base}?kind=skin_tone&skin_tone=1")
     assert r.status_code == 200 and "x-camelot-tint" not in r.headers

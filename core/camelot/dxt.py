@@ -109,6 +109,112 @@ def encode_a8r8g8b8(width: int, height: int, rgba: bytes) -> bytes:
     return bytes(hdr) + bytes(bgra)
 
 
+def decode_dxt3(data: bytes, width: int, height: int) -> bytes:
+    """RGBA bytes of a DXT3 (BC2) block stream: 4-bit explicit alpha + colour."""
+    out = bytearray(width * height * 4)
+    blocks_x = (width + 3) // 4
+    blocks_y = (height + 3) // 4
+    pos = 0
+    for by in range(blocks_y):
+        for bx in range(blocks_x):
+            a0, a1 = struct.unpack_from("<II", data, pos)
+            pos += 8
+            c0, c1, bits = struct.unpack_from("<HHI", data, pos)
+            pos += 8
+            col0 = _rgb565(c0)
+            col1 = _rgb565(c1)
+            pal = [
+                (*col0, 255),
+                (*col1, 255),
+                (*((2 * col0[i] + col1[i]) // 3 for i in range(3)), 255),
+                (*((col0[i] + 2 * col1[i]) // 3 for i in range(3)), 255),
+            ]
+            alpha_bits = a0 | (a1 << 32)
+            for py in range(4):
+                y = by * 4 + py
+                if y >= height:
+                    continue
+                row = (bits >> (py * 8)) & 0xFF
+                for px in range(4):
+                    x = bx * 4 + px
+                    if x >= width:
+                        continue
+                    o = (y * width + x) * 4
+                    out[o:o + 3] = bytes(pal[(row >> (px * 2)) & 0x3][:3])
+                    out[o + 3] = ((alpha_bits >> ((py * 4 + px) * 4)) & 0xF) * 17
+    return bytes(out)
+
+
+def decode_dxt5(data: bytes, width: int, height: int) -> bytes:
+    """RGBA bytes of a DXT5 (BC3) block stream: 8-byte alpha + DXT1 colour."""
+    out = bytearray(width * height * 4)
+    blocks_x = (width + 3) // 4
+    blocks_y = (height + 3) // 4
+    pos = 0
+    for by in range(blocks_y):
+        for bx in range(blocks_x):
+            a0, a1 = data[pos], data[pos + 1]
+            alpha_bits = int.from_bytes(data[pos + 2:pos + 8], "little")
+            pos += 8
+            c0, c1, bits = struct.unpack_from("<HHI", data, pos)
+            pos += 8
+            col0 = _rgb565(c0)
+            col1 = _rgb565(c1)
+            pal = [
+                (*col0, 255),
+                (*col1, 255),
+                (*((2 * col0[i] + col1[i]) // 3 for i in range(3)), 255),
+                (*((col0[i] + 2 * col1[i]) // 3 for i in range(3)), 255),
+            ]
+            if a0 > a1:
+                alpha_pal = [a0, a1] + [
+                    ((7 - i) * a0 + i * a1) // 7 for i in range(1, 7)
+                ]
+            else:
+                alpha_pal = [a0, a1] + [
+                    ((5 - i) * a0 + i * a1) // 5 for i in range(1, 5)
+                ] + [0, 255]
+            for py in range(4):
+                y = by * 4 + py
+                if y >= height:
+                    continue
+                for px in range(4):
+                    x = bx * 4 + px
+                    if x >= width:
+                        continue
+                    o = (y * width + x) * 4
+                    out[o:o + 3] = bytes(pal[(bits >> (2 * (py * 4 + px))) & 0x3][:3])
+                    out[o + 3] = alpha_pal[(alpha_bits >> (3 * (py * 4 + px))) & 0x7]
+    return bytes(out)
+
+
+def dds_rgba(dds: bytes) -> tuple[int, int, bytes] | None:
+    """(width, height, RGBA bytes) for a DXT1/DXT5 or A8R8G8B8 DDS, else None.
+
+    Non-DXT or unreadable payloads return None — callers fall back to the
+    compressed sheet rather than crash.
+    """
+    try:
+        width, height, fourcc = parse_dds_header(dds)
+    except ValueError:
+        return None
+    data = dds[_HEADER_SIZE:]
+    if fourcc == b"DXT1":
+        return width, height, decode_dxt1(data, width, height)
+    if fourcc == b"DXT3":
+        return width, height, decode_dxt3(data, width, height)
+    if fourcc == b"DXT5":
+        return width, height, decode_dxt5(data, width, height)
+    if not fourcc and len(data) >= width * height * 4:
+        rgba = bytearray(width * height * 4)
+        rgba[0::4] = data[2::4]  # A8R8G8B8 stores BGRA
+        rgba[1::4] = data[1::4]
+        rgba[2::4] = data[0::4]
+        rgba[3::4] = data[3::4]
+        return width, height, bytes(rgba)
+    return None
+
+
 def dxt1_to_a8r8g8b8(dds: bytes) -> bytes | None:
     """Decode a DXT1 DDS to uncompressed RGBA; None when it has no alpha.
 

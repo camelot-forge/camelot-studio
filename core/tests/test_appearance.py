@@ -44,6 +44,30 @@ def test_eye_sheet_per_colour(client_dir):
     assert len(sheets) == 8  # 8 distinct eye sheets per race
 
 
+def test_eye_composite_paints_the_eye(client_dir):
+    """The Eyes texture is the face sheet's painted eye multiplied by the
+    `eyecolor_*` dark-map decal (per eye colour)."""
+    import numpy as np
+
+    from camelot.dxt import dds_rgba, parse_dds_header
+
+    comp = app.eye_composite(client_dir, 4, 1, 1)
+    assert comp is not None
+    assert comp[0].lower().startswith("eyecolor_")
+    width, height, fourcc = parse_dds_header(comp[1])
+    assert fourcc == b""  # baked uncompressed
+    assert (width, height) == (256, 256)  # the face sheet's grid
+    _w, _h, pixels = dds_rgba(comp[1])
+    rgb = np.frombuffer(pixels, np.uint8).reshape(height, width, 4)[:, :, :3].astype(int)
+    # the plain eye sheet is nearly all white: the composite must carry the
+    # artwork (dark pupil/iris pixels)
+    assert (rgb.sum(axis=2) < 200).sum() > 0
+
+    # the ring is the iris colour: each eye colour bakes a different sheet
+    other = app.eye_composite(client_dir, 4, 1, 2)
+    assert other is not None and other[1] != comp[1]
+
+
 def test_skin_tint_varies(client_dir):
     ids = {app.skin_tint(client_dir, 4, tone) for tone in range(1, 9)}
     assert len(ids) == 8

@@ -113,6 +113,45 @@ def skin_tint(client_dir: str, race_e_id: int, tone: int):
 _WHITE = (255, 255, 255)
 
 
+def eye_composite(client_dir: str, race_e_id: int, face: int, eye_color: int):
+    """The face sheet's painted eye multiplied by the `eyecolor_*` decal.
+
+    The face sheet carries the eyeball artwork at the eyeball's UVs (sclera,
+    iris, pupil, lid highlight) and the eye sheet is the engine's dark map:
+    a nearly-all-white sheet whose tiny ring is the iris colour. The game
+    multiplies the two (Gamebryo "Dark Map", docs/formats.md §8.10);
+    three.js has no second multiply stage, so the exporter bakes the product
+    into the Eyes sheet. Returns ``(name, bytes)`` like the sheet helpers.
+    """
+    base = face_sheet(client_dir, race_e_id, face)
+    decal = eye_sheet(client_dir, race_e_id, eye_color)
+    if base is None:
+        return None
+    if decal is None:
+        return base
+
+    import numpy as np
+
+    from .dxt import dds_rgba, encode_a8r8g8b8
+
+    base_data = dds_rgba(base[1])
+    decal_data = dds_rgba(decal[1])
+    if base_data is None or decal_data is None:
+        return base  # cannot multiply these formats: keep the artwork
+    aw, ah, apx = base_data
+    bw, bh, bpx = decal_data
+    rgb = np.frombuffer(apx, np.uint8).reshape(ah, aw, 4)[:, :, :3].astype(np.uint16)
+    dec = np.frombuffer(bpx, np.uint8).reshape(bh, bw, 4)[:, :, :3]
+    # nearest resample of the decal to the base's grid: both sheets use the
+    # same normalised UVs, so texel (0,0) stays texel (0,0).
+    dec = dec[(np.arange(ah) * bh // ah).clip(0, bh - 1)][
+        :, (np.arange(aw) * bw // aw).clip(0, bw - 1)
+    ].astype(np.uint16)
+    product = (rgb * dec // 255).astype(np.uint8)
+    rgba = np.dstack([product, np.full((ah, aw), 255, np.uint8)])
+    return (decal[0], encode_a8r8g8b8(aw, ah, rgba.tobytes()))
+
+
 def tint_rgb(client_dir: str, tint_id: int) -> tuple[int, int, int] | None:
     """(Red, Green, Blue) of a `fig3tints.csv` id — the engine's packed tint.
 

@@ -148,22 +148,15 @@ def _pick_hair(
 
 
 def eye_texture(client_dir: str, rid: int) -> tuple[str, bytes] | None:
-    """The race's default eye sheet (``fig3eyecolormap.csv``, colour 1).
+    """The race's default eye texture (face 1 × ``eyecolor_*`` colour 1).
 
-    Fig3 heads carry the eyes as separate geometry that the face sheet does
-    not cover — the engine draws them with an ``eyecolor_*`` sheet.
+    Fig3 heads carry the eyes as separate geometry: the *face* sheet paints
+    the eyeball and the ``eyecolor_*`` sheet is the engine's dark-map decal
+    (see :func:`camelot.appearance.eye_composite`).
     """
-    for row in gamedata._read_table(client_dir, "fig3eyecolormap.csv"):
-        if len(row) < 3 or row[0].strip() != str(rid):
-            continue
-        for skin_id in row[2:]:
-            sid = skin_id.strip()
-            if not sid or sid == "0":
-                continue
-            found = gamedata.skin_texture(client_dir, sid)
-            if found is not None:
-                return found
-    return None
+    from . import appearance as app
+
+    return app.eye_composite(client_dir, rid, DEFAULT_FACE_INDEX, 1)
 
 
 def eye_vertices(shape) -> set[int]:

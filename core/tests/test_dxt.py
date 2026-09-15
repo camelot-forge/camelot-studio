@@ -74,6 +74,52 @@ def test_rejects_non_dds():
         parse_dds_header(b"nope")
 
 
+def test_decode_dxt5_reads_alpha_and_colour():
+    from camelot.dxt import decode_dxt5
+
+    # 4x4 block: alpha endpoints 255/0 (texels take index 0 = opaque) plus a
+    # DXT1 colour block (c0 white > c1 black, index 0 = white).
+    block = bytes([255, 0]) + (0).to_bytes(6, "little") + _block(0xFFFF, 0x0000, 0)
+    rgba = decode_dxt5(block, 4, 4)
+    assert rgba[0:4] == bytes([255, 255, 255, 255])
+    assert rgba[-4:] == bytes([255, 255, 255, 255])
+
+    transparent = bytes([0, 255]) + (0).to_bytes(6, "little") + _block(0xFFFF, 0x0000, 0)
+    assert decode_dxt5(transparent, 4, 4)[3] == 0
+
+
+def test_decode_dxt3_reads_explicit_alpha():
+    from camelot.dxt import decode_dxt3
+
+    # 4-bit alpha: 0xF per texel = opaque; colour block index 0 = white.
+    alpha = (0xFF).to_bytes(8, "little")
+    rgba = decode_dxt3(alpha + _block(0xFFFF, 0x0000, 0), 4, 4)
+    assert rgba[0:4] == bytes([255, 255, 255, 255])
+
+    transparent = (0).to_bytes(8, "little") + _block(0xFFFF, 0x0000, 0)
+    assert decode_dxt3(transparent, 4, 4)[3] == 0
+
+
+def test_dds_rgba_handles_the_three_encodings():
+    from camelot.dxt import dds_rgba
+
+    assert dds_rgba(b"nope") is None
+
+    # uncompressed A8R8G8B8 (BGRA memory order) reads back as RGBA
+    rgba = bytes([10, 20, 30, 255])
+    dds = encode_a8r8g8b8(1, 1, rgba)
+    width, height, pixels = dds_rgba(dds)
+    assert (width, height) == (1, 1)
+    assert pixels == rgba
+
+    # dense DXT1 decodes too
+    dxt1 = bytearray(b"DDS " + b"\x00" * 124 + _block(0xFFFF, 0x0000))
+    struct.pack_into("<I", dxt1, 80, 0x4)
+    dxt1[84:88] = b"DXT1"
+    struct.pack_into("<II", dxt1, 12, 4, 4)
+    assert dds_rgba(bytes(dxt1))[2][0:4] == bytes([255, 255, 255, 255])
+
+
 def test_viewer_dds_rewrites_only_dxt1_alpha_sheets():
     from camelot.dxt import viewer_dds
 

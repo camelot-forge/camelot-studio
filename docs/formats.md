@@ -112,14 +112,18 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   authoritative even when it lists another style's or race's sheet (Celt
   female → Briton sheets, Highlander female → Norseman ones) and when the
   styles ship no sheet under their own names. The **eyes are separate
-  geometry** inside the head mesh (vertices bound to `Bip01 L/R Eyeball`)
-  that samples a dedicated `eyecolor_*` sheet from `fig3eyecolormap.csv` —
-  the face sheet is plain skin there. The exporter splits those triangles
-  into their own `Eyes` mesh so both sheets render. The authored eye UVs are
-  the engine mapping: the eyeball's *front cap* lands within 1-3 px of the
-  eye sheet's artwork (a ~7 px iris drawing on a nearly all-white 128²
-  sheet) — remapping the eye island onto that artwork magnifies it and
-  renders faceted, so the UVs are copied as authored.
+  geometry** inside the head mesh (vertices bound to `Bip01 L/R Eyeball`).
+  The eyeball artwork lives on the *face* sheet (sclera, iris, pupil, lid
+  highlight) and the iris is painted **neutral grey** on most races
+  (Frostalf 123,125,130; Briton 103,110,115); the `eyecolor_*` sheet
+  (`fig3eyecolormap.csv`, 8 per race) is the engine's dark-map decal: a
+  nearly white sheet whose tiny ring is the iris colour (vivid palettes:
+  Frostalf c1 magenta, c3 cyan, c5 green…; Saracen/Briton earthy tones).
+  The engine multiplies the two (§8.10), and the exporter **bakes the
+  product** into the `Eyes` sheet (`appearance.eye_composite`, DXT1/3/5
+  decoded by `dxt.dds_rgba`) so three.js needs no second multiply stage;
+  the `Eyes` mesh then keeps the head node's authoring frame and the
+  authored UVs, which map the eyeball's front cap 1:1 onto the artwork.
   fig3 hair/beard UVs may leave the unit square (Highlander male beard:
   v ≈ -0.9) — Gamebryo wraps them, so viewers must sample with wrap; the
   three.js clamp default smears the edge texel over the beard.

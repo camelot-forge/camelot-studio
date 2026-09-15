@@ -126,7 +126,7 @@ def textures_for(client_dir: str, tables, race_id: int, female: bool,
 
     add("Head", app.face_sheet(client_dir, race_id, face),
         tint=app.skin_tint_rgb(client_dir, race_id, skin_tone))
-    add("Eyes", app.eye_sheet(client_dir, race_id, eye_color))
+    add("Eyes", app.eye_composite(client_dir, race_id, face, eye_color))
     triplets = app._hair_triplets(client_dir, race_id, style=hair_style_key)
     if triplets:
         # fig3 haircolormap row = 16 colour slots; empty S cells carry no

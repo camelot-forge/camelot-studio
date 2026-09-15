@@ -21,7 +21,7 @@ from .index import Asset, AssetIndex
 from .models import CharacterOptions
 
 # Export-cache schema/behaviour version (bump when export output changes).
-_EXPORT_VERSION = "12"
+_EXPORT_VERSION = "14"
 from .models import AssetDetail, AssetPage, AssetSummary, Health, RootInfo
 from .watcher import IndexWatcher
 
@@ -319,7 +319,7 @@ def build_router(config: ServeConfig, index: AssetIndex,
                 tint = app.skin_tint_rgb(root, race_id, skin_tone)
                 return sheet_response(found[0], found[1], tint)
         if kind == "eye_color":
-            found = app.eye_sheet(root, race_id, eye_color)
+            found = app.eye_composite(root, race_id, face, eye_color)
             if found:
                 return sheet_response(found[0], found[1], None)
         raise HTTPException(
