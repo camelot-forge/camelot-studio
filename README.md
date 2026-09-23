@@ -1,34 +1,34 @@
 # Camelot Studio
 
-An **open-source** tool suite for editing DAoC client content (models,
-textures, animations) — built for the private-server community.
+An **open-source** tool suite for inspecting, converting, validating and
+previewing DAoC client content (models, textures, animations) — built for the
+private-server community.
 
-> **Status: M0 → M1 delivered** — core v0.1 (NIF/KFA reading, glTF export,
-> round-trip, batch validation, a **100% legacy reader** for NetImmerse 4.x),
-> MPAK reader/writer, the client's **canonical KFA bone table**
-> (`animnode.dat`, 0..174), and a **SvelteKit + three.js figure viewer**
-> (`web/`) that plays idles at the game's own rate. Animation links come
-> from the client's own tables, are mapped through the engine's bone-index
-> table, and are refused (rest pose, feet planted) when the clip deforms the
-> mesh — the game's data decides, the physics gates judge.
+> **Status: M1 delivered; documentation audit closed (Sept 2026)** — core v0.1
+> (NIF/KFA reading, glTF export, round-trip, batch validation, a **100% legacy
+> reader** for NetImmerse 4.x), MPAK reader/writer, the client's canonical KFA
+> bone table (`animnode.dat`, 0..174), and a **SvelteKit + three.js figure
+> viewer** (`web/`) that plays a selected idle. Animation links come from the
+> client's tables and are mapped through the engine's bone table; risky pairs
+> are refused by an empirical deformation check and remain in the bind pose.
 > State: `docs/status.md`. Format reference: `docs/formats.md`.
 
-**Principle: engine fidelity.** Everything here reproduces the client's own
-behaviour — same tables, same order, same values, no approximations, no
-partial fixes. Animation channels are applied absolute (statics included,
-the way the engine overwrites node transforms); when the engine composites
-passes we don't have (base + decal / dark map), we bake the composite instead
-of faking it with a single sheet.
+**Principle: engine fidelity.** The project aims to reproduce the client's
+own behaviour — same tables, order and values — and to make every approximation
+explicit. Animation channels are applied absolute (statics included, following
+the engine's transform overwrite). When a client material stage is not yet
+reproduced, the current limitation is documented rather than silently faked;
+see `docs/status.md` and `docs/formats.md` for the verified scope.
 
 ## Why this project?
 
 The Niftools ecosystem (official Blender addon) has been inactive since 2024
-and no longer supports Blender ≥ 4.0. Beyond that, nothing exists for DAoC
-semantics: `.kfa` animations address bones **by index** of a canonical
-skeleton, fig3 pieces attach to the skeleton through `bonelist`, and the
-MPAK archives plus `gamedata.mpk` tables glue everything together. Camelot
-Studio covers that "DAoC layer" on top of the NetImmerse/Gamebryo formats
-(itself handled by pyffi, BSD-3).
+and no longer supports Blender ≥ 4.0. Camelot Studio focuses on the DAoC
+semantic layer that generic NetImmerse/Gamebryo tooling does not cover:
+`.kfa` animations address the client's bone table, fig3 pieces attach through
+`bonelist`, and the MPAK archives plus `gamedata.mpk` tables glue everything
+together. Camelot Studio covers that layer on top of formats handled by pyffi
+(BSD-3).
 
 ## Architecture
 
@@ -56,13 +56,13 @@ Examples:
 
 ```sh
 # info + glTF export of a figure (bind pose, skinned)
-.venv/bin/camelot gltf "DAOC CLIENT/figures/Boar.NIF" --out work/boar
+.venv/bin/camelot gltf "$DAOC_CLIENT/figures/Boar.NIF" --out work/boar
 
 # channels of a .kfa animation file
-.venv/bin/camelot kfa "DAOC CLIENT/anims/BOAR_idle.kfa"
+.venv/bin/camelot kfa "$DAOC_CLIENT/anims/BOAR_idle.kfa"
 
 # roundtrip (read → write → read) validation
-.venv/bin/camelot roundtrip "DAOC CLIENT/figures/Boar.NIF"
+.venv/bin/camelot roundtrip "$DAOC_CLIENT/figures/Boar.NIF"
 
 # bulk validation from a manifest of files
 .venv/bin/camelot batch core/tests/manifest.example.txt --out work/batch.txt
@@ -89,7 +89,7 @@ cd camelot-studio && ./bootstrap.sh
 .venv/bin/python -m pytest core/tests -q
 
 # 4. Point at your local DAoC client copy (synced separately — not in git)
-export DAOC_CLIENT="/path/to/DAoC client"   # add to ~/.zshrc / ~/.bashrc
+export DAOC_CLIENT="/path/to/DAOC CLIENT V2"   # add to ~/.zshrc / ~/.bashrc
 ```
 
 The game client itself is never in git — sync it between your machines with
@@ -99,7 +99,8 @@ your usual tool (Syncthing, NAS, external drive).
 
 - `docs/formats.md` — DAoC client format reference (tables, NIF versions,
   KFA architecture, MPAK, legacy 4.x block layout, remaining cases).
-- `docs/status.md` — project state, limits, next steps, cheat sheet.
+- `docs/status.md` — project state, limits and evidence boundaries.
+- `docs/next-steps.md` — documentation audit and server-pack roadmap.
 - `AGENTS.md` — repo rules for contributors and agents.
 
 ## License

@@ -1,8 +1,8 @@
 # Project status
 
-State of Camelot Studio (M0 → M0.5, Sept 2026). Byte-level format facts:
-`docs/formats.md`. If you are a new contributor or agent, read this, then
-`AGENTS.md` for repo rules.
+State of Camelot Studio (M1 delivered; documentation audit closed Sept 2026).
+Byte-level format facts: `docs/formats.md`. If you are a new contributor or
+agent, read this, then `AGENTS.md` for repo rules.
 
 ## What is delivered
 
@@ -18,10 +18,12 @@ State of Camelot Studio (M0 → M0.5, Sept 2026). Byte-level format facts:
 | `camelot mpak list <archive>` / `get <archive> <entry>` / `pack <out> <name> <files…>` | MPAK reader/writer (`.mpk`/`.npk`) |
 | `camelot serve [--root DIR] [--port N] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn) |
 
-**Coverage**: full client NIF corpus = **5087/5089 parse** (the 2 remaining
-are 10.1.0.0 housing files failing inside pyffi — see `formats.md` §7).
-`core/camelot/legacy.py` reads 100% of the client's NetImmerse 4.x meshes
-(read-only; a 4.x writer is M2/M3 work for in-place replacement).
+**Coverage snapshot**: a retained full-corpus run reported **5087/5089**
+client NIFs parsed (the two remaining are 10.1.0.0 housing files failing
+inside pyffi — see `formats.md` §7). Re-run and version the report against
+`DAOC_CLIENT V2` before treating the count as a current KPI.
+`core/camelot/legacy.py` reads the retained NetImmerse 4.x mesh corpus
+(read-only; a 4.x writer is not implemented).
 
 ## Architecture decisions
 
@@ -38,11 +40,10 @@ are 10.1.0.0 housing files failing inside pyffi — see `formats.md` §7).
   layer that knows binary formats.
 - **Layer contract**: `core/` owns all binary formats; `web/`, `addon/`,
   `server-bridge/` only consume glTF/JSON sidecars.
-- **glTF skinning**: `NiSkinData.bone_list` offsets are dead data in DAoC
-  figures (match neither inverse nor direct world matrices — the engine
-  computes the bind from the node tree). inverseBind = inv(exported
-  worldBind) — glTF standard, correct at the bind pose (diagnostic: 7e-15);
-  to be confirmed by real rendering in M1.
+- **glTF skinning**: the exporter uses the stored `NiSkinData` transform for
+  the current supported path (`inverseBind = S·meshWorld⁻¹`; CPU bake
+  `inv(meshWorld)·boneAnim·S`). This is corpus-validated and visually checked
+  for selected figures, not a complete Ghidra proof of every client path.
 - **glTF axis**: vertices/normals stay in NIF space and the synthetic root
   node (`__axes__`) applies the axis conversion once (no double rotation).
   Every era composes **Z-up** in NIF world space, so the conversion is always
@@ -60,24 +61,29 @@ pytest suite in `core/tests/` (AGENTS.md TDD rule):
 # unit tests only (no game files needed)
 .venv/bin/python -m pytest core/tests -q
 # + corpus tests against the real client (skipped otherwise)
-DAOC_CLIENT="/path/to/DAoC client" .venv/bin/python -m pytest core/tests -q
+DAOC_CLIENT="/path/to/DAOC CLIENT V2" .venv/bin/python -m pytest core/tests -q
 ```
 
-230 core tests (149 run everywhere, 81 corpus): matrices/axis/CLI/
-legacy-reader/gLTF/MPAK/animation-mapping/fig3 units on synthetic buffers,
-plus corpus tests (parse expectations, kfa summaries, roundtrip, glTF
-export, MPAK repack, grounding/skin-stretch regressions, fig3 head/hair
-attachment) that auto-skip without `DAOC_CLIENT`; 27 web tests (vitest)
-cover the animation sampling, the bone table and the player-figure mesh
-classification/selection.
+The suite has unit and corpus tiers. Exact test counts are not a current
+product contract; run the commands above for the authoritative local result.
+Corpus tests skip without `DAOC_CLIENT`, and the web suite is run separately
+from `core/`.
+
+Dated V2 baseline (2026-09-23): 259 core tests passed and 4 failed. The
+failures cover a changed `Boar_CATA` animation link, two legacy version
+expectations and one historical Ettin bbox golden; they require a separate
+data/test decision before being treated as regressions or as an accepted
+baseline.
+The web suite passed 29/29; `pnpm check` reports zero errors and four existing
+warnings.
 
 ## Known limits
 
 1. **Write**: pyffi reorders blocks on write (roundtrip validated as
    multisets; worth watching for diff-friendly editing).
 2. **Legacy 4.x write**: not implemented (see above).
-3. **Bone index table & animation policy** (settled 2026-09-13, do not
-   regress):
+3. **Bone index table & animation policy** (current policy, re-audited
+   2026-09-23):
    - The client's `figures/animnode.dat` (175 names, index = KFA channel) is
      the mapping's backbone (`load_bone_table`); offset/rotation matching
      (`map_kfa_to_nodes`) validates the pair and reports its source
@@ -110,26 +116,50 @@ classification/selection.
      or both; 116 clips are Euler-only (Beetle, sharks, snakes, ballistas) and
      were silently dropped before. They are now composed into quaternion
      tracks (Beetle animates; see `formats.md` §3).
-   - **Engine-exact skinning (shipped)**: the exporter uses the stored
-     `NiSkinData` transform (`inverseBind = S·meshWorld⁻¹`, bake
+   - **Stored-bind skinning (corpus-validated)**: the exporter uses the
+     stored `NiSkinData` transform (`inverseBind = S·meshWorld⁻¹`, bake
      `inv(meshWorld)·boneAnim·S`), which rescued the stored-bind class
      (AfancB/dracolich/phoenix/soulkeeper/amb_bird/ambrat/CwHuman/Dragon01:
-     mean stretch 1.01-1.07, planted feet). `skin_stretch` now measures
-     against the engine bind (mean > 1.12 refuses, max > 25 as a loose net);
-     the viewer grounds on the engine bind and frames the idle's sampled
-     extent (flyers stay in frame). `rebindSkinnedMeshes` must keep passing
-     an explicit bindMatrix or three.js would recompute (and discard) the
-     exported inverse binds. Still refused (~35 links, mostly player-race
-     pairings with `I_HM`/`I_HF`, mean 1.14-1.57).
+     mean stretch 1.01-1.07, planted feet). `skin_stretch` is an empirical
+     deformation safety heuristic, not a reverse-engineered client physics
+     gate. The viewer grounds on the stored bind and frames the idle's
+     sampled extent. `rebindSkinnedMeshes` must keep passing an explicit
+     bindMatrix or three.js would recompute (and discard) the exported
+     inverse binds. Some player-race pairings remain refused.
 4. **pyffi 10.1.0.0**: 2 housing files fail (see `formats.md` §7).
 5. **MPAK header checksum**: the two *open* header fields (`formats.md` §5)
    are written as deterministic placeholders; whether the game validates
    them needs in-game confirmation.
-6. **Figure textures**: auto-resolved from gamedata for **525/617 figures
-   (85%)** (monster chain + NIF-name fallback). Skin slots map to meshes by
-   node name (body/head/arms…). Still unresolved: player/class figures (the
-   figure is a base mesh; skin/armour is per-character), creatures/pets
-   absent from `monsters.csv`, Cata/LOD variants (`formats.md` §3).
+6. **Figure textures**: the retained coverage snapshot reports 525/617
+   figures resolved, but it predates the current `DAOC_CLIENT V2` profile and
+   counts table resolution rather than final rendered bytes. Re-run and
+   version the corpus report before treating this as a current KPI. Native
+   player armor/material resolution through `pskins` is not implemented; the
+   builder currently uses a fixed default preview.
+
+## Character preview status
+
+The native `/builder` route exposes the 18 playable races and both genders.
+A freshly loaded route waits for a race selection before assembling the first
+model; the options response exposes seven faces, the race's positional hair
+styles (eight for Briton male, `Bald` included), 16 hair colors, eight eye
+colors, eight skin tones and the race's cloak variants. Skin tone, hair
+style/color, eye color, cloak and gender changes returned successful
+model/texture requests in a browser pass against `DAOC_CLIENT V2`.
+
+This is a preview contract, not complete equipment or animation-state support.
+`pskins`/item/dye resolution and explicit animation-state selection remain
+open; the fixed default armour preview is unchanged. A successful route
+currently means a usable preview, not that every required mesh or texture is
+present.
+
+One gamedata link is known to point at a clip authored on another rig: the
+male Troll (`tro_m`) resolves `Cat_troll_idle.kfa`, whose absolute
+translations sit 1.8-3.6 units off `tro_m_skeleton.nif` and sheared the face.
+The native path gates such clips (`gltf.FOREIGN_RIG_MEAN_TOL`): the
+translations are dropped and the idle plays rotations-only. Which clip the
+live client plays for the male Troll player is still to confirm
+(`workspace/notes/character-rules.md` §8.18).
 
 ## Environment gotchas
 
@@ -152,91 +182,31 @@ classification/selection.
 
 ## Next steps (priority order)
 
-1. ~~pytest suite~~ — **done**: 230 core tests today (unit + corpus tiers,
-   plus 27 web tests), see `docs/status.md` §Testing.
-2. GitHub: org + repos created, first commits pushed; CI in place
-   (`.github/workflows/ci.yml`: ruff lint + pytest on 3.11/3.12).
-   Switch `camelot-studio` to public when ready.
-3. ~~MPAK writer~~ — **done**: `core/camelot/mpak.py` + `camelot mpak`
-   CLI, unit + corpus repack tests, header `byte 13` decoded; the two
-   *open* header checksums documented (`formats.md` §5).
-4. Idle coverage: Boar is proven end-to-end; the gamedata animation chain
-   (`monnifs → anims → animnifs`, Known limits #3) links 523 figures, of
-   which ~475+ animate with planted feet after the engine-exact skinning
-   pass — including the formerly-refused amazon/rat/bear/cata_lion/
-   amb_blackcat/badger and the stored-bind class (AfancB/dracolich/phoenix/
-   soulkeeper/amb_bird/CwHuman/Dragon01). All reported floats (2HWolf,
-   3head, Zombie, Ettin, Wolf, items) are fixed and user-verified. Next:
-   validate a few more families with the `anim_check.mjs` pattern, then look
-   at the remaining player-race refusals (`I_HM`/`I_HF`, mean 1.14-1.57).
-5. ~~M1: Svelte + three.js viewer~~ — **idle playback delivered**: `web/`
-   SvelteKit (Svelte 5 runes, Vite, Vitest) loads the skinned `.glb`
-   (`GET /api/v1/assets/{id}/model?skinned=true`) plus joint rotation tracks
-   (`GET /api/v1/assets/{id}/anim`; the figure's KFA comes from the gamedata
-   chain, filename fallback; gamedata links map through the engine's table,
-   and clips that fail the deformation gate answer 404 so the viewer shows
-   the bind pose) and
-   loops the idle with play/pause **at the game's own rate** (`animnifs.csv`
-   frames/fps → `{rate, duration}`; classic idles play ~5x slower than their
-   key stamps). Validated end-to-end on Boar
-   (`web/scripts/anim_check.mjs`: skinned bind ≈ static at IoU 0.89, GPU
-   skinned vertices == CPU bake to 1e-4, feet planted through the loop).
-   resolves the figure's DDS from gamedata (`core/camelot/gamedata.py`) and
-   embeds it (`CS_camelot_texture`); the viewer loads it with three.js
-   `DDSLoader`. Multi-slot → per-mesh mapping is open.
-   **three.js gotchas (documented, handled)**: r186 `GLTFLoader` binds skins
-   with an identity bind matrix while `SkinnedMesh` (AttachedBindMode) keeps
-   refreshing `bindMatrixInverse` from the live world — parented meshes
-   (Body offset + `__axes__`) then render in the wrong frame. The viewer
-   re-binds with the live bind world (`rebindSkinnedMeshes`, unit-tested).
-   Likewise `Box3.setFromObject` on a `SkinnedMesh` measures CPU-skinned
-   positions (not bind geometry), which grounded models ~0.5 units high —
-   grounding/camera use `bindBoxOf` (geometry bounds × mesh world) instead.
-   **Player figures render as chosen equipment**: base `B*.NIF` files stack
-   every variant of every slot, so the viewer classifies mesh names into
-   slots (`Body`, `Cloak`, …) and shows one variant per slot by default —
-   the rest (including the whole-body `Lod*` levels, now off) is a pick in
-   the new Character panel (Body/Cloak/Arms/Gloves/Lbody/Legs/Boots/LOD
-   selects, Off + Reset). Hidden meshes no longer drive grounding/framing.
-   **Heads are no longer classic**: the `HeadA*/HeadB*` shells need the
-   engine's decal shader, so the exporter hides them and attaches the
-   Catacombs fig3 head/hair pieces instead (`core/camelot/fig3.py`,
-   `core/camelot/figure.py`, bound by `bonelist` with a per-bone bind
-   compensation; skeleton-less head pieces take the canonical fig3
-   skeleton as their bind reference, and the head is aligned on the
-   classic head bone so it sits on the neck). This covers 24 figures —
-   the standard `B*/H*.NIF` player layouts (Saracen/Briton/Avalonian/
-   Highlander/Inconnu/Half-Ogre male+female, including the `Figure:N`
-   exports of `HFirbolgF`/`HLurikeenF`/`BHalfOgreM`, detected by bone
-   weight), with the default face, hair sheet (colour map, `_dkbrown`)
-   and eye sheet (`fig3eyecolormap`, split into its own `Eyes` mesh).
-   Merged-mesh undead/zombie models (single "Editable Mesh") and NPC/
-   class models keep their classic geometry. The `/builder` web route
-   drives the appearance pickers (race/gender, face, hair style/colour,
-   eye colour, skin tone, cloak) against the `/character/…` endpoints:
-   geometry changes rebuild, colour changes re-texture one slot live
-   (the route returns the sheet plus the engine tint in `X-Camelot-Tint`
-   — skin tones and tint-based hair colours are the `fig3tints.csv`
-   multiply the viewer applies). The builder plays each race's **idle**:
-   the model is served skinned (`?skinned=true`) and the clip is resolved
-   through the client's own tables (the player figure's monnifs row → its
-   animation set) and mapped onto the runtime fig3 skeleton with the
-   canonical bone table — 30/30 builder race rows animate. Armor material
-   textures (`pskins`) are next (see
-   `workspace/notes/player-character-builder.md`).
-6. M2: Blender addon + server-bridge (artifact injection, in-game testing).
+The canonical roadmap is `docs/next-steps.md`. The immediate order is:
+
+1. Use the closed audit as the implementation backlog; do not reopen stale
+   documentation claims as requirements.
+2. Verify the native builder against `DAOC_CLIENT V2`, prioritizing skin-tone
+   scope, eye fidelity, armour materials and real browser rendering. The
+   18-race list, positional hair styles (`Bald`) and the hair `S/T/M` decal
+   bake shipped 2026-09-23; `workspace/notes/builder-fidelity-gaps.md`
+   tracks the remaining points.
+3. Close only the fidelity gaps confirmed by that audit; keep tests and
+   structured visual reproduction cases with each change.
+4. Define and implement the OpenDAoC-first neutral content-pack adapter, then
+   validate the complete client/server path before adding DOLSharp.
+5. Defer Blender integration and broad product features until the server pack
+   loop is reproducible.
 
 ## Command cheat sheet
 
 ```sh
-cd "Code"
-export DAOC_CLIENT="/path/to/DAoC client"          # optional but recommended
-# corpus validation (all client NIFs), ~12 min read-only
-camelot-studio/.venv/bin/camelot batch notes --read-only --out work/report.txt
-# walk one file's blocks (debug)
-TARGET="DAOC CLIENT/figures/Ettin.NIF" python3 notes
-# glTF export
-camelot-studio/.venv/bin/camelot gltf "DAOC CLIENT/figures/Boar.NIF" --out work/boar
-# quick load sanity
-camelot-studio/.venv/bin/python -c "from camelot.legacy import load_legacy; d = load_legacy('../DAOC CLIENT/figures/Ettin.NIF'); print(len(d.blocks))"
+# Run from the camelot-studio repository root.
+export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
+# Corpus validation (read-only; long-running).
+.venv/bin/camelot batch ../workspace/notes \
+  --read-only --out /tmp/camelot-corpus-report.txt
+# Inspect and export a client asset.
+.venv/bin/camelot info "$DAOC_CLIENT/figures/Ettin.NIF"
+.venv/bin/camelot gltf "$DAOC_CLIENT/figures/Boar.NIF" --out /tmp/boar
 ```

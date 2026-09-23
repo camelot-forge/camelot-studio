@@ -1,48 +1,72 @@
 # core — Camelot Studio (Python)
 
-The heart of the suite: DAoC binary formats + conversions (glTF). No
-dependency on Blender or the server.
+The binary-format and conversion layer of Camelot Studio. It owns DAoC
+NIF/KFA/MPAK/gamedata handling; the web viewer, Blender integration and server
+adapters consume its JSON/glTF artifacts.
 
-```
+## Main modules
+
+```text
 camelot/
-├── nifutil.py   # read/write via pyffi, matrices, axis conversion
-├── kfa.py       # .kfa channels (bone indices, keys)
-├── gltf.py      # glTF 2.0 export (bind pose, skinned)
-├── legacy.py    # NetImmerse 4.x reader (pyffi fallback)
-└── cli.py       # "camelot" entry point
+├── nifutil.py       # pyffi NIF access, matrices and axis conversion
+├── kfa.py           # KFA channels and key data
+├── anims.py         # gamedata animation links, timing and sampling
+├── appearance.py    # fig3 skin, eye, tint and decal table data
+├── fig3.py          # fig3 tables, pieces and attachment
+├── playerfig.py     # native player fig3 preview assembly
+├── gltf.py          # glTF export, skinning and texture sidecars
+├── legacy.py        # NetImmerse 4.x mesh reader
+├── gamedata.py      # gamedata table/archive resolution
+├── mpak.py          # MPAK reader/writer
+├── serve/           # local FastAPI/uvicorn asset daemon
+└── cli.py           # camelot command-line entry point
 ```
 
 ## Commands
 
 ```sh
-camelot info   <figures/Boar.NIF>     # version, blocks, nodes, textures
-camelot kfa    <anims/BOAR_idle.kfa>  # channels, bone indices, keys
-camelot gltf   <file.nif> --out pre   # glTF bind pose (+ .bin, + .skin.json)
-camelot gltf   <file.nif> --out pre --skinned  # + JOINTS/WEIGHTS (experimental)
-camelot roundtrip <file>              # read→write→read (multiset compare)
-camelot batch  tests/manifest.example.txt --out work/batch.txt   # bulk validation
+camelot info   figures/Boar.NIF
+camelot kfa    anims/BOAR_idle.kfa
+camelot gltf   figures/Boar.NIF --out work/boar
+camelot gltf   figures/Boar.NIF --out work/boar --skinned
+camelot roundtrip figures/Boar.NIF
+camelot batch  tests/manifest.example.txt --out work/batch.txt
+camelot mpak list archive.mpk
+camelot mpak get archive.mpk path/inside/archive
+camelot mpak pack output.mpk archive-name file...
+camelot serve --root "$DAOC_CLIENT"
 ```
 
-Set `DAOC_CLIENT` to your client directory so batch/tests resolve
-`DAOC CLIENT/...` manifest paths automatically.
+`$DAOC_CLIENT` selects the client corpus and enables corpus tests. The current
+project profile uses the `DAOC CLIENT V2` directory; the exact build and
+relevant hashes belong in a generated client profile rather than in this
+README.
 
 ## Tests
 
 ```sh
-.venv/bin/python -m pytest tests -q                    # units only
-DAOC_CLIENT=/path/to/client .venv/bin/python -m pytest tests -q  # + corpus
+.venv/bin/python -m pytest core/tests -q
+DAOC_CLIENT="/path/to/DAOC CLIENT V2" .venv/bin/python -m pytest core/tests -q
 ```
 
-Corpus tests need the real client and skip automatically otherwise.
+Corpus tests skip when `DAOC_CLIENT` is absent. The web tests, type-check and
+build run from `web/` with pnpm.
 
-## Limits (see docs/status.md)
-- **Write**: pyffi reorders blocks (roundtrip validated as multisets).
-- **Meshed NetImmerse 4.x NIFs**: pyffi 2.2.3 fails, but the built-in
-  `legacy.py` reader now covers 100% of the client's 4.x NIFs (read-only;
-  a 4.x writer is M2/M3 work for in-place client replacement).
-- **Bind matrices**: NiSkinData offsets look unusable; inverseBind
-  = inv(worldBind) of the exported skeleton (glTF standard, correct at the
-  bind pose) — to be confirmed by real rendering.
+## Current limits
 
-Roadmap: web viewer (web/), bone index table (→ kfa in the glTF), MPAK
-write, gamedata JSON tables, set packager.
+- pyffi may reorder blocks on write; round-trip validation compares parsed
+  block multisets, not byte identity.
+- The built-in NetImmerse 4.x mesh reader is read-only; a 4.x writer is not
+  implemented.
+- The current glTF skinning path uses the stored `NiSkinData` transform
+  (`inverseBind = S·meshWorld⁻¹`) and is corpus-validated, not a complete
+  proof of every client path.
+- The native player builder previews fig3 appearance data and a selected idle
+  for the 18 playable races, with positional hair styles (`Bald` included) and
+  the hair `S/T/M` decal baked in. Complete `pskins`/equipment resolution and
+  explicit animation-state selection are not implemented.
+- MPAK header checksum fields remain open and are written as deterministic
+  placeholders pending in-game validation.
+
+See `docs/status.md` and `docs/formats.md` for the current evidence and
+`docs/next-steps.md` for the roadmap.

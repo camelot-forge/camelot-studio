@@ -1,9 +1,9 @@
-# web — (M1) figure viewer
+# web — figure viewer and character builder
 
-SvelteKit (Svelte 5, runes) + three.js viewer for the figures exported by
-`core`. Loads the layer contract artifacts — `.gltf` + `.bin` (+ optional
-`.skin.json`) — produced by `camelot gltf`. Ships as a **static site**
-(adapter-static, SPA): no Python dependency for end users.
+SvelteKit (Svelte 5, runes) + three.js viewer for the artifacts exported by
+`core`. It can run as a static drop-in viewer for `.gltf`/`.glb` files and, when
+served by `camelot serve`, also provides the client asset library and the
+native fig3 character builder.
 
 Design system: vanilla CSS, adapted from Pictiúr's tokens (dark theme,
 `Space Grotesk`, accent `#2dd4a7`), organised in Svelte components.
@@ -58,28 +58,47 @@ For development, run the daemon and Vite side by side — Vite proxies `/api` to
 pnpm dev                              # terminal 2 (browser: localhost:5173)
 ```
 
-To point a static build at a daemon on another origin, use
-`?api=http://localhost:8760` (persisted in `localStorage`).
+The supported daemon mode is same-origin (`camelot serve` serves the built
+web app) or the Vite development proxy. The daemon intentionally does not
+enable CORS for an arbitrary static-build origin.
+
+## Native builder scope
+
+`/builder` previews the current fig3 player pipeline: race/gender, face, hair
+style/color, eye color, skin tone, cloak and a selected idle. A freshly loaded
+route waits for a race selection before assembling the first model. It exposes
+the 18 playable races; hair styles are positional (`Bald` included) and the
+hair `S/T/M` triplet is served with the `M` decal baked in. Complete
+`pskins`/equipment resolution and explicit animation-state selection are not
+implemented yet. A successful preview is not a complete asset or server-payload
+validation.
 
 ## Structure
 
-```
+```text
 src/
 ├── app.css                       # design system (tokens, buttons, inputs)
 ├── lib/
 │   ├── api/client.ts             # typed client for the `camelot serve` API
-│   ├── skeleton.ts               # canonical KFA bone index -> name (mirrors core)
-│   ├── gltf/load.ts              # drop .gltf+.bin / .glb -> THREE.Scene
+│   ├── anim.ts                   # sampled animation tracks and timing
+│   ├── character.ts              # classic/class-NPC mesh classification
+│   ├── gltf/load.ts              # glTF/GLB -> THREE.Scene
+│   ├── skeleton.ts               # structural skeleton reference only
 │   └── components/
 │       ├── Header.svelte
 │       ├── DropZone.svelte       # drag & drop / browse
 │       ├── Library.svelte        # daemon browser: search, filters, SSE
-│       ├── Viewer.svelte         # three.js scene, orbit, wireframe, axes
-│       └── Sidebar.svelte        # model info + bone rig panel
+│       ├── Viewer.svelte         # scene, orbit, wireframe, axes
+│       ├── Sidebar.svelte
+│       ├── CharacterPanel.svelte # classic/class-NPC variant picker
+│       └── Stepper.svelte
 └── routes/
-    ├── +layout.svelte            # shell, app.css, head
-    └── +page.svelte              # Library + DropZone <-> Viewer + Sidebar
+    ├── +layout.svelte
+    ├── +page.svelte              # library + drop zone
+    └── builder/+page.svelte      # native fig3 appearance preview
 ```
 
-The bone table in `skeleton.ts` mirrors `core/camelot/skeleton.py` (indices
-0..53 verified; 54+ open). Keep the two in sync.
+The KFA channel table is loaded by `core` from the client's
+`figures/animnode.dat` and contains 175 names. `src/lib/skeleton.ts` is only a
+structural DFS reference for the human skeleton; it is not the canonical KFA
+index table and must not be described as one.

@@ -1,22 +1,26 @@
 # DAoC client formats — reference
 
 What we know about the Dark Age of Camelot client data formats (client
-1.127). Sources: hands-on exploration of the real client (2026-09), pyffi's
-nif.xml, DAOC_Navigator as behavioral reference. Facts marked *open* are
-not yet fully resolved.
+profile: `DAOC_CLIENT V2`, historically labelled 1.127). Sources: hands-on
+exploration of the real client (2026-09), pyffi's nif.xml, DAOC_Navigator as a
+behavioural reference. Facts marked *open* are not yet fully resolved. The
+documentation audit is closed; current code and reproducible client
+observations take precedence over older prose snapshots.
 
 ## 1. Data model & lookup tables
 
 Everything is resolved client-side through CSV tables packed in
 `gamedata.mpk` (51 tables, exported to `notes/gamedata_csv/` locally):
 
-- `monsters.csv` (2249 rows) → per monster: a `monnifs` id, body/skin ids…
-- `monnifs.csv` (860) → NIF file name + **animation set id**
-- `anims.csv` (495) → per animation set: state columns (Walk/Run/Idle/Death/
-  Flinch/Combat Idle…) referencing animation ids
-- `animnifs.csv` (4080) → animation id → `.kfa` file + frames/fps/clamp/loop
-- `skins.csv` (3267) / `pskins.csv` / `mskins.csv` (2646) → humanoid/monster
-  skins; `fig3*.csv` (map/parts/facemap/haircolormap/decalmap/tofigmain…);
+- `monsters.csv` (retained snapshot: 2249 rows) → per monster: a `monnifs` id,
+  body/skin ids…
+- `monnifs.csv` (retained snapshot: 860) → NIF file name + **animation set id**
+- `anims.csv` (retained snapshot: 495) → per animation set: state columns
+  (Walk/Run/Idle/Death/Flinch/Combat Idle…) referencing animation ids
+- `animnifs.csv` (retained snapshot: about 4080 rows) → animation id → `.kfa`
+  file + frames/fps/clamp/loop
+- `skins.csv` / `pskins.csv` / `mskins.csv` → humanoid/monster skins;
+  `fig3*.csv` (map/parts/facemap/haircolormap/decalmap/tofigmain…);
   `figtofig3main.csv` / `fig3tofigmain.csv`
 - world: `items.csv`, `objects.csv`, `nifswap.csv` (house normal/burned/
   reconstructed), `siege*.csv`, `moneffects*.csv`, `spells.csv`…
@@ -84,10 +88,10 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   (`Body1..Body5` + `b` variants, ~8-15 extra shoulder verts each), 6 `Arms`,
   5 `Boots`, 4 `Legs`, 3 `Gloves`, 4 `Lbody`, `HeadA1..5` + `HeadB1..5`,
   3 `Cloak`, plus 4 whole-body `Lod1a..d` levels (distant-only). The game
-  shows exactly one variant per slot (the 9 `monsters.csv` gear slots:
-  Body/Head/Arms/Gloves/Lbody/Legs/Boots/Cloak/Helm); the *texture* comes
-  from `pskins.csv` (armor material × part × gender), not from the figure's
-  `monsters.csv` row (that row is the NPC default outfit).
+  shows one variant per slot. The client resolves the equipped material and
+  appearance from its skin/item tables; the current Studio native builder does
+  not yet reproduce that complete `pskins`/item/extension pipeline and uses
+  fixed preview sheets.
 - **The classic `HeadA*/HeadB*` pair cannot be composed with one texture
   pass**: projecting both meshes in world space shows two *overlapping head
   shells* of the same size (z ≈ 57-68 for `BSaracenF.NIF`), and `HeadB`'s UV
@@ -101,59 +105,37 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   viewers do — see the fig3 entries below.
 - **fig3 player head/hair**: one head mesh per race (`Sar_f_Head01`, full
   Bip01 skeleton embedded, 541 verts / 800 tris for Saracen female) rendered
-  with one of the 7 face sheets `fig3facemap.csv` → skins
-  (`Sar_f_Head01..07.dds`), plus one of the hair styles
-  (`sar_f_Hair01..04`, 269 verts / 310 tris for style 1, `Double Sided = 1`)
-  with its base sheet `<style>.dds` (`sar_f_Hair01.dds`, DXT5) or a colour
-  variant (`_dkbrown`, `_darkbrown`, `_blonde`, `_white`, `_bluebase`).
-  Hair colour = base texture (S) + tint (`tints.csv`, T) + decal
-  (`hair_decal_Sar_f_Hair01.dds`, M) per `fig3haircolormap.csv`. Every
-  style of a race shares the same UV layout, so the colour map is
-  authoritative even when it lists another style's or race's sheet (Celt
-  female → Briton sheets, Highlander female → Norseman ones) and when the
-  styles ship no sheet under their own names. The **eyes are separate
-  geometry** inside the head mesh (vertices bound to `Bip01 L/R Eyeball`).
-  The eyeball artwork lives on the *face* sheet (sclera, iris, pupil, lid
-  highlight) and the iris is painted **neutral grey** on most races
-  (Frostalf 123,125,130; Briton 103,110,115); the `eyecolor_*` sheet
-  (`fig3eyecolormap.csv`, 8 per race) is the engine's dark-map decal: a
-  nearly white sheet whose tiny ring is the iris colour (vivid palettes:
-  Frostalf c1 magenta, c3 cyan, c5 green…; Saracen/Briton earthy tones).
-  The engine multiplies the two (§8.10), and the exporter **bakes the
-  product** into the `Eyes` sheet (`appearance.eye_composite`, DXT1/3/5
-  decoded by `dxt.dds_rgba`) so three.js needs no second multiply stage;
-  the `Eyes` mesh then keeps the head node's authoring frame and the
-  authored UVs, which map the eyeball's front cap 1:1 onto the artwork.
-  fig3 hair/beard UVs may leave the unit square (Highlander male beard:
-  v ≈ -0.9) — Gamebryo wraps them, so viewers must sample with wrap; the
-  three.js clamp default smears the edge texel over the beard.
-  **Tints** (`fig3tints.csv`: id + name + Red/Green/Blue; the engine packs
-  them `(R<<16)+(G<<8)+B`) are per-slot *multiplicative* colours:
-  `fig3skincolormap` rows (8 per race) are tint ids applied to the face
-  sheet (tone 1 is usually the white no-op), and each `fig3haircolormap`
-  triplet's T is the hair tint — races differ (Saracen keeps one sheet per
-  style and varies T across the 16 colours; Lurikeen pre-colours the sheets
-  and ships "No tint" white in T). The exporter carries the tint on the
-  slot's `CS_camelot_texture` (`tint: [r, g, b]`) and the viewer multiplies
-  the sheet by it.
-- **Only some hair styles have colour sheets** (Avalonian male: style 4;
-  Highlander female: 2 and 4; Inconnu male: 2-4; Saracen female: 1-4), and
-  `fig3haircolormap.csv` even points some race/style rows at another style's
-  or another race's sheets — a mismatched sheet does not sit on the mesh UVs.
-  The assembler therefore keeps each style's own sheet
-  (`<filename>[ _colour].dds`) and picks the first style whose sheet ships.
-  Likewise, some fig3 head pieces are **skeleton-less** (`sar_m_Head01`,
-  bonelist-driven like hair/body) while others embed the canonical fig3
-  skeleton; the embedded one is the bind reference for all pieces
-  (`fig3.load_reference`), and every piece lands exactly where its own file
-  authored it: `fig3.attach_part` compensates each `NiSkinData` bone
-  transform with `S' = inv(boneWorld_target) @ boneWorld_part @ S` and
-  resolves `bonelist` names against the reference skeleton (bones missing
-  from the target follow their nearest ancestor, `Bip01 EyeLids` →
-  `Bip01 Head`). Attaching is *aligned on the target's head bone*
-  (`Wb_target @ inv(Wb_ref)`): the Catacombs head bone sits ~2.8 units
-  higher than the classic one, so the rigid-attach puts the head on the
-  classic neck instead of floating above it.
+  with a face sheet selected through `fig3facemap.csv`, plus a hair style
+  selected from the fig3 map. The builder resolves the hair triplet
+  (`S/T/M`) from `fig3haircolormap.csv`: the base sheet `S`, the
+  multiplicative tint `T`, and the `M` decal baked into the served sheet as
+  an alpha overlay (`appearance.hair_composite`; `FUN_004174e2` passes base,
+  tint and decal to the hair material, and `ps_HairMaterialDecalShader1x` is
+  the decal variant). The separate `fig3decalmap.csv` table is not the hair
+  `M` cell and is not currently exposed as a selectable decal.
+  The `fig3facemap.csv` V2 snapshot has seven populated cells (the client
+  descriptions expose seven creation faces); an earlier "eighth face" claim
+  does not reproduce on this corpus. The **eyes are separate geometry**
+  inside the head mesh (vertices bound to `Bip01 L/R Eyeball`). The exporter
+  bakes a face/eye-sheet product into an `Eyes` texture; the exact client
+  artwork interpretation, colour space and pixel-level fidelity remain
+  verification items.
+- **Tints** (`fig3tints.csv`: id + name + Red/Green/Blue) are per-slot
+  multiplicative colours. `fig3skincolormap` maps skin-tone choices to face
+  tints; `fig3haircolormap` maps hair colours to `T` values. The exporter
+  carries the tint on the slot texture extension and the viewer applies it.
+- **Only some hair styles have colour sheets** (the exact set depends on the
+  client profile), and `fig3haircolormap.csv` can point a style at another
+  style's or race's sheet. The current assembler uses a sheet when it can
+  resolve one, but this fallback is not an engine-fidelity guarantee. The
+  fig3map cell list is **positional**: an empty cell is a deliberate "no
+  piece" (the hair `Bald` styles) and survives as a gap (`fig3.slot_ids`,
+  `fig3.part_at`); only trailing empties are trimmed. Style numbers must be
+  read positionally, not as indices into the non-empty pieces.
+  Native assembly uses the per-race runtime skeleton and performs bind
+  compensation for attached pieces. Skeleton-less pieces use the canonical
+  fig3 reference; do not assume every piece has an identity bind or that the
+  classic head/neck alignment applies to the native path.
 - **`fig3parts.csv` reuses ids** for different files (id 199 is both
   `hal_m_Hair01` and `hig_m_Hair03`), so an id maps to several candidates
   and `fig3.parts_of` filters them by race description. `monnifs.csv`
@@ -188,15 +170,13 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   transpose the Gamebryo skinning identity misses by ~56 units, with it by
   5e-06, and KFA quaternions agree with their bind matrices (Bip01: 0.0°).
   Implemented as `nif_rot_cell` + row-major `legacy.mat33`.
-- **Skinning (Gamebryo, verified on Boar)**: per bone
-  `Mb = inv(meshWorld) * boneAnim * inv(boneBind) * meshWorld`
-  (`rootParentToSkin * boneToRootParent * skinToBone`); baked into NIF-local
-  vertices, axis node unchanged. Boar idle at mid-breath: mean edge
-  5.509→5.445 (bending, no stretch), bbox preserved. glTF consumers beware:
-  three.js r186 `GLTFLoader` binds with identity while `SkinnedMesh`
-  refreshes the inverse from the live world, which drops parented mesh
-  transforms — re-bind with the live bind world before rendering
-  (`rebindSkinnedMeshes`).
+- **Skinning (Gamebryo, corpus-validated)**: for the current stored-bind path,
+  `Mb = inv(meshWorld) * boneAnim * S`, where `S` is the stored
+  `NiSkinData` transform; glTF uses `inverseBind = S * inv(meshWorld)`.
+  The earlier node-tree bind formula remains useful for comparison, but it is
+  not the current exporter contract. `skin_stretch` is an empirical safety
+  heuristic. three.js r186 requires an explicit live bind matrix
+  (`rebindSkinnedMeshes`) for parented meshes.
 - **KFA channel -> bone mapping** (`map_kfa_to_nodes`,
   `camelot gltf --pose/--bake-pose`): the client ships the engine's own
   index table, `figures/animnode.dat` — 175 bone names, one per line, index =
@@ -222,32 +202,30 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   `kfa_translation_trust` now trusts **every** translated channel of a vetted
   pair, and only falls back to the old "a key must return to the bind" test
   for partial mappings.
-- **Player idles: the Catacombs clips, applied engine-faithful.** The
+- **Player idles: the Catacombs clips, applied with absolute channels.** The
   character builder resolves the race's Cata figure (`sar_f` & co, whose
   monnifs rows link the `Cat_I_*` sets the live client plays) and serves
-  **every channel the KFA carries, absolute** — rotations and translations,
-  statics included, exactly like the engine overwriting its node transforms.
-  This is the first rule of the project (AGENTS.md): dropping the "static"
-  channels or rebasing a few bones onto our bind *looked* like a cleanup but
-  broke the pose chain (a dropped neck/hand rest bowed the head and sheared
-  the gloves); applying everything as authored rendered the male and female
-  idles correctly. The classic sets (`I_HM/I_HF`, `I_SVM`…) stay a fallback —
-  they were authored on the pre-fig3 rigs and distort the hands/arms here.
-- **Two-tier mapping: the client's link decides, the physics gates judge.**
-  A **gamedata-linked** clip (`kfa_comes_from_gamedata`, i.e. the pair comes
-  from `monnifs -> anims -> animnifs`) is mapped through the engine's own
-  `animnode.dat` table (`map_kfa_to_nodes(..., prefer_table=True)`) and every
-  translation applies; `skin_stretch` then refuses only rigs that actually
-  deform badly. This is why offset heuristics must not judge these pairs:
-  their animated bones (root bob, clavicle breathing) drift from the bind,
-  which used to fail the 0.3-unit anchor test and refused amazon/rat/bear/
-  cata_lion/amb_blackcat/badger — all of which deform cleanly (mean edge
-  ratio 1.01-1.07) once mapped by name. **Fallback** links (filename
-  conventions, e.g. `Boar_CATA` which has no gamedata row) keep the
-  conservative offset quality gate (`mapping_is_vetted`, `with_source`).
-  Coverage (2026-09-13, second pass): 511 vetted links -> 483 animate, 28
-  refused by `skin_stretch` (dracolich/AfancB/ambrat: stored skin bind
-  disagrees with the node tree), 7 without a mapping, 94 without a link.
+  every channel the KFA carries, absolute — rotations and translations,
+  statics included. This matches the Studio playback rule and selected
+  browser checks, but is not a complete proof for every client state. The
+  classic sets (`I_HM/I_HF`, `I_SVM`…) remain fallbacks; they were authored on
+  pre-fig3 rigs and can distort the assembled native figure.
+- **Two-tier mapping: the client's link decides; a deformation heuristic
+  filters risky pairs.** A gamedata-linked clip
+  (`kfa_comes_from_gamedata`) is mapped through `animnode.dat`; fallback
+  filename links keep the conservative offset gate. `skin_stretch` measures
+  the result and refuses selected bad deformations. It is not a client physics
+  gate. Historical coverage totals are snapshots and must be regenerated for
+  the pinned `DAOC_CLIENT V2` corpus.
+- **Foreign-rig clips on the native fig3 path** (2026-09-23): the male Troll
+  link (`tro_m` → set 263) resolves `Cat_troll_idle.kfa`, whose absolute
+  translations sit 1.8-3.6 units off `tro_m_skeleton.nif` (`Bip01
+  Head/Neck/EyeLids`) and sheared the face. The builder enables
+  `gltf.foreign_rig_gate`: a vetted clip whose mean closest-key-to-bind
+  distance exceeds `FOREIGN_RIG_MEAN_TOL` (1.5) is treated as authored on
+  another rig and its translations are dropped (rotations still play).
+  Classic figures are not gated (their stored bind legitimately disagrees
+  with the node tree). See `character-rules.md` §8.18.
 - **Sitting idles lose to standing ones.** Some sets fill their Idle slot
   with a sitting clip: the black cat's `Idle`/`Idle1` are
   `amb_blackcat_SIT_TAILSWIPE`, `Idle2` `SIT_IDLE`, `Idle3`
@@ -266,27 +244,17 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   remain the fallback for Cata remodels and test roots. The chain linked 475
   figures (was 151 with filename matching alone); 306 are vetted and animate
   (see below), the rest keep the bind pose.
-- **Engine-exact skinning with the stored bind (2026-09-13, shipped)**. Some
-  figures store `NiSkinData` bone transforms that disagree with their node
-  tree — AfancB by exactly 302.56 units (a rigid shift), dracolich by 392,
-  dracolich/phoenix/amb_bird/player races… The engine skips the node-tree
-  bind entirely and uses the **stored** transform `S`: world
-  `p = boneAnim·S·v`. The exporter now matches it exactly:
-  - glTF `inverseBind = S · meshWorld⁻¹` (three.js computes
-    `boneWorld·IB·meshWorld·v`; `meshWorld` here is the exported mesh node
-    world, axis included),
-  - CPU bake `Mb = inv(meshWorld)·boneAnim·S` (same result as the old
-    `inv(boneBind)` formula when `S = inv(boneBind)·meshWorld`, the common
-    case: Boar/Ettin/Zombie exports are unchanged),
-  - `skin_stretch` measures with the same math against the **engine bind**
-    (not raw vertices) and gates the result: mean edge ratio > 1.12 refuses
-    the clip (bind pose instead). The max ratio stays as a loose catastrophic
-    net (> 25) because single degenerate edges spike it on valid geometry.
-  This rescued the stored-bind class (AfancB/dracolich/phoenix/soulkeeper/
-  amb_bird/ambrat/CwHuman/Dragon01…) which now animate cleanly (mean
-  1.01-1.07, feet planted through the loop, verified in the viewer). Still
-  refused: player-race pairings whose mean stretch reaches 1.14-1.57
-  (BInconnu/NKobold/NDwarf/HShar/… with `I_HM`/`I_HF`), kept on bind.
+- **Stored-bind skinning (corpus-validated, 2026-09-13)**. Some figures store
+  `NiSkinData` transforms that disagree with their node tree. The current
+  exporter uses the stored transform `S`:
+  - glTF `inverseBind = S · meshWorld⁻¹`;
+  - CPU bake `Mb = inv(meshWorld)·boneAnim·S`;
+  - `skin_stretch` measures the result against that stored bind and refuses
+    selected high-stretch cases. This is an empirical safety heuristic, not
+    a complete reverse-engineered client gate.
+  The formula has been checked on stored-bind figures including
+  AfancB/dracolich/phoenix/soulkeeper/amb_bird/ambrat/CwHuman/Dragon01, with
+  selected visual checks. Some player-race pairings remain refused.
 - **Grounding/framing uses the engine bind** (`bindBoxOf`): bounds are
   measured with three.js' own skinning at rest (in the viewer the bound box
   also unions poses sampled across the idle, so root tracks that travel —
@@ -294,7 +262,7 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   grid). `rebindSkinnedMeshes` must pass an explicit `bindMatrix`
   (`bind(skeleton, matrixWorld)`): calling `bind(skeleton)` without it makes
   three.js recompute the skeleton's inverse bind matrices from the live
-  pose, silently discarding the engine-exact ones exported above.
+   pose, silently discarding the stored-bind transforms exported above.
 - **KFA rotations come in two storages**: quaternion keys and **type-4
   per-axis Euler float tracks** (`xyz_rotations`). DAoC uses both, sometimes
   within the same clip, and some classic mobs are Euler-only (Beetle, sharks,
@@ -315,12 +283,12 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   Every file is authored at 15 or 30 fps key density (`native_fps`: median
   rotation-key interval, snapped), and the game plays `frames` key intervals
   at `fps` frames per game second: rate `fps / native` over a loop of
-  `frames / fps` game seconds. Verified exact on 12+ files (Boar idle
-  `16,3,15` → 0.2x over 5.33s; run `15,30,30` → 2x over 0.5s; walk/run share
-  one byte-identical file and still differ: 7 keys at 1x vs 16 keys at 2x).
-  Missing rows and `fps` <= 0 (code-driven swims) fall back to stamped file
-  timing. Served as `{rate, duration}` with the tracks; the viewer samples
-  key time `(t_game % duration) * rate`.
+  `frames / fps` game seconds. This is verified for selected unique rows.
+  The current resolver matches by KFA basename and returns the first matching
+  row, so duplicate basenames with different timing are unresolved. The
+  current API/viewer also does not preserve the table's `loop` versus `clamp`
+  state; it always loops the returned duration. Missing rows and `fps <= 0`
+  fall back to stamped file timing.
 - Items: statics (3/60 skinned), textured (58/60), attach nodes
   `BACK`/`BELT`/`GROUND`.
 
@@ -345,26 +313,23 @@ Texture names in the tables are `.tga` while the archive entry is `.dds`
 fall back to the NIF's own `NiSourceTexture` names searched across the skin
 archives (e.g. `fox_pet01` → `Fox_red01.dds` → `skin193.mpk`).
 
-**Measured coverage** (617 figures, `notes`):
-458 monster + 67 NIF-name fallback = **525 resolved (85%)**, 92 unresolved
-(15%): player/class figures (customisable — the texture depends on the
-character's chosen skin, not the figure), creatures/pets absent from
-`monsters.csv` (2headed_Wolf, Dragon01…), Catacombs variants, LOD/utility
-nodes.
+**Historical coverage snapshot** (617 figures, `notes`):
+the older run reported 458 monster + 67 NIF-name fallback = **525 resolved
+(85%)**, but it did not validate final rendered bytes and predates the current
+`DAOC_CLIENT V2` profile. Re-run and version the report before using this as a
+current KPI. Player/class figures remain a separate material pipeline rather
+than a fixed figure texture.
 
 **Multi-slot mapping**: a monster's skin slots map to meshes by the mesh's
 node name (body/head/arms/limbs…), so the 2-headed dragon gets its
 body/head/wing textures on the right meshes (`_slot_for_name` in `gltf.py`).
 
 **Cloak UV set**: cloak meshes (classic `Cloak1..3` and fig3 `Cloak01..03`)
-ship **three UV sets**; the base cloth sheet is sampled on **UV set 1**, not
-0. `uv_sets[0]` maps the cloth to a fragmented atlas layout (a hard seam
-across the hood); `uv_sets[1]` is the coherent cloak mapping. Verified against
-all 33 DAoC-Tools `parts_library_*` GLBs, which bake the cloak from
-`uv_sets[1]`; every other fig3 piece ships a single UV set. `gltf.py`
-(`UV_SET_BY_SLOT`) applies it. Cloak NIFs carry no texture and no
-`NiTexturingProperty` — the sheet is the equipped item's (`objects.csv` id 57
-"Cloak" → Cata skin 4972 = `Cat_cloak.dds`, the DAoC-Tools `cat_cloak.png`).
+ship three UV sets; the current preview samples the base cloth on UV set 1.
+The client composes the equipped cloak's material and passes; the current
+Studio route uses a fixed `Cat_cloak.dds` preview and does not yet reproduce
+the item texture, guild/decal pass or hood-state material. `gltf.py`
+(`UV_SET_BY_SLOT`) applies the preview UV choice.
 
 Improvement leads: (1) a pets/summons table for the creatures without a
 monster row; (2) the player chain — the figure is only a base mesh, the
@@ -372,7 +337,10 @@ skin/armour is per-character (fig3 + `pskins`), needs a cleaner model;
 (3) the fig3 wear pipeline.
 
 ## 4. KFA animation files (= NetImmerse NIFs, not EMotion FX)
-- `anims/` = 4060 `.kfa` (154 MB), fully covered by `animnifs.csv`.
+- `anims/` = a large KFA corpus (historical inventory: 4060 files). The
+  current table contains duplicate KFA basenames, so the old one-to-one
+  “fully covered” claim is not a current invariant; resolve timing and state
+  from the animation ID, not only the basename.
 - Same architecture in all 3 versions (4.2.1.0, 4.2.2.0, 10.1.0.0): a list
   of channels, one per animated bone:
   ```
@@ -472,12 +440,13 @@ nif.xml's column-major note) — proven per family by the skinning identity
 
 ## 7. Coverage & remaining cases
 
-Full client NIF corpus (5089 files, `--read-only`): **5087 OK / 2 errors**.
-The 2 remaining errors are Gamebryo **10.1.0.0 housing files** failing
-inside **pyffi** (not the legacy reader):
+Full client NIF corpus historical snapshot (5089 files, `--read-only`):
+**5087 OK / 2 errors**. The two remaining errors are Gamebryo **10.1.0.0**
+housing files failing inside **pyffi** (not the legacy reader):
 `phousing/nifs/int_floor_table_Frontier_{Albion,Midgard}.NIF` —
 `string too long` while reading a "BC…" string. *Open:* pyffi patch or a
-10.1.0.0 fallback.
+10.1.0.0 fallback. Re-run and version the report against the pinned
+`DAOC_CLIENT V2` profile.
 
 ## 8. fig3 archive map
 
@@ -500,14 +469,15 @@ inside **pyffi** (not the legacy reader):
 
 ## 9. Model swap constraints (for the edit pipeline)
 
-1. Replacing a figure mesh: preserve the **Bip01 node tree and order** (the
-   KFA index space), the attach-node names, the `Scene Root` root, and the
-   scale/bind pose.
-2. Making a fig3 piece: skinned mesh whose `bonelist` names exactly the
-   shared skeleton's bones + a compliant NiSkinData.
-3. `.kfa` are reusable as-is if bone order/structure is unchanged; any
-   re-rigging requires rewriting the `.kfa` (feasible: documented format,
-   pyffi reads/writes 4.2.x and 10.1.0.0).
+1. Replacing a figure mesh: preserve the **Bip01 node tree and compatible
+   names/bind data**, the attach-node names, the `Scene Root` root, and the
+   scale/bind pose. The KFA channel space is the client's
+   `figures/animnode.dat` name table, not simply the per-skeleton DFS order.
+2. Making a fig3 piece: provide a skinned mesh whose `bonelist` names the
+   target skeleton's bones plus a compliant `NiSkinData`.
+3. A `.kfa` can be reused only when the target bone names, structure and bind
+   remain compatible. Re-rigging requires rewriting or revalidating the
+   animation; do not assume byte reuse is safe.
 
 ## 10. Prototype 1 (cold asset swap) — protocol
 

@@ -33,9 +33,11 @@ fixes**:
 
 - **Every new feature must ship with tests** — write the test first when
   possible (test-driven). No PR merges a feature without its tests passing.
-- Tests live in `core/tests/` (pytest) and run with:
+- Tests live in `core/tests/` (pytest) and `web/` (Vitest/Svelte checks).
+  Run the relevant suites with:
   ```sh
   .venv/bin/python -m pytest core/tests -q
+  cd web && pnpm test && pnpm check && pnpm lint && pnpm build
   ```
 - Two tiers of tests:
   - **Unit tests** — no game files needed (pure functions: matrices, axis
