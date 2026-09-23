@@ -383,16 +383,19 @@ def anim_timing(client_dir: str, kfa_path: str) -> tuple[float, float] | None:
 
 def animation_tracks(
     nif_path: str, kfa_path: str, client_dir: str | None = None,
-    prefer_table: bool | None = None,
+    prefer_table: bool | None = None, foreign_rig_gate: bool = False,
 ) -> dict:
     """Joint rotation tracks for posing *nif_path* with *kfa_path*.
 
     *prefer_table* forces the engine's canonical bone table for the channel
     mapping (``None`` keeps the gamedata heuristic): the native fig3 runtime
     rigs are not listed in monnifs, but they are exactly what the table
-    describes. Every channel is applied **absolute**, translations and
-    rotations alike: the engine overwrites the node transforms wholesale, and
-    the values form a consistent pose — dropping the "static" ones or
+    describes. *foreign_rig_gate* (native fig3 path) refuses the absolute
+    translations of a clip authored on another rig — see
+    :func:`camelot.gltf.kfa_translation_trust`. Every channel is applied
+    **absolute**, translations and rotations alike: the engine overwrites
+    the node transforms wholesale, and the values form a consistent pose —
+    dropping the "static" ones or
     rebasing a few bones onto the target bind breaks the chain (a dropped
     neck/hand rest tilted the head and sheared the gloves). Partial fixes
     are the bug; fidelity is the rule.
@@ -440,7 +443,9 @@ def animation_tracks(
     mapping, source = map_kfa_to_nodes(
         objs, names, pose, bone_names=table, with_source=True, prefer_table=prefer_table
     )
-    trusted = kfa_translation_trust(pose, objs, mapping, source=source)
+    trusted = kfa_translation_trust(
+        pose, objs, mapping, source=source, foreign_rig_gate=foreign_rig_gate
+    )
     # Partial offset subsets are approximations (a subset of bones from
     # another rig): they visibly break grounding (amazon walks on air, Bear
     # floats 5 units). Only vetted pairs animate; everything else keeps bind.
@@ -470,7 +475,10 @@ def animation_tracks(
     # Refuse clips that explode the mesh under the viewer's skinning model
     # (rigs whose stored skin bind disagrees with their node tree — AfancB,
     # dracolich…): an empty track list sends the viewer to the bind pose.
-    stretch = skin_stretch(data, pose, bone_names=table, prefer_table=prefer_table)
+    stretch = skin_stretch(
+        data, pose, bone_names=table, prefer_table=prefer_table,
+        foreign_rig_gate=foreign_rig_gate,
+    )
     if stretch is not None and (stretch[0] > STRETCH_LIMIT_MEAN or stretch[1] > STRETCH_LIMIT_MAX):
         tracks = []
     rate, duration = 1.0, pose.duration

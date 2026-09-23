@@ -44,6 +44,43 @@ def test_eye_sheet_per_colour(client_dir):
     assert len(sheets) == 8  # 8 distinct eye sheets per race
 
 
+def test_hair_composite_blends_the_decal(client_dir):
+    """The Hair texture is the base sheet with the `M` decal alpha-blended:
+    the engine selects `ps_HairMaterialDecalShader1x` when the third
+    haircolormap cell is set, and the decal is a 1-bit-alpha cutout on the
+    base's own UV set."""
+    import numpy as np
+
+    from camelot.dxt import dds_rgba, parse_dds_header
+
+    base, _tint, decal = app._hair_triplets(client_dir, 4, 1)[0]  # Saracen F
+    assert decal  # Saracen female style 1 ships a decal
+    comp = app.hair_composite(client_dir, base, decal)
+    plain = gamedata.skin_texture(client_dir, base)
+    assert comp is not None and plain is not None
+    assert comp[1] != plain[1]
+
+    width, height, fourcc = parse_dds_header(comp[1])
+    assert fourcc == b""  # baked uncompressed
+    assert (width, height) == (256, 256)
+    _w, _h, pixels = dds_rgba(comp[1])
+    baked = np.frombuffer(pixels, np.uint8).reshape(height, width, 4)
+    _w, _h, base_px = dds_rgba(plain[1])
+    original = np.frombuffer(base_px, np.uint8).reshape(height, width, 4)
+    # the base's strand alpha (cutout) survives the bake…
+    assert np.array_equal(baked[:, :, 3], original[:, :, 3])
+    # …and the decal region re-coloured the sheet
+    assert not np.array_equal(baked[:, :, :3], original[:, :, :3])
+
+
+def test_hair_composite_without_decal_returns_base(client_dir):
+    base, _tint, decal = app._hair_triplets(client_dir, 1, 1)[0]  # Briton M
+    assert decal == ""
+    assert app.hair_composite(client_dir, base, decal) == gamedata.skin_texture(
+        client_dir, base
+    )
+
+
 def test_eye_composite_paints_the_eye(client_dir):
     """The Eyes texture is the face sheet's painted eye multiplied by the
     `eyecolor_*` dark-map decal (per eye colour)."""

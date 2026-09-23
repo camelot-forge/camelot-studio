@@ -358,8 +358,47 @@ def mapping_is_vetted(pose, mapping: dict[int, int], source: str | None = None) 
     return False
 
 
+# A clip authored on a different rig carries absolute locals that do not
+# match the target rig's bind. Measured over the player corpus, a matching
+# rig sits at a mean closest-key-to-bind distance < 0.75 (Troll female 0.59,
+# Saracen 0.27-0.34, Dwarf male 1.25) while the Cata Troll male idle on
+# `tro_m_skeleton.nif` sits at 2.96: applying its translations shifts the
+# neck/head ~3.5 units and shears the face.
+FOREIGN_RIG_MEAN_TOL = 1.5
+
+
+def _mean_bind_delta(pose, objs, mapping: dict[int, int]) -> float | None:
+    """Mean over translated channels of the closest key-to-bind distance.
+
+    The closest key (not the first) tolerates travelling roots; a clip
+    authored on the target rig keeps at least one key near every bind.
+    """
+    deltas: list[float] = []
+    for idx, ni in mapping.items():
+        ch = pose.channels.get(idx)
+        if ch is None or not ch.translations:
+            continue
+        if ni < 0 or ni >= len(objs) or objs[ni] is None:
+            continue
+        bt = vec3(getattr(objs[ni], "translation", None))
+        if not all(math.isfinite(v) for v in bt):
+            continue
+        deltas.append(
+            min(
+                sum((float(key.value[k]) - bt[k]) ** 2 for k in range(3)) ** 0.5
+                for key in ch.translations
+            )
+        )
+    return sum(deltas) / len(deltas) if deltas else None
+
+
 def kfa_translation_trust(
-    pose, objs, mapping: dict[int, int], trans_tol: float = 0.3, source: str | None = None
+    pose,
+    objs,
+    mapping: dict[int, int],
+    trans_tol: float = 0.3,
+    source: str | None = None,
+    foreign_rig_gate: bool = False,
 ) -> set[int]:
     """KFA channels whose translation track belongs to the mapped rig.
 
@@ -371,9 +410,22 @@ def kfa_translation_trust(
     track is trusted only when at least one key returns to the mapped node's
     bind translation; otherwise the caller keeps the figure's bind
     translation. Rotations are unaffected — they are local per bone.
+
+    *foreign_rig_gate* is for the native fig3 player path, where the pieces
+    are authored on the runtime rig and a vetted pair is expected to match
+    its bind: a clip that sits off the bind on average
+    (:data:`FOREIGN_RIG_MEAN_TOL`) was authored on another rig (the Cata
+    Troll male idle on ``tro_m_skeleton.nif``), so it falls back to the
+    per-channel bind test instead of applying off-rig locals. Classic
+    figures are not gated: their stored bind legitimately disagrees with the
+    node tree.
     """
     trusted: set[int] = set()
     vetted = mapping_is_vetted(pose, mapping, source)
+    if vetted and foreign_rig_gate:
+        delta = _mean_bind_delta(pose, objs, mapping)
+        if delta is not None and delta > FOREIGN_RIG_MEAN_TOL:
+            vetted = False
     for idx, ni in mapping.items():
         ch = pose.channels.get(idx)
         if ch is None or not ch.translations:
@@ -409,7 +461,12 @@ STRETCH_LIMIT_MAX = 25.0
 
 
 def skin_stretch(
-    data, pose, bone_names=None, samples: int = 4, prefer_table: bool = False
+    data,
+    pose,
+    bone_names=None,
+    samples: int = 4,
+    prefer_table: bool = False,
+    foreign_rig_gate: bool = False,
 ) -> tuple[float, float] | None:
     """Worst skinned edge stretch of *data* posed by *pose* vs its bind.
 
@@ -457,7 +514,9 @@ def skin_stretch(
     )
     if not mapping:
         return None
-    trusted = kfa_translation_trust(pose, objs, mapping, source=source)
+    trusted = kfa_translation_trust(
+        pose, objs, mapping, source=source, foreign_rig_gate=foreign_rig_gate
+    )
 
     bind: dict[int, list[list[float]]] = {}
 

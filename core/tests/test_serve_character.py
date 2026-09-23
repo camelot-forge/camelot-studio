@@ -83,6 +83,22 @@ def test_character_cloak_uses_the_default_cloak_sheet(client_dir, tmp_path):
     assert "Cat_cloak.dds" not in without.values()
 
 
+def test_character_options_keeps_positional_hair_slots(client_dir, tmp_path):
+    """Briton male's client row is Hair 1..6, **Bald**, Hair 8: the builder
+    must expose all eight positions and no hair at the Bald one."""
+    client = _client(client_dir, tmp_path)
+    r = client.get("/api/v1/character/1/false/options")
+    assert r.status_code == 200, r.text
+    assert r.json()["hair_styles"] == 8
+
+    def mesh_names(url):
+        doc = _glb_json(client.get(url).content)
+        return {mesh["name"] for mesh in doc["meshes"]}
+
+    assert "Hair" not in mesh_names("/api/v1/character/1/false/model?hair_style=7")
+    assert "Hair" in mesh_names("/api/v1/character/1/false/model?hair_style=8")
+
+
 def test_player_rows_resolve_a_figure_and_idle(client_dir):
     """Every playable race row finds its monnifs figure and idle KFA.
 
@@ -94,7 +110,7 @@ def test_player_rows_resolve_a_figure_and_idle(client_dir):
     from camelot.anims import resolve_idle_kfa
 
     tables = fig3.read_tables(str(client_dir))
-    for race_id in range(1, 31):
+    for race_id in range(1, 37):
         desc = tables.race_desc.get(race_id)
         if not desc:
             continue
@@ -104,6 +120,26 @@ def test_player_rows_resolve_a_figure_and_idle(client_dir):
             str(client_dir), os.path.join(str(client_dir), "figures", f"{name}.NIF")
         )
         assert kfa, f"{desc}: no idle KFA"
+
+
+def test_foreign_rig_idle_keeps_translations_at_bind(client_dir, tmp_path):
+    """`Cat_troll_idle.kfa` was authored on another rig: its Head/Neck locals
+    sit ~3.5 units off `tro_m_skeleton.nif` and sheared the Troll male face.
+    The builder must keep those bones at the figure bind while a matching
+    pair (Saracen male) keeps applying its absolute translations."""
+    client = _client(client_dir, tmp_path)
+
+    troll = client.get("/api/v1/character/31/false/anim")
+    assert troll.status_code == 200, troll.text
+    by_node = {track["node"]: track for track in troll.json()["tracks"]}
+    assert by_node["Bip01 Head"]["quats"]  # rotations still animate
+    assert "positions" not in by_node["Bip01 Head"]
+    assert "positions" not in by_node["Bip01 Neck"]
+
+    saracen = client.get("/api/v1/character/3/false/anim")
+    assert saracen.status_code == 200, saracen.text
+    saracen_by_node = {track["node"]: track for track in saracen.json()["tracks"]}
+    assert "positions" in saracen_by_node["Bip01 Head"]
 
 
 @pytest.mark.parametrize(

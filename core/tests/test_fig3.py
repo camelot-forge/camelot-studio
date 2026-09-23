@@ -33,6 +33,21 @@ MAP_ROWS = [
     ["25", "8", "Half Ogre Male Hair", "199", "200"],
 ]
 
+# Briton male's real fig3map hair row: Hair 1..6, **Bald**, Hair 8 (the
+# `fig3descriptions.csv` labels). The interior empty cell must survive.
+BALD_MAP_ROWS = [
+    ["id", "", "", "", "", ""],
+    ["#", "part", "desc", "1", "2", "3", "4"],
+    ["1", "8", "Briton Male Hair", "5", "6", "", "8"],
+    ["4", "8", "Saracen Female Hair", "29", "30", "", ""],
+]
+
+BALD_PARTS_ROWS = PARTS_ROWS + [
+    ["5", "Briton Male Hair", "bri_m_Hair01", "4", "1", "10", "1"],
+    ["6", "Briton Male Hair", "bri_m_Hair02", "4", "1", "10", "1"],
+    ["8", "Briton Male Hair", "bri_m_Hair04", "4", "1", "10", "1"],
+]
+
 
 def test_parse_parts_skips_headers_and_bad_rows():
     parts = fig3.parse_parts(PARTS_ROWS)
@@ -106,6 +121,31 @@ def test_parts_of_resolves_ids_to_parts():
     assert [p.filename for p in hairs] == ["sar_f_Hair01"]
     assert fig3.parts_of(tables, 4, "Legs") == []
     assert fig3.parts_of(tables, None, "Hair") == []
+
+
+def test_parse_map_keeps_interior_empty_cells():
+    """A blank fig3map cell is a variant slot with no piece (the hair
+    `Bald` styles): dropping it shifts every later style. Trailing blanks
+    are trimmed, interior ones are kept as 0."""
+    races, _ = fig3.parse_map(BALD_MAP_ROWS)
+    assert races[1]["Hair"] == [5, 6, 0, 8]  # Bald at position 3
+    assert races[4]["Hair"] == [29, 30]  # trailing empties trimmed
+
+
+def test_part_at_resolves_positional_variants():
+    tables = fig3.Tables(
+        parts=fig3.parse_parts(BALD_PARTS_ROWS),
+        races=fig3.parse_map(BALD_MAP_ROWS)[0],
+        race_desc=fig3.parse_map(BALD_MAP_ROWS)[1],
+    )
+    assert fig3.slot_ids(tables, 1, "Hair") == [5, 6, 0, 8]
+    assert fig3.part_at(tables, 1, "Hair", 1).filename == "bri_m_Hair01"
+    assert fig3.part_at(tables, 1, "Hair", 3) is None  # Bald
+    assert fig3.part_at(tables, 1, "Hair", 4).filename == "bri_m_Hair04"
+    assert fig3.part_at(tables, 1, "Hair", 5) is None  # out of range
+    assert fig3.part_at(tables, 1, "Hair", 0) is None  # 1-based
+    assert fig3.part_at(tables, None, "Hair", 1) is None
+    assert fig3.slot_ids(tables, None, "Hair") == []
 
 
 def test_resolve_bone_falls_back_to_nearest_ancestor():

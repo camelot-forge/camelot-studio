@@ -6,30 +6,7 @@
 	import { loadFromGlb as loadGlb, type LoadedModel } from '$lib/gltf/load';
 	import type { AnimClip } from '$lib/anim';
 	import type { CharacterOptions } from '$lib/api/client';
-
-	// The 18 playable races, ids from the client's own enumeration (eRace
-	// 1..21, the 3 Minotaurs fold into 19..21 and reuse the Half-Ogre key).
-	// Each playable race maps to TWO fig3 rows: (male, female), alternating
-	// numbered by eRace — male = 2k-1 (Briton=1/2 …). The ids below are the
-	// eRace codes from the emulators' eRace enum which is also the row id of
-	// `fig3map.csv`/`fig3descriptions.csv`.
-	const RACES: Array<{ male: number; female: number; name: string; realm: string }> = [
-		{ male: 1, female: 2, name: 'Briton', realm: 'Albion' },
-		{ male: 3, female: 4, name: 'Saracen', realm: 'Albion' },
-		{ male: 5, female: 6, name: 'Frostalf', realm: 'Midgard' },
-		{ male: 7, female: 8, name: 'Shar', realm: 'Hibernia' },
-		{ male: 9, female: 10, name: 'Avalonian', realm: 'Albion' },
-		{ male: 11, female: 12, name: 'Elf', realm: 'Hibernia' },
-		{ male: 13, female: 14, name: 'Highlander', realm: 'Albion' },
-		{ male: 15, female: 16, name: 'Norseman', realm: 'Midgard' },
-		{ male: 17, female: 18, name: 'Lurikeen', realm: 'Hibernia' },
-		{ male: 19, female: 20, name: 'Kobold', realm: 'Midgard' },
-		{ male: 21, female: 22, name: 'Dwarf', realm: 'Midgard' },
-		{ male: 23, female: 24, name: 'Inconnu', realm: 'Albion' },
-		{ male: 25, female: 26, name: 'Half Ogre', realm: 'Albion' },
-		{ male: 27, female: 28, name: 'Valkyn', realm: 'Midgard' },
-		{ male: 29, female: 30, name: 'Firbolg', realm: 'Hibernia' }
-	];
+	import { RACES, type Race } from '$lib/races';
 
 	const OPT_FALLBACK = {
 		faces: 7,
@@ -54,7 +31,7 @@
 	let error = $state<string | null>(null);
 	let loading = $state(false);
 
-	async function onRace(entry: { male: number; female: number; name: string; realm: string }) {
+	async function onRace(entry: Race) {
 		raceId = female ? entry.female : entry.male;
 		raceOptions = await api.characterOptions(raceId, female).catch(() => null);
 		if (raceOptions && face > raceOptions.faces) face = 1;
@@ -130,15 +107,20 @@
 			<section class="panel">
 				<h3>Gender</h3>
 				<div class="gender">
-					<button class:on={() => !female} onclick={() => onGender(false)}>Male</button>
-					<button class:on={() => female} onclick={() => onGender(true)}>Female</button>
+					<button class:on={!female} aria-pressed={!female} onclick={() => onGender(false)}
+						>Male</button
+					>
+					<button class:on={female} aria-pressed={female} onclick={() => onGender(true)}
+						>Female</button
+					>
 				</div>
 
 				<h3>Race</h3>
 				<ul class="races">
 					{#each RACES as r (r.name)}
 						<li
-							class:on={() => raceId === (female ? r.female : r.male)}
+							class:on={raceId === (female ? r.female : r.male)}
+							aria-pressed={raceId === (female ? r.female : r.male)}
 							role="button"
 							tabindex="0"
 							onclick={() => onRace(r)}

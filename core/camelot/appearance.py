@@ -152,6 +152,54 @@ def eye_composite(client_dir: str, race_e_id: int, face: int, eye_color: int):
     return (decal[0], encode_a8r8g8b8(aw, ah, rgba.tobytes()))
 
 
+def hair_composite(client_dir: str, base_id: str, decal_id: str):
+    """The hair base sheet with its `M` decal composited (alpha overlay).
+
+    The engine selects `ps_HairMaterialDecalShader1x` when the haircolormap
+    triplet's third cell is set and passes base, tint and decal as separate
+    material fields (`FUN_004174e2` -> `FUN_0042568d`). The `M` sheet is a
+    1-bit-alpha cutout on the base's own UV set (fig3 hair meshes ship a
+    single UV stream), so the faithful single-texture bake is
+    ``base*(1-a) + decal*a`` while keeping the base's strand alpha; the
+    viewer still multiplies the result by the `T` tint. Returns
+    ``(name, bytes)`` like the sheet helpers, or the plain base when the
+    triplet carries no decal.
+    """
+    base = gamedata.skin_texture(client_dir, str(base_id).strip()) if base_id else None
+    if base is None:
+        return None
+    decal = (
+        gamedata.skin_texture(client_dir, str(decal_id).strip())
+        if decal_id and str(decal_id).strip()
+        else None
+    )
+    if decal is None:
+        return base
+
+    import numpy as np
+
+    from .dxt import dds_rgba, encode_a8r8g8b8
+
+    base_data = dds_rgba(base[1])
+    decal_data = dds_rgba(decal[1])
+    if base_data is None or decal_data is None:
+        return base  # cannot blend these formats: keep the artwork
+    aw, ah, apx = base_data
+    bw, bh, bpx = decal_data
+    base_px = np.frombuffer(apx, np.uint8).reshape(ah, aw, 4)
+    dec = np.frombuffer(bpx, np.uint8).reshape(bh, bw, 4)
+    # nearest resample of the decal to the base's grid: both sheets use the
+    # same normalised UVs, so texel (0,0) stays texel (0,0).
+    dec = dec[(np.arange(ah) * bh // ah).clip(0, bh - 1)][
+        :, (np.arange(aw) * bw // aw).clip(0, bw - 1)
+    ].astype(np.uint16)
+    alpha = dec[:, :, 3:4]
+    rgb = base_px[:, :, :3].astype(np.uint16)
+    blended = (rgb * (255 - alpha) + dec[:, :, :3] * alpha) // 255
+    rgba = np.dstack([blended.astype(np.uint8), base_px[:, :, 3]])
+    return (base[0], encode_a8r8g8b8(aw, ah, rgba.tobytes()))
+
+
 def tint_rgb(client_dir: str, tint_id: int) -> tuple[int, int, int] | None:
     """(Red, Green, Blue) of a `fig3tints.csv` id — the engine's packed tint.
 

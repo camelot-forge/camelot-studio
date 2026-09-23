@@ -109,15 +109,15 @@ def pieces_for(client_dir: str, tables, race_id: int, *, face: int = 1,
         parts = fig3.parts_of(tables, race_id, slot)
         if parts:
             out[name] = parts[0]
-    hair = fig3.parts_of(tables, race_id, "Hair")
+    hair = fig3.part_at(tables, race_id, "Hair", hair_style)
     if hair:
-        out["Hair"] = hair[max(0, min(hair_style - 1, len(hair) - 1))]
+        out["Hair"] = hair
     head = fig3.parts_of(tables, race_id, "Head")
     if head:
         out["Head"] = head[0]
-    cloaks = fig3.parts_of(tables, race_id, "Cloak")
-    if cloaks and cloak > 0:
-        out["Cloak"] = cloaks[min(cloak - 1, len(cloaks) - 1)]
+    cloak_part = fig3.part_at(tables, race_id, "Cloak", cloak)
+    if cloak_part:
+        out["Cloak"] = cloak_part
     return out
 
 
@@ -144,15 +144,18 @@ def textures_for(client_dir: str, tables, race_id: int, female: bool,
     add("Eyes", app.eye_composite(client_dir, race_id, face, eye_color))
     triplets = app._hair_triplets(client_dir, race_id, style=hair_style_key)
     if triplets:
-        # fig3 haircolormap row = 16 colour slots; empty S cells carry no
-        # sheet for that colour (engine picks tint-only blacks). Our visible
-        # default stays the nearest non-empty cell (like DT's fallback).
+        # fig3 haircolormap row = 16 colour slots of (S, T, M): the base
+        # sheet, the multiplicative tint and the decal sheet. The decal is
+        # baked into the served sheet (`hair_composite`); empty S cells carry
+        # no sheet for that colour (engine picks tint-only blacks) and stay
+        # the nearest non-empty cell (like DT's fallback).
         chosen = triplets[min(max(hair_color, 1), len(triplets)) - 1]
         cell = chosen if chosen[0] else next(
             (t for t in triplets if t[0]), None)
 
-        add("Hair", gamedata.skin_texture(client_dir, cell[0]),
-            tint=app.hair_tint_rgb(client_dir, race_id, hair_style_key, hair_color))
+        if cell is not None:
+            add("Hair", app.hair_composite(client_dir, cell[0], cell[2]),
+                tint=app.hair_tint_rgb(client_dir, race_id, hair_style_key, hair_color))
     for slot, stem in _SLOT_SHEETS.items():
         # The cloak sheet is only meaningful when a cloak piece is attached
         # (otherwise the export would embed ~175 KB no mesh samples).

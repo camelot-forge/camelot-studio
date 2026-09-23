@@ -233,6 +233,60 @@ def test_load_bone_table_absent(tmp_path):
     assert load_bone_table(str(tmp_path)) is None
 
 
+def test_foreign_rig_clip_drops_its_absolute_translations():
+    """A vetted pair whose KFA was authored on another rig must not apply its
+    absolute locals: the Cata Troll male idle on `tro_m_skeleton.nif` shifts
+    the neck/head ~3.5 units and shears the face."""
+    from types import SimpleNamespace
+
+    from camelot.gltf import kfa_translation_trust
+    from camelot.kfa import Animation, Channel, Key
+
+    node = type("NiNode", (SimpleNamespace,), {})
+
+    def rig():
+        return [
+            node(name=b"Bip01", translation=(0.0, 0.0, 37.0), rotation=None, children=[]),
+            node(name=b"Bip01 Neck", translation=(7.5, 3.3, 0.0), rotation=None, children=[]),
+            node(name=b"Bip01 Head", translation=(2.0, 0.0, 0.0), rotation=None, children=[]),
+            node(name=b"Bip01 L Hand", translation=(10.0, 0.0, 0.0), rotation=None, children=[]),
+        ]
+
+    mapping = {0: 0, 1: 1, 2: 2, 3: 3}
+    # authored on the target rig: every translated channel returns to the bind
+    same = Animation(
+        path="x", version=0, duration=1.0,
+        channels={
+            0: Channel(index=0, translations=(Key(0.0, (0.0, 0.0, 37.0)),)),
+            1: Channel(index=1, translations=(Key(0.0, (7.5, 3.3, 0.0)),)),
+            2: Channel(index=2, translations=(Key(0.0, (2.0, 0.0, 0.0)),)),
+            3: Channel(index=3, translations=(Key(0.0, (10.0, 0.0, 0.0)),)),
+        },
+    )
+    assert kfa_translation_trust(same, rig(), mapping, source="table") == {0, 1, 2, 3}
+    assert (
+        kfa_translation_trust(same, rig(), mapping, source="table", foreign_rig_gate=True)
+        == {0, 1, 2, 3}
+    )
+
+    # authored on another rig: the vetted pair falls back to the per-channel
+    # bind test, which refuses every off-rig channel
+    foreign = Animation(
+        path="x", version=0, duration=1.0,
+        channels={
+            0: Channel(index=0, translations=(Key(0.0, (0.2, 0.4, 36.9)),)),
+            1: Channel(index=1, translations=(Key(0.0, (8.8, 0.0, 0.0)),)),
+            2: Channel(index=2, translations=(Key(0.0, (3.8, 0.0, 0.0)),)),
+            3: Channel(index=3, translations=(Key(0.0, (13.0, 0.0, 0.0)),)),
+        },
+    )
+    assert kfa_translation_trust(foreign, rig(), mapping, source="table") == {0, 1, 2, 3}
+    assert (
+        kfa_translation_trust(foreign, rig(), mapping, source="table", foreign_rig_gate=True)
+        == set()
+    )
+
+
 def test_table_fills_rotation_only_channels_and_refuses_bad_pairs():
     """The canonical table only fills gaps of pairs the offsets vouch for."""
     from types import SimpleNamespace

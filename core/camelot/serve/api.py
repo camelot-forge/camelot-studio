@@ -21,7 +21,7 @@ from .index import Asset, AssetIndex
 from .models import CharacterOptions
 
 # Export-cache schema/behaviour version (bump when export output changes).
-_EXPORT_VERSION = "16"
+_EXPORT_VERSION = "17"
 from .models import AssetDetail, AssetPage, AssetSummary, Health, RootInfo
 from .watcher import IndexWatcher
 
@@ -201,9 +201,9 @@ def build_router(config: ServeConfig, index: AssetIndex,
         desc = tables.race_desc.get(race_id)
         if desc is None or ("female" in desc.lower()) != female:
             raise HTTPException(status_code=404, detail="unknown race")
-        hair_styles = len(fig3.parts_of(tables, race_id, "Hair"))
-        cloak_variants = len(fig3.parts_of(tables, race_id, "Cloak"))
-        body_variants = len(fig3.parts_of(tables, race_id, "Body"))
+        hair_styles = len(fig3.slot_ids(tables, race_id, "Hair"))
+        cloak_variants = len(fig3.slot_ids(tables, race_id, "Cloak"))
+        body_variants = len(fig3.slot_ids(tables, race_id, "Body"))
         triplets = app._hair_triplets(str(config.root), race_id, 1)
         face_row = app._facemap(str(config.root)).get(race_id, [])
         faces = max(1, len([c for c in face_row[2:] if c.strip()])) if face_row else 1
@@ -323,6 +323,7 @@ def build_router(config: ServeConfig, index: AssetIndex,
             try:
                 tracks = animation_tracks(
                     rig_path, kfa_path, str(config.root), prefer_table=True,
+                    foreign_rig_gate=True,
                 )
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=500, detail=f"anim failed: {exc}") from exc
@@ -349,7 +350,6 @@ def build_router(config: ServeConfig, index: AssetIndex,
         change geometry — face / hair_style — fall back to a full rebuild
         client-side."""
         from .. import appearance as app
-        from .. import gamedata
         from ..dxt import viewer_dds
 
         def sheet_response(name: str, raw: bytes, tint) -> Response:
@@ -362,7 +362,7 @@ def build_router(config: ServeConfig, index: AssetIndex,
         if kind == "hair_color":
             triplet = app._hair_triplets(root, race_id, hair_style)
             cell = triplet[min(max(hair_color, 1), len(triplet)) - 1]
-            out = gamedata.skin_texture(root, cell[0])
+            out = app.hair_composite(root, cell[0], cell[2])
             if out:
                 tint = app.hair_tint_rgb(root, race_id, hair_style, hair_color)
                 return sheet_response(out[0], out[1], tint)

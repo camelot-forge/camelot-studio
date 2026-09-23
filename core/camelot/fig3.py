@@ -119,7 +119,14 @@ def _integral_id(raw: str) -> int | None:
 
 
 def parse_map(rows: list[list[str]]) -> tuple[dict[int, dict[str, list[int]]], dict[int, str]]:
-    """``fig3map.csv`` rows -> (parts per race id, head-row description)."""
+    """``fig3map.csv`` rows -> (parts per race id, head-row description).
+
+    The cell list is **positional**: cell *i* holds the piece id of variant
+    *i+1*, and an empty cell is kept as ``0`` — the client's deliberate
+    "no piece" slots (e.g. the hair ``Bald`` styles, `FUN_00472d72` skips the
+    hair when the variant is 0). Trailing empty cells are trimmed; interior
+    ones must survive or every later variant shifts.
+    """
     races: dict[int, dict[str, list[int]]] = {}
     descs: dict[int, str] = {}
     for row in rows:
@@ -131,7 +138,9 @@ def parse_map(rows: list[list[str]]) -> tuple[dict[int, dict[str, list[int]]], d
         slot = SLOT_NAMES.get(int(raw_slot))
         if slot is None:
             continue
-        ids = [int(cell) for cell in row[3:] if cell.strip().isdigit()]
+        ids = [_integral_id(cell) or 0 for cell in row[3:]]
+        while ids and ids[-1] == 0:
+            ids.pop()
         races.setdefault(int(raw_id), {})[slot] = ids
         if slot == "Head" and int(raw_id) not in descs:
             descs[int(raw_id)] = _strip_slot_word(row[2].strip(), "Head")
@@ -184,6 +193,16 @@ def _word_key(desc: str) -> frozenset[str]:
     return frozenset(words)
 
 
+def _disambiguate(candidates: list[Part], desc: str) -> list[Part]:
+    """Keep the candidates whose description starts with the race's; when
+    none match (multi-race pieces like `Saracen/Frostalf/Shar Female Body`)
+    every candidate is kept."""
+    if not desc:
+        return candidates
+    matching = [part for part in candidates if part.desc.lower().startswith(desc)]
+    return matching or candidates
+
+
 def parts_of(tables: Tables, rid: int | None, slot: str) -> list[Part]:
     """The slot's pieces in engine order, disambiguated by race description.
 
@@ -196,13 +215,41 @@ def parts_of(tables: Tables, rid: int | None, slot: str) -> list[Part]:
         return []
     out: list[Part] = []
     for pid in tables.races.get(rid, {}).get(slot, []):
-        out.extend(tables.parts.get(pid, []))
-    desc = tables.race_desc.get(rid, "").lower()
-    if desc:
-        matching = [part for part in out if part.desc.lower().startswith(desc)]
-        if matching:
-            out = matching
-    return out
+        if pid:
+            out.extend(tables.parts.get(pid, []))
+    return _disambiguate(out, tables.race_desc.get(rid, "").lower())
+
+
+def slot_ids(tables: Tables, rid: int | None, slot: str) -> list[int]:
+    """The slot's positional cell list (``0`` = no piece, e.g. hair `Bald`).
+
+    The index is the client's variant slot — the fig3map cell order fed by
+    the character record's variant byte and, on the server side, by an
+    equipped item's `Extension` byte (`character-rules.md` §11.5).
+    """
+    if rid is None:
+        return []
+    return list(tables.races.get(rid, {}).get(slot, []))
+
+
+def part_at(tables: Tables, rid: int | None, slot: str, index: int) -> Part | None:
+    """The piece at the slot's 1-based positional index, or ``None``.
+
+    An empty cell is a deliberate "no piece" (`Bald`), and an out-of-range
+    index resolves to none — exactly the engine's accessor
+    (`FUN_00474d9e` returns 0 out of bounds, `FUN_00472d72` skips variant 0).
+    """
+    if rid is None or index < 1:
+        return None
+    ids = slot_ids(tables, rid, slot)
+    if index > len(ids):
+        return None
+    pid = ids[index - 1]
+    if not pid:
+        return None
+    candidates = _disambiguate(tables.parts.get(pid, []),
+                               tables.race_desc.get(rid, "").lower())
+    return candidates[0] if candidates else None
 
 
 def read_part_bytes(client_dir: str, part: Part) -> bytes | None:
