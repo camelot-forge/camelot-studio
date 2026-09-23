@@ -143,6 +143,45 @@ def test_prepare_swaps_the_classic_head(client_dir):
     assert _shapes_named(data, "Head") and _shapes_named(data, "Hair")
 
 
+def _exported_uvs(gltf_path, bin_path, mesh_name):
+    doc = json.loads(gltf_path.read_text())
+    binary = bin_path.read_bytes()
+    prim = next(m["primitives"][0] for m in doc["meshes"] if m["name"] == mesh_name)
+    acc = doc["accessors"][prim["attributes"]["TEXCOORD_0"]]
+    view = doc["bufferViews"][acc["bufferView"]]
+    start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    values = struct.unpack_from("<" + "f" * acc["count"] * 2, binary, start)
+    return np.array(values).reshape(-1, 2)
+
+
+def test_player_cloak_uses_uv_set_one(client_dir, tmp_path):
+    """Cloak meshes carry three UV sets; the base sheet is sampled on UV set 1
+    (the reference viewer bakes every library from `uv_sets[1]`). Exporting
+    `uv_sets[0]` mapped the cloth to a fragmented atlas layout and produced a
+    hard seam across the hood."""
+    from camelot.gltf import export_gltf
+    from camelot.playerfig import build
+
+    tables = fig3.read_tables(client_dir)
+    rid = fig3.race_id(tables, "Saracen Female")
+    cloak = fig3.load_part(client_dir, fig3.parts_of(tables, rid, "Cloak")[0])
+    source = next(
+        s for s in fig3.shapes_of(cloak)
+        if (s.name or b"").lower().startswith(b"cloak")
+    )
+    source_uvs = np.array(
+        [[uv.u, uv.v] for uv in source.data.uv_sets[1]], dtype=np.float32
+    )
+
+    data, textures = build(str(client_dir), "Saracen Female", cloak=1)
+    out = tmp_path / "cloak"
+    export_gltf("cloak.nif", str(out), data=data, textures=textures)
+    exported = _exported_uvs(out.with_suffix(".gltf"), out.with_suffix(".bin"), "Cloak")
+
+    assert exported.shape == source_uvs.shape
+    assert np.allclose(exported, source_uvs, atol=1e-5)
+
+
 def test_prepare_assembles_the_fig3_body(client_dir):
     prepared = figure.prepare(client_dir, os.path.join(client_dir, SARACEN))
     assert prepared is not None

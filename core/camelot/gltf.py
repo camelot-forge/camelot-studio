@@ -661,6 +661,25 @@ def _slot_for_name(name: str) -> str | None:
     return None
 
 
+# Base-texture UV set per slot. Cloak meshes (classic and fig3 alike) carry
+# three UV sets — the base cloth, a heraldic-pattern layout and a coarse one —
+# and the engine samples the base sheet on UV set 1, not 0. Proven by the
+# DAoC-Tools baked libraries: all 33 `parts_library_*` bake the cloak mesh
+# from `uv_sets[1]` (0.023..1.0 × 0.031..0.988), while `uv_sets[0]` maps the
+# cloak to a fragmented, non-coherent atlas layout. Every other fig3 piece
+# ships a single UV set, so this is the only slot that needs it.
+UV_SET_BY_SLOT = {"Cloak": 1}
+
+
+def _uv_set_index(name: str) -> int:
+    """Index of the base-texture UV set for a mesh name (0 unless overridden)."""
+    n = name.lower()
+    for slot, index in UV_SET_BY_SLOT.items():
+        if slot.lower() in n:
+            return index
+    return 0
+
+
 # Meshes that never render, checked in this order. First, the NiAVObject
 # hidden flag (bit 0 — same rule as DAOC_Navigator): 3ds Max biped-rig
 # helpers (dozens of "Biped Object"/"Bone" boxes around the joints, e.g. 37
@@ -993,7 +1012,12 @@ def export_gltf(
             continue
         verts = [vec3(v) for v in shp.vertices]
         norms = [vec3(v) for v in (shp.normals or [])] or None
-        uvs = [_vec2(v) for v in (shp.uv_sets[0] if getattr(shp, "uv_sets", None) else [])] or None
+        uv_sets = getattr(shp, "uv_sets", None) or []
+        uv_index = _uv_set_index(names[i])
+        uv_set = uv_sets[uv_index] if uv_index < len(uv_sets) else (
+            uv_sets[0] if uv_sets else []
+        )
+        uvs = [_vec2(v) for v in uv_set] or None
         tris = list(shp.get_triangles()) or None
 
         si = getattr(obj, "skin_instance", None)

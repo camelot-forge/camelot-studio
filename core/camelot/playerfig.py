@@ -28,6 +28,13 @@ from .mpak import MpakArchive
 # default look (all proven to exist in the client, validation group 7).
 # Lbody (Highlander/Norse sets) shares the legs atlas: its UVs cover the
 # upper half of the same sheet the legs piece samples.
+#
+# Cloak: the fig3 cloak pieces carry no texture of their own (only a
+# NiMaterialProperty — checked in `fig010/012.mpk`), the sheet comes from the
+# equipped cloak item. The client's default cloak object (`objects.csv` id 57,
+# "Cloak") points at Cata skin 4972 = `Cat_cloak.dds`, which is exactly the
+# sheet the DAoC-Tools viewer bakes for `PART:cloak:1` (armor-manifest
+# `cat_cloak.png`). It is gender-neutral (no `_m`/`_f` variant).
 _SLOT_SHEETS = {
     "Body": "cthbody01_01",
     "Lbody": "lealegs01_01",
@@ -35,6 +42,7 @@ _SLOT_SHEETS = {
     "Boots": "leaboots01_01",
     "Arms": "ctharms01_01",
     "Gloves": "leagloves01_01",
+    "Cloak": "Cat_cloak",
 }
 
 _RIG_PATH_CACHE: dict[tuple[str, str], str | None] = {}
@@ -115,7 +123,8 @@ def pieces_for(client_dir: str, tables, race_id: int, *, face: int = 1,
 
 def textures_for(client_dir: str, tables, race_id: int, female: bool,
                  *, face: int = 1, hair_style_key: int = 1,
-                 hair_color: int = 1, eye_color: int = 1, skin_tone: int = 1):
+                 hair_color: int = 1, eye_color: int = 1, skin_tone: int = 1,
+                 cloak: int = 0):
     """`SlotTexture`s for the picked appearance (sheets + engine tints).
 
     The skin tone and most hair colours are tints (`fig3tints.csv`): the
@@ -145,6 +154,10 @@ def textures_for(client_dir: str, tables, race_id: int, female: bool,
         add("Hair", gamedata.skin_texture(client_dir, cell[0]),
             tint=app.hair_tint_rgb(client_dir, race_id, hair_style_key, hair_color))
     for slot, stem in _SLOT_SHEETS.items():
+        # The cloak sheet is only meaningful when a cloak piece is attached
+        # (otherwise the export would embed ~175 KB no mesh samples).
+        if slot == "Cloak" and cloak <= 0:
+            continue
         gendered = client_sheet(client_dir, f"{stem}_f.dds" if female
                                 else f"{stem}_m.dds")
         plain = client_sheet(client_dir, f"{stem}.dds")
@@ -179,7 +192,7 @@ def build(client_dir: str, desc: str, *, face: int = 1, hair_style: int = 1,
     textures = textures_for(client_dir, tables, rid, female,
                             face=face, hair_style_key=hair_style,
                             hair_color=hair_color, eye_color=eye_color,
-                            skin_tone=skin_tone)
+                            skin_tone=skin_tone, cloak=cloak)
     attached = 0
     for slot, part in pieces.items():
         piece = fig3.load_part(client_dir, part)

@@ -59,6 +59,30 @@ def test_character_model_carries_engine_tints(client_dir, tmp_path):
     assert "tint" not in ext["Body"]  # armour sheets stay untinted
 
 
+def test_character_cloak_uses_the_default_cloak_sheet(client_dir, tmp_path):
+    """The fig3 cloak pieces carry no texture of their own: the sheet comes
+    from the equipped cloak item. The client's default cloak object
+    (`objects.csv` id 57) points at Cata skin 4972 = `Cat_cloak.dds`, the same
+    sheet DAoC-Tools bakes for `PART:cloak:1`. Without it the glTF slot
+    fallback textured the cloak with the body sheet."""
+    client = _client(client_dir, tmp_path)
+
+    def slots(url):
+        doc = _glb_json(client.get(url).content)
+        return {
+            mesh["name"]: mesh["extensions"]["CS_camelot_texture"]["name"]
+            for mesh in doc["meshes"]
+        }
+
+    with_cloak = slots("/api/v1/character/4/true/model?cloak=1")
+    assert with_cloak["Cloak"] == "Cat_cloak.dds"
+
+    # no cloak piece -> no cloak mesh and no cloak sheet embedded
+    without = slots("/api/v1/character/4/true/model")
+    assert "Cloak" not in without
+    assert "Cat_cloak.dds" not in without.values()
+
+
 def test_player_rows_resolve_a_figure_and_idle(client_dir):
     """Every playable race row finds its monnifs figure and idle KFA.
 

@@ -10,6 +10,7 @@ from camelot.gltf import (
     _apply_axis,
     _fill_partition,
     _flatten_colmajor,
+    _uv_set_index,
     _vec2,
     _weights_to_list,
     export_gltf,
@@ -30,6 +31,18 @@ class TestVec2:
 
     def test_uv_attrs(self):
         assert _vec2(SimpleNamespace(u=3, v=4)) == (3.0, 4.0)
+
+
+class TestUvSetIndex:
+    def test_cloak_uses_uv_set_one(self):
+        # The engine samples the cloak base sheet on UV set 1 (DAoC-Tools
+        # bakes all 33 libraries from `uv_sets[1]`).
+        assert _uv_set_index("Cloak") == 1
+        assert _uv_set_index("Cloak01_Bri_m") == 1
+
+    def test_other_slots_default_to_zero(self):
+        for name in ("Body", "Head", "Legs", "Boots", "Arms", "Gloves", "Hair"):
+            assert _uv_set_index(name) == 0
 
 
 class TestFlatten:

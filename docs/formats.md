@@ -356,6 +356,16 @@ nodes.
 node name (body/head/arms/limbs…), so the 2-headed dragon gets its
 body/head/wing textures on the right meshes (`_slot_for_name` in `gltf.py`).
 
+**Cloak UV set**: cloak meshes (classic `Cloak1..3` and fig3 `Cloak01..03`)
+ship **three UV sets**; the base cloth sheet is sampled on **UV set 1**, not
+0. `uv_sets[0]` maps the cloth to a fragmented atlas layout (a hard seam
+across the hood); `uv_sets[1]` is the coherent cloak mapping. Verified against
+all 33 DAoC-Tools `parts_library_*` GLBs, which bake the cloak from
+`uv_sets[1]`; every other fig3 piece ships a single UV set. `gltf.py`
+(`UV_SET_BY_SLOT`) applies it. Cloak NIFs carry no texture and no
+`NiTexturingProperty` — the sheet is the equipped item's (`objects.csv` id 57
+"Cloak" → Cata skin 4972 = `Cat_cloak.dds`, the DAoC-Tools `cat_cloak.png`).
+
 Improvement leads: (1) a pets/summons table for the creatures without a
 monster row; (2) the player chain — the figure is only a base mesh, the
 skin/armour is per-character (fig3 + `pskins`), needs a cleaner model;
