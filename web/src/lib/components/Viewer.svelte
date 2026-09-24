@@ -7,6 +7,7 @@
 		rebindSkinnedMeshes,
 		bindBoxOf,
 		textureFromDds,
+		textureSide,
 		tintColor,
 		type LoadedModel
 	} from '$lib/gltf/load';
@@ -158,12 +159,11 @@
 				const mat = mesh.material as THREE.MeshStandardMaterial;
 				mat.map = dt;
 				mat.color = tintColor(tex.tint);
+				if (tex.doubleSided !== undefined) {
+					mat.side = textureSide(tex.doubleSided);
+				}
 				if (tex.alpha) {
-					// Alpha-cut sheet (Catacombs hair strands): hard cut, and
-					// double-sided when the exporter flagged the mesh (fig3 hair
-					// pieces are authored double-sided).
 					mat.alphaTest = 0.5;
-					mat.side = tex.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
 				}
 				mat.needsUpdate = true;
 			}

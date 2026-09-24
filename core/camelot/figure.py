@@ -536,7 +536,9 @@ def prepare(client_dir: str, nif_path: str):
     _hide_shapes(data, heads)
     textures = [
         gamedata.SlotTexture("Head", face[0], face[1]),
-        gamedata.SlotTexture("Hair", hair[0], hair[1]),
+        gamedata.SlotTexture(
+            "Hair", hair[0], hair[1], double_sided=hair_part.double_sided
+        ),
     ]
     # Smooth Catacombs body parts on the classic skeleton: the per-bone bind
     # compensation absorbs the small (≤2.5u) classic/fig3 rig offsets — each

@@ -8,6 +8,7 @@ import {
 	parseGlbContainer,
 	setCharacterVariant,
 	textureFromDds,
+	textureSide,
 	type CharacterRig
 } from './load';
 
@@ -142,6 +143,7 @@ describe('extractMeshTextures', () => {
 						CS_camelot_texture: {
 							bufferView: 0,
 							name: 'face.dds',
+							doubleSided: false,
 							tint: [223, 207, 166]
 						}
 					}
@@ -151,7 +153,16 @@ describe('extractMeshTextures', () => {
 		};
 		const out = extractMeshTextures(gltf, bin.buffer);
 		expect(out.get(0)?.tint).toEqual([223, 207, 166]);
+		expect(out.get(0)?.doubleSided).toBe(false);
 		expect([...new Uint8Array(out.get(0)!.bytes)]).toEqual([3, 4, 5, 6]);
+	});
+});
+
+describe('textureSide', () => {
+	it('honors an explicit single-sided flag and preserves the default', () => {
+		expect(textureSide(false)).toBe(THREE.FrontSide);
+		expect(textureSide(true)).toBe(THREE.DoubleSide);
+		expect(textureSide()).toBe(THREE.DoubleSide);
 	});
 });
 

@@ -83,6 +83,28 @@ def test_tables_map_saracen_female(client_dir):
     assert hair.double_sided is True
 
 
+def test_fig3_double_sided_column_uses_explicit_values(client_dir):
+    rows = gamedata._read_table(client_dir, "fig3parts.csv")
+    explicit_zero = [
+        (fig3._integral_id(row[0]), row[2].strip().lower())
+        for row in rows
+        if len(row) > 6
+        and "hair" in row[2].lower()
+        and row[6].strip() == "0"
+    ]
+    assert len(explicit_zero) == 12
+    tables = fig3.read_tables(client_dir)
+    for part_id, filename in explicit_zero:
+        assert any(
+            part.filename.lower() == filename and part.double_sided is False
+            for part in tables.parts[part_id]
+        )
+    assert any(
+        part.filename.lower() == "sar_f_hair01" and part.double_sided is True
+        for part in tables.parts[29]
+    )
+
+
 def test_loaded_pieces_match_the_reference_geometry(client_dir):
     """The fig3 pieces are the same 541/800 (head) and 269/310 (hair) meshes
     the reference viewer ships."""
@@ -141,6 +163,17 @@ def test_prepare_swaps_the_classic_head(client_dir):
     assert slots["Hair"].lower().startswith("sar_f_hair01")
     assert figure.has_classic_heads(data) is False
     assert _shapes_named(data, "Head") and _shapes_named(data, "Hair")
+
+
+def test_prepare_preserves_single_sided_hair_flag(client_dir):
+    name = gamedata.figure_name_for_desc(client_dir, "Briton Female")
+    prepared = figure.prepare(
+        client_dir, os.path.join(client_dir, "figures", name + ".NIF")
+    )
+    assert prepared is not None
+    _data, textures = prepared
+    hair = next(tex for tex in textures if tex.slot == "Hair")
+    assert hair.double_sided is False
 
 
 def _exported_uvs(gltf_path, bin_path, mesh_name):

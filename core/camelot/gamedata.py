@@ -37,13 +37,15 @@ class SlotTexture(NamedTuple):
 
     The tint is the engine's packed per-slot colour (``fig3tints.csv``):
     the viewer *multiplies* the sheet by it, which is how the client paints
-    skin tones and most hair colours.
+    skin tones and most hair colours. ``double_sided`` carries the owning
+    fig3 piece's rendering flag when the table provides one.
     """
 
     slot: str
     name: str
     data: bytes
     tint: tuple[int, int, int] | None = None
+    double_sided: bool | None = None
 
 
 # Column indices (the CSVs carry two header rows: a group row then names).

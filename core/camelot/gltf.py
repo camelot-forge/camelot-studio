@@ -1317,8 +1317,11 @@ def export_gltf(
     elif texture_data is not None:
         tex_list.append(SlotTexture("Body", texture_data[0], texture_data[1]))
 
-    slot_views: dict[str, tuple[int, str, tuple[int, int, int] | None]] = {}
-    for slot, name, data, tint in tex_list:
+    slot_views: dict[
+        str, tuple[int, str, tuple[int, int, int] | None, bool | None]
+    ] = {}
+    for tex in tex_list:
+        slot, name, data, tint, double_sided = tex
         if slot in slot_views:
             continue
         # DXT1 sheets cutting texels with 1-bit alpha must not reach the
@@ -1330,7 +1333,7 @@ def export_gltf(
         buf.views.append({"buffer": 0, "byteOffset": buf.size, "byteLength": len(data)})
         buf.chunks.append(data)
         buf.size += len(data)
-        slot_views[slot] = (vi, name, tint)
+        slot_views[slot] = (vi, name, tint, double_sided)
 
     parent: dict[int, int] = {}
     for i, ch in enumerate(children):
@@ -1354,18 +1357,16 @@ def export_gltf(
         gltf_nodes[node]["mesh"] = k
         if slot_views:
             slot = _mesh_slot(node)
-            vi, nm, tint = slot_views[slot]
+            vi, nm, tint, double_sided = slot_views[slot]
             ext = {"bufferView": vi, "name": nm}
             if tint is not None:
                 # Engine tint (`fig3tints.csv`): the viewer multiplies the
                 # sheet by it (skin tones, tint-based hair colours).
                 ext["tint"] = list(tint)
             if slot == "Hair":
-                # Catacombs hair sheets carry 1-bit/smooth alpha (strand cuts)
-                # and the fig3 hair mesh is authored double-sided (fig3parts
-                # "Double Sided" column).
                 ext["alpha"] = True
-                ext["doubleSided"] = True
+                if double_sided is not None:
+                    ext["doubleSided"] = double_sided
             mesh_ext[k] = {"CS_camelot_texture": ext}
 
     for k, skin in enumerate(skins):

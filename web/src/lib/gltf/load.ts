@@ -18,7 +18,7 @@ export interface LoadedTexture {
 	bytes: ArrayBuffer;
 	// Alpha-cut sheets (Catacombs hair): the viewer alpha-tests them.
 	alpha?: boolean;
-	// Fig3 hair meshes are authored double-sided (fig3parts "Double Sided").
+	// Optional client-side rendering flag from the owning fig3 piece.
 	doubleSided?: boolean;
 	// Engine tint (`fig3tints.csv`, R/G/B 0-255): the viewer multiplies the
 	// sheet by it (skin tones, tint-based hair colours).
@@ -31,6 +31,10 @@ export function tintColor(tint?: [number, number, number]): THREE.Color {
 	const color = new THREE.Color(0xffffff);
 	if (tint) color.setRGB(tint[0] / 255, tint[1] / 255, tint[2] / 255, THREE.SRGBColorSpace);
 	return color;
+}
+
+export function textureSide(doubleSided?: boolean): THREE.Side {
+	return doubleSided === false ? THREE.FrontSide : THREE.DoubleSide;
 }
 
 // Player base figures stack every equipment variant as separate meshes; the

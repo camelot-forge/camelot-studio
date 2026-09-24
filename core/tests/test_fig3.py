@@ -11,7 +11,7 @@ from camelot import fig3
 PARTS_ROWS = [
     ["ID", "Text", "Part", "Expansion", "Test", "Archive", "Double"],
     ["Num", "Desc", "Filename", "Min", "Status", "", "Sided"],
-    ["25", "Saracen Female Head", "sar_f_Head01", "4", "1", "15", ""],
+    ["25", "Saracen Female Head", "sar_f_Head01", "4", "1", "15", "0"],
     ["29", "Saracen Female Hair", "sar_f_Hair01", "4", "1", "7", "1"],
     ["1292", "Sar_f_Head01", "Sar_f_Head01", "4", "1", "14", ""],
     ["199", "Half Ogre Male Hair", "hal_m_Hair01", "4", "1", "15", "1"],

@@ -59,6 +59,25 @@ def test_character_model_carries_engine_tints(client_dir, tmp_path):
     assert "tint" not in ext["Body"]  # armour sheets stay untinted
 
 
+def test_character_model_preserves_single_sided_hair(client_dir, tmp_path):
+    from camelot import fig3
+
+    tables = fig3.read_tables(client_dir)
+    race_id = next(
+        rid for rid, desc in tables.race_desc.items() if desc == "Briton Female"
+    )
+    client = _client(client_dir, tmp_path)
+    r = client.get(f"/api/v1/character/{race_id}/true/model")
+    assert r.status_code == 200, r.text
+    doc = _glb_json(r.content)
+    hair = next(
+        mesh["extensions"]["CS_camelot_texture"]
+        for mesh in doc["meshes"]
+        if mesh["name"] == "Hair"
+    )
+    assert hair["doubleSided"] is False
+
+
 def test_character_cloak_uses_the_default_cloak_sheet(client_dir, tmp_path):
     """The fig3 cloak pieces carry no texture of their own: the sheet comes
     from the equipped cloak item. The client's default cloak object

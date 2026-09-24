@@ -21,7 +21,7 @@ from .index import Asset, AssetIndex
 from .models import CharacterOptions
 
 # Export-cache schema/behaviour version (bump when export output changes).
-_EXPORT_VERSION = "17"
+_EXPORT_VERSION = "18"
 from .models import AssetDetail, AssetPage, AssetSummary, Health, RootInfo
 from .watcher import IndexWatcher
 

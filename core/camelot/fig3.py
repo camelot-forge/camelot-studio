@@ -101,7 +101,7 @@ def parse_parts(rows: list[list[str]]) -> dict[int, list[Part]]:
             desc=row[1].strip(),
             filename=filename,
             archive=archive,
-            double_sided=bool(row[6].strip()) if len(row) > 6 else False,
+            double_sided=row[6].strip() == "1" if len(row) > 6 else False,
         )
         parts.setdefault(part.id, []).append(part)
     return parts

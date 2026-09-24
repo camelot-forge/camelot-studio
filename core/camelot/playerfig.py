@@ -124,7 +124,7 @@ def pieces_for(client_dir: str, tables, race_id: int, *, face: int = 1,
 def textures_for(client_dir: str, tables, race_id: int, female: bool,
                  *, face: int = 1, hair_style_key: int = 1,
                  hair_color: int = 1, eye_color: int = 1, skin_tone: int = 1,
-                 cloak: int = 0):
+                 cloak: int = 0, hair_part: fig3.Part | None = None):
     """`SlotTexture`s for the picked appearance (sheets + engine tints).
 
     The skin tone and most hair colours are tints (`fig3tints.csv`): the
@@ -132,16 +132,23 @@ def textures_for(client_dir: str, tables, race_id: int, female: bool,
     """
     out: list[gamedata.SlotTexture] = []
 
-    def add(slot: str, target: tuple[str, bytes] | None, tint=None):
+    def add(
+        slot: str,
+        target: tuple[str, bytes] | None,
+        tint=None,
+        double_sided: bool | None = None,
+    ):
         if target is None:
             return
         name, raw = target
         if raw is not None:
-            out.append(gamedata.SlotTexture(slot, name, raw, tint))
+            out.append(gamedata.SlotTexture(slot, name, raw, tint, double_sided))
 
     add("Head", app.face_sheet(client_dir, race_id, face),
         tint=app.skin_tint_rgb(client_dir, race_id, skin_tone))
     add("Eyes", app.eye_composite(client_dir, race_id, face, eye_color))
+    if hair_part is None:
+        hair_part = fig3.part_at(tables, race_id, "Hair", hair_style_key)
     triplets = app._hair_triplets(client_dir, race_id, style=hair_style_key)
     if triplets:
         # fig3 haircolormap row = 16 colour slots of (S, T, M): the base
@@ -155,7 +162,8 @@ def textures_for(client_dir: str, tables, race_id: int, female: bool,
 
         if cell is not None:
             add("Hair", app.hair_composite(client_dir, cell[0], cell[2]),
-                tint=app.hair_tint_rgb(client_dir, race_id, hair_style_key, hair_color))
+                tint=app.hair_tint_rgb(client_dir, race_id, hair_style_key, hair_color),
+                double_sided=hair_part.double_sided if hair_part else None)
     for slot, stem in _SLOT_SHEETS.items():
         # The cloak sheet is only meaningful when a cloak piece is attached
         # (otherwise the export would embed ~175 KB no mesh samples).
@@ -195,7 +203,8 @@ def build(client_dir: str, desc: str, *, face: int = 1, hair_style: int = 1,
     textures = textures_for(client_dir, tables, rid, female,
                             face=face, hair_style_key=hair_style,
                             hair_color=hair_color, eye_color=eye_color,
-                            skin_tone=skin_tone, cloak=cloak)
+                            skin_tone=skin_tone, cloak=cloak,
+                            hair_part=pieces.get("Hair"))
     attached = 0
     for slot, part in pieces.items():
         piece = fig3.load_part(client_dir, part)

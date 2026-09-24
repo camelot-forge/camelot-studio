@@ -8,6 +8,7 @@
 		rebindSkinnedMeshes,
 		bindBoxOf,
 		textureFromDds,
+		textureSide,
 		tintColor
 	} from '$lib/gltf/load';
 	import { sampleClip, samplePositions, gameToKeyTime, type AnimClip } from '$lib/anim';
@@ -149,9 +150,11 @@
 				// map that renders near-black. Match the Viewer's shading.
 				mat.metalness = 0.05;
 				mat.roughness = 0.9;
+				if (tex.doubleSided !== undefined) {
+					mat.side = textureSide(tex.doubleSided);
+				}
 				if (tex.alpha) {
 					mat.alphaTest = 0.5;
-					mat.side = tex.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
 				}
 				mat.needsUpdate = true;
 			}

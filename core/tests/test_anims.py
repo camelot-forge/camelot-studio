@@ -1,7 +1,19 @@
-"""Unit tests for idle-KFA resolution and track building (no game files)."""
+"""Unit and corpus tests for idle-KFA resolution and track building."""
 
+
+import os
 
 from camelot.anims import native_fps, resolve_idle_kfa
+
+
+def test_native_troll_male_uses_cata_idle(client_dir):
+    from camelot.anims import resolve_anim_from_gamedata
+
+    figure = os.path.join(client_dir, "figures", "tro_m.NIF")
+    linked = resolve_anim_from_gamedata(client_dir, figure)
+    assert linked is not None
+    assert os.path.basename(linked).lower() == "cat_troll_idle.kfa"
+    assert resolve_idle_kfa(client_dir, figure) == linked
 
 
 def test_resolve_prefers_plain_idle(tmp_path):

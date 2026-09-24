@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_array_equal
 
+from camelot.gamedata import SlotTexture
 from camelot.gltf import (
     _apply_axis,
     _fill_partition,
@@ -127,6 +128,26 @@ class TestExportSynthetic:
         prim = gltf["meshes"][0]["primitives"][0]
         assert "JOINTS_0" not in prim["attributes"]
         assert "skins" not in gltf or gltf["skins"] == []
+
+    def test_export_uses_hair_double_sided_flag(self, nif_path, tmp_path):
+        for double_sided in (False, True):
+            prefix = str(tmp_path / f"synth-{double_sided}")
+            export_gltf(
+                nif_path,
+                prefix,
+                verbose=False,
+                textures=[
+                    SlotTexture(
+                        "Hair", "hair.dds", b"hair", double_sided=double_sided
+                    )
+                ],
+            )
+            with open(prefix + ".gltf", encoding="utf-8") as fh:
+                gltf = json.load(fh)
+            ext = gltf["meshes"][0]["extensions"]["CS_camelot_texture"]
+            assert ext["alpha"] is True
+            assert ext["doubleSided"] is double_sided
+
 
 class TestMapKfaToNodes:
     """KFA channel -> bone mapping: translation leads, rotation breaks ties."""
