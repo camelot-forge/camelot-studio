@@ -12,13 +12,19 @@ tables it resolves through:
 | eye color 1..8 | `fig3eyecolormap.csv` | 8 eyes per desc row |
 | skin tone 1..8 | `fig3skincolormap.csv` | 8 skin rows per desc row (→ tints) |
 | decal         | `fig3decalmap.csv` | 16 per race |
+| armour material | `pskins.csv` | material × piece × gender → sheet |
 
 All ids are `skins.csv`/`monnifs.csv`-reflective ids resolvable via
 :func:`camelot.gamedata.skin_texture` / `texture_bytes`.
 """
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass, field
+
 from . import gamedata
+
+_PSKIN_CACHE: dict[str, Pskins] = {}
 
 
 def _col_row_map(client_dir: str, csv_name: str) -> dict[int, list[str]]:
@@ -260,4 +266,148 @@ def decal_ids(client_dir: str, race_e_id: int):
         out.setdefault(key, {}).update(per_color)
     ids = out.get(race_e_id, {})
     return ids
+
+
+# --- armour materials (pskins.csv) ----------------------------------------
+
+# Body-piece slot -> the filename token pskins uses for it. The client does
+# not name the slots in the table; the tokens are the client's own
+# `body/arm/glov/lbody/leg/boot/helm/cloak` stems (validation group 7).
+# Matched longest-token-first, since `lbody` contains `body` and `leg`
+# would otherwise swallow it.
+_PSKIN_SLOT_TOKENS = {
+    "Body": "body",
+    "Arms": "arm",
+    "Gloves": "glov",
+    "Lbody": "lbody",
+    "Legs": "leg",
+    "Boots": "boot",
+    "Helm": "helm",
+    "Cloak": "cloak",
+}
+
+_PSKIN_SLOTS_BY_TOKEN = sorted(
+    _PSKIN_SLOT_TOKENS.items(), key=lambda kv: -len(kv[1])
+)
+
+# The slots a wearable armour set must cover to be offered as a material.
+_ARMOUR_SLOTS = ("Body", "Arms", "Gloves", "Lbody", "Legs", "Boots")
+
+# pskins spells the gender as a trailing `1m`/`1f` (`b_plt1_body1m.tga`) or
+# `_m`/`_f`; the digit-or-underscore guard keeps stems that merely end in
+# those letters (`..._helm`) from being read as gendered.
+_PSKIN_GENDER_SUFFIX = re.compile(r"[0-9_]([mf])$")
+
+
+@dataclass
+class ArmourMaterial:
+    """One `pskins.csv` material family and its per-slot sheets."""
+
+    name: str
+    pskin_id: int
+    archive: int
+    # slot -> {female or None: sheet name}
+    sheets: dict[str, dict[bool | None, str]] = field(default_factory=dict)
+
+    def sheet(self, slot: str, female: bool | None = None) -> str | None:
+        """The sheet of `slot` for one gender.
+
+        The client's gendered pieces (`body1m`/`body1f`) are sparse and
+        the ungendered stems (`arm1`, `glov1`, `leg1`, `boot1`) are the
+        norm, so a missing gender variant falls back to the other gender
+        and then to the family's shared sheet rather than leaving the slot
+        bare.
+        """
+        variants = self.sheets.get(slot)
+        if not variants:
+            return None
+        if female is None or female in variants:
+            return variants.get(female) or next(iter(variants.values()))
+        return variants.get(not female) or variants.get(None)
+
+    def complete(self) -> bool:
+        """True when the material covers the whole armour set for a gender."""
+        return all(
+            self.sheet(slot, female) is not None
+            for female in (True, False)
+            for slot in _ARMOUR_SLOTS
+        )
+
+
+@dataclass
+class Pskins:
+    materials: dict[str, ArmourMaterial] = field(default_factory=dict)
+
+    def armour(self) -> list[ArmourMaterial]:
+        """Materials that cover a full armour set, in a stable order."""
+        return sorted(
+            (m for m in self.materials.values() if m.complete()),
+            key=lambda m: (m.pskin_id, m.name),
+        )
+
+    def by_name(self, name: str) -> ArmourMaterial | None:
+        return self.materials.get(name)
+
+
+def _pskin_slot_of(sheet: str) -> tuple[str, bool | None] | None:
+    """(slot, gender) of a pskin sheet name, or None if it is not armour.
+
+    `b_plt1_body1m.tga` -> ("Body", False); `b_plt1_arm1.tga` ->
+    ("Arms", None). The gender suffix is read last so `lbody` is not
+    mistaken for `body`.
+    """
+    stem = sheet.rsplit(".", 1)[0].lower()
+    for slot, token in _PSKIN_SLOTS_BY_TOKEN:
+        if token in stem:
+            gender = _PSKIN_GENDER_SUFFIX.search(stem)
+            return slot, (gender.group(1) == "f") if gender else None
+    return None
+
+
+def parse_pskins(rows: list[list[str]]) -> Pskins:
+    """`pskins.csv` rows -> materials indexed by slot and gender.
+
+    The table carries the whole skin family — shields, banners, hats,
+    guild cloth — next to the wearable armour, so rows that resolve to no
+    body-piece slot are dropped rather than offered as a material. A
+    repeated (slot, gender) pair keeps the first row: the extra rows of a
+    slot (`helm1`/`helm2`) are the item's mesh *extensions*, which are a
+    server-side notion and deliberately not resolved here.
+    """
+    table = Pskins()
+    for row in rows:
+        if len(row) < 5 or not row[0].strip().isdigit():
+            continue
+        name = row[1].strip()
+        sheet = row[2].strip()
+        archive = row[4].strip()
+        if not name or not sheet or not archive.isdigit():
+            continue
+        slot = _pskin_slot_of(sheet)
+        if slot is None:
+            continue
+        material = table.materials.get(name)
+        if material is None:
+            material = ArmourMaterial(
+                name=name,
+                pskin_id=int(row[0].strip()),
+                archive=int(archive),
+            )
+            table.materials[name] = material
+        material.sheets.setdefault(slot[0], {}).setdefault(slot[1], sheet)
+    return table
+
+
+def pskins(client_dir: str) -> Pskins:
+    """The client's armour material table, parsed once per client dir."""
+    if client_dir not in _PSKIN_CACHE:
+        _PSKIN_CACHE[client_dir] = parse_pskins(
+            gamedata._read_table(client_dir, "pskins.csv")
+        )
+    return _PSKIN_CACHE[client_dir]
+
+
+def armour_materials(client_dir: str) -> list[ArmourMaterial]:
+    """The armour materials a character can be shown in."""
+    return pskins(client_dir).armour()
 

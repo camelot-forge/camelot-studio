@@ -21,7 +21,7 @@ from .index import Asset, AssetIndex
 from .models import CharacterOptions
 
 # Export-cache schema/behaviour version (bump when export output changes).
-_EXPORT_VERSION = "18"
+_EXPORT_VERSION = "19"
 from .models import AssetDetail, AssetPage, AssetSummary, Health, RootInfo
 from .watcher import IndexWatcher
 
@@ -195,7 +195,7 @@ def build_router(config: ServeConfig, index: AssetIndex,
         """The appearance-picker shape of one (race, gender) — counts straight
         from the client's `fig3descriptions`/`fig3*colormap` tables."""
         from .. import appearance as app
-        from .. import fig3
+        from .. import fig3, playerfig
 
         tables = fig3.read_tables(str(config.root))
         desc = tables.race_desc.get(race_id)
@@ -214,6 +214,7 @@ def build_router(config: ServeConfig, index: AssetIndex,
             len([c for c in eye_row[2:] if c.strip()]) if eye_row else 0
         )
         decals = app.decal_ids(str(config.root), race_id)
+        materials = [m.name for m in app.armour_materials(str(config.root))]
         return CharacterOptions(
             race=desc,
             race_id=race_id,
@@ -226,6 +227,8 @@ def build_router(config: ServeConfig, index: AssetIndex,
             has_decal=bool(decals),
             cloak_variants=cloak_variants,
             body_variants=body_variants,
+            materials=materials,
+            material=playerfig.DEFAULT_MATERIAL,
         )
 
     @router.get("/character/{race_id}/{female}/model")
@@ -238,11 +241,14 @@ def build_router(config: ServeConfig, index: AssetIndex,
         eye_color: int = 1,
         skin_tone: int = 1,
         cloak: int = 0,
+        material: str | None = None,
         skinned: bool = False,
     ) -> Response:
         """A preview glb of a player figure assembled with the appearance
         picked: rig from the client sfig archives; pieces by slot; sheets
-        from the colormaps; textures through pskins (§8.15 doctrine).
+        from the colormaps; the armour from the `pskins.csv` material
+        (per-slot, per-gender sheets). An unknown material falls back to the
+        default family.
 
         ``skinned=true`` emits joints/weights so the viewer can play the
         figure's idle (`/character/…/anim`)."""
@@ -264,6 +270,7 @@ def build_router(config: ServeConfig, index: AssetIndex,
             "eye_color": eye_color,
             "skin_tone": skin_tone,
             "cloak": cloak,
+            "material": material,
         }
         try:
             prepared = build_figure(str(config.root), desc, **appearance)

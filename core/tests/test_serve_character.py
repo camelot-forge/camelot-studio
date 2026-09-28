@@ -219,3 +219,79 @@ def test_character_texture_swap_ships_the_tint(client_dir, tmp_path):
     # geometry kinds stay a client-side rebuild
     r = client.get(f"{base}?kind=face&face=2")
     assert r.status_code == 501
+
+
+def _slot_sheets(client, url):
+    doc = _glb_json(client.get(url).content)
+    return {
+        mesh["name"]: mesh["extensions"]["CS_camelot_texture"]["name"]
+        for mesh in doc["meshes"]
+    }
+
+
+def test_character_model_resolves_armour_from_the_pskin_material(
+    client_dir, tmp_path
+):
+    """The armour sheets come from `pskins.csv` for the requested material,
+    not from a frozen preview: each body slot must carry the sheet the
+    client's material family declares for it."""
+    client = _client(client_dir, tmp_path)
+    sheets = _slot_sheets(client, "/api/v1/character/4/true/model?material=Plate")
+
+    from camelot import appearance as app
+
+    plate = app.pskins(str(client_dir)).by_name("Plate")
+    for slot in ("Body", "Arms", "Gloves", "Legs", "Boots"):
+        assert sheets[slot] == plate.sheet(slot, female=True), slot
+
+
+def test_the_lbody_sheet_reaches_the_highlander(client_dir, tmp_path):
+    """`Lbody` is a real slot but only Highlander ships the fig3 piece
+    (`LBody01_Hig_*`), and its UVs sample the upper half of the legs atlas —
+    so the material's own Lbody sheet, not the legs one, is what must land
+    on that mesh."""
+    client = _client(client_dir, tmp_path)
+    sheets = _slot_sheets(
+        client, "/api/v1/character/13/false/model?material=Plate"
+    )
+
+    from camelot import appearance as app
+
+    plate = app.pskins(str(client_dir)).by_name("Plate")
+    assert "Lbody" in sheets
+    assert sheets["Lbody"] == plate.sheet("Lbody", female=False)
+    assert sheets["Lbody"] != sheets["Legs"]
+
+
+def test_two_materials_give_two_different_armour_sheets(client_dir, tmp_path):
+    client = _client(client_dir, tmp_path)
+    leather = _slot_sheets(client, "/api/v1/character/4/true/model?material=Hard Leather")
+    plate = _slot_sheets(client, "/api/v1/character/4/true/model?material=Plate")
+    assert leather["Body"] != plate["Body"]
+    assert leather["Legs"] != plate["Legs"]
+
+
+def test_armour_material_is_gendered(client_dir, tmp_path):
+    """`b_plt1_body1m` / `b_plt1_body1f` are different sheets: the male and
+    female previews must not share the body texture."""
+    client = _client(client_dir, tmp_path)
+    male = _slot_sheets(client, "/api/v1/character/1/false/model?material=Plate")
+    female = _slot_sheets(client, "/api/v1/character/2/true/model?material=Plate")
+    assert male["Body"] != female["Body"]
+    assert male["Body"].lower().endswith("m.tga")
+    assert female["Body"].lower().endswith("f.tga")
+
+
+def test_character_options_expose_the_armour_materials(client_dir, tmp_path):
+    client = _client(client_dir, tmp_path)
+    body = client.get("/api/v1/character/4/true/options").json()
+    materials = body["materials"]
+    assert len(materials) >= 8
+    assert "Plate" in materials
+    # the default the builder starts on must itself be resolvable
+    assert body["material"] in materials
+
+
+def test_unknown_material_falls_back_instead_of_failing(client_dir, tmp_path):
+    client = _client(client_dir, tmp_path)
+    assert client.get("/api/v1/character/4/true/model?material=nope").status_code == 200

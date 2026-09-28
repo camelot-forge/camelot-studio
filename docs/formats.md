@@ -143,6 +143,33 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   fig3map's "Half Ogre Male"); `fig3.race_id` matches on word sets as a
   fallback, and requires multi-word races for partial matches so a
   one-word description like "Heavy" does not capture "Half Orc Heavy".
+- **`fig3parts.csv` column 6 is the `Double`/`Sided` flag**, read as the
+  literal `"1"`: 12 hair pieces are explicitly single-sided
+  (`bri_f_Hair01`, Firbolg female 1/3/4, Celt male Hair 4…). A boolean
+  coercion of the cell is wrong — `"0"` is truthy — and it lit single-sided
+  hair from behind. The flag is per piece, not per slot, and travels with
+  the piece through assembly, glTF export and the viewer material.
+- **`pskins.csv` is the armour texture table**: `Textual Name` is the
+  material family (`Plate`, `Hard Leather`, `Chain`, `Cloth`…) and each
+  family declares one sheet per body piece and gender —
+  `b_plt1_body1m.tga` / `b_plt1_body1f.tga`, and genderless
+  `b_plt1_arm1` / `_glov1` / `_lbody1` / `_leg1` / `_boot1`. Facts worth
+  keeping:
+  - the gender is a trailing `1m`/`1f` (or `_m`/`_f`), not a bare letter;
+    require a digit or underscore before it, or a stem that merely ends in
+    those letters (`…_helm`) reads as gendered;
+  - `lbody` is a distinct piece from `legs`, not a variant: its UVs sample
+    the **upper half of the same legs atlas**. Match the longest token
+    first, or `lbody` is swallowed by `body` and `leg`;
+  - the same table carries the rest of the skin family — shields, banners,
+    hats, guild cloth (176 of 3163 rows resolve to no body-piece slot) — so
+    filter by piece, not by row;
+  - a slot's extra rows (`helm1`, `helm2`) are the item's mesh
+    **extensions**, not more genders: the extension is carried by the item
+    and resolved server-side, so keep the first row and do not treat them
+    as variants here;
+  - `archive num` resolves to `items/pskins/pskin%03d.mpk` (50 archives on
+    V2). 1953 of the families are wearable; 85 cover the full piece set.
 - Skin archives live per table: `figures/skins/skinNNN.mpk` (skins.csv),
   `figures/Mskins/mskinNNN.mpk` (mskins.csv, case varies on disk) and
   `items/pskins/pskinNNN.mpk` (pskins.csv); Cata face sheets ship in a
@@ -151,11 +178,13 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   uncompressed A8R8G8B8 before embedding: three.js `DDSLoader` maps DXT1 to
   an opaque RGB format, which would paint the cut texels black.
 - **Slot naming**: fig3map slot 2 is `LBody` (attached as `Lbody`, the
-  classic mesh spelling); for Highlander/Norse sets its UVs cover the upper
-  half of the legs sheet, so it takes the same `lealegs01_01` family. The
-  skeleton stem (`fig3.race_short`) uses the fig3map description: Norseman
-  rows are spelled `Norse Male/Female` in fig3map but "Norseman" in
-  monnifs, so both tokens map to `nor`.
+  classic mesh spelling); it is a real piece, not an alias of the legs —
+  its UVs cover the upper half of the same legs atlas, so it takes its own
+  `pskins` `lbody1` sheet rather than the `leg1` one. Only Highlander
+  (ids 13/14) ships the fig3 `LBody` piece, so the other 34 rows have no
+  such mesh. The skeleton stem (`fig3.race_short`) uses the fig3map
+  description: Norseman rows are spelled `Norse Male/Female` in fig3map but
+  "Norseman" in monnifs, so both tokens map to `nor`.
 - The viewer classifies these meshes by name and hides the rest
   (`web/src/lib/character.ts`); note the GLTFLoader name mangling — it
   strips `:` so `Body1:0` becomes `Body10`, hence the classifier reads the

@@ -3,6 +3,7 @@
 	import Viewer from '$lib/components/Viewer.svelte';
 	import Stepper from '$lib/components/Stepper.svelte';
 	import { api } from '$lib/api/client';
+	import { armourMaterialParam } from '$lib/character';
 	import { loadFromGlb as loadGlb, type LoadedModel } from '$lib/gltf/load';
 	import type { AnimClip } from '$lib/anim';
 	import type { CharacterOptions } from '$lib/api/client';
@@ -24,6 +25,7 @@
 	let eyeColor = $state(1);
 	let skinTone = $state(1);
 	let cloak = $state(0);
+	let material = $state('');
 	let raceOptions = $state<CharacterOptions | null>(null);
 
 	let model = $state<LoadedModel | null>(null);
@@ -36,6 +38,9 @@
 		raceOptions = await api.characterOptions(raceId, female).catch(() => null);
 		if (raceOptions && face > raceOptions.faces) face = 1;
 		if (raceOptions && hairStyle > raceOptions.hair_styles) hairStyle = 1;
+		// Materials are not race- or gender-specific: seed the pick once
+		// and keep the user's choice across race/gender switches.
+		if (!material) material = raceOptions?.material ?? '';
 		await rebuild();
 	}
 
@@ -44,6 +49,9 @@
 		const entry = RACES.find((r) => r.male === raceId || r.female === raceId);
 		if (entry) raceId = female ? entry.female : entry.male;
 		raceOptions = await api.characterOptions(raceId, female).catch(() => null);
+		// Materials are not race- or gender-specific: seed the pick once
+		// and keep the user's choice across race/gender switches.
+		if (!material) material = raceOptions?.material ?? '';
 		await rebuild();
 	}
 
@@ -74,7 +82,8 @@
 				hair_color: hairColor,
 				eye_color: eyeColor,
 				skin_tone: skinTone,
-				cloak: cloak
+				cloak: cloak,
+				material: armourMaterialParam(material)
 			});
 			const res = await fetch(url);
 			if (!res.ok) throw new Error(`model failed (${res.status})`);
@@ -215,6 +224,22 @@
 										rebuild();
 									}}
 								/>
+							</div>
+						{/if}
+						{#if raceOptions.materials?.length}
+							<div class="row">
+								<span class="lbl">Armour</span>
+								<select
+									value={material}
+									onchange={(e) => {
+										material = e.currentTarget.value;
+										rebuild();
+									}}
+								>
+									{#each raceOptions.materials as name (name)}
+										<option value={name}>{name}</option>
+									{/each}
+								</select>
 							</div>
 						{/if}
 					</div>

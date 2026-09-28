@@ -48,6 +48,8 @@ export interface CharacterOptions {
 	skin_tones: number;
 	has_decal: boolean;
 	cloak_variants: number;
+	materials: string[];
+	material: string;
 }
 
 export interface AssetPage {
@@ -147,11 +149,13 @@ export const api = {
 	characterModelUrl: (
 		raceId: number,
 		female: boolean,
-		appearance: Record<string, number>,
+		appearance: Record<string, string | number | undefined>,
 		skinned = true
 	) => {
 		const qs = new URLSearchParams();
-		for (const [k, v] of Object.entries(appearance)) qs.set(k, String(v));
+		for (const [k, v] of Object.entries(appearance)) {
+			if (v !== undefined) qs.set(k, String(v));
+		}
 		if (skinned) qs.set('skinned', 'true');
 		return `${getApiBase()}/api/v1/character/${raceId}/${female ? 'true' : 'false'}/model?${qs}`;
 	},

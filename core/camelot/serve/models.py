@@ -47,6 +47,9 @@ class CharacterOptions(BaseModel):
     has_decal: bool
     cloak_variants: int
     body_variants: int
+    # `pskins.csv` armour materials, and the one a preview starts on.
+    materials: list[str] = []
+    material: str = ""
 
 
 class AssetDetail(AssetSummary):

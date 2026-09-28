@@ -133,3 +133,14 @@ function slotOf(
 		defaultIndex: hidden ? -1 : 0
 	};
 }
+
+/**
+ * The `material` query value for a character model request.
+ *
+ * An empty pick sends nothing so the daemon applies its own default
+ * material, rather than pinning the client to a name the server may not
+ * have.
+ */
+export function armourMaterialParam(material: string): string | undefined {
+	return material ? material : undefined;
+}

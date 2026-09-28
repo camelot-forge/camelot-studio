@@ -69,12 +69,12 @@ product contract; run the commands above for the authoritative local result.
 Corpus tests skip without `DAOC_CLIENT`, and the web suite is run separately
 from `core/`.
 
-Dated V2 baseline (2026-09-24): 271 core tests passed and 4 failed. The
+Dated V2 baseline (2026-09-24): 286 core tests passed and 4 failed. The
 failures cover a changed `Boar_CATA` animation link, two legacy version
 expectations and one historical Ettin bbox golden; they require a separate
 data/test decision before being treated as regressions or as an accepted
 baseline.
-The web suite passed 34/34; `pnpm check` reports zero errors and four existing
+The web suite passed 36/36; `pnpm check` reports zero errors and three existing
 warnings.
 
 ## Known limits
@@ -134,8 +134,8 @@ warnings.
    figures resolved, but it predates the current `DAOC_CLIENT V2` profile and
    counts table resolution rather than final rendered bytes. Re-run and
    version the corpus report before treating this as a current KPI. Native
-   player armor/material resolution through `pskins` is not implemented; the
-   builder currently uses a fixed default preview.
+   player armour now resolves through `pskins.csv` (see below); the
+   item-level equipment (extension variants, dyes) is still absent.
 
 ## Character preview status
 
@@ -143,15 +143,32 @@ The native `/builder` route exposes the 18 playable races and both genders.
 A freshly loaded route waits for a race selection before assembling the first
 model; the options response exposes seven faces, the race's positional hair
 styles (eight for Briton male, `Bald` included), 16 hair colors, eight eye
-colors, eight skin tones and the race's cloak variants. Skin tone, hair
-style/color, eye color, cloak and gender changes returned successful
-model/texture requests in a browser pass against `DAOC CLIENT V2`.
+colors, eight skin tones, the race's cloak variants and the 85 wearable
+armour materials. Skin tone, hair style/color, eye color, cloak, armour and
+gender changes returned successful model/texture requests in a browser pass
+against `DAOC CLIENT V2`.
 
 All 18 races share the same creation-screen shape on the V2 corpus: seven
 faces, eight skin tones, eight eye colors and 16 hair colors each; only the
 hair-style count varies (4-8, by race). Hair pieces keep their per-piece
 `fig3parts` **Double Sided** flag through assembly, glTF export and the viewer
 material, so the client's single-sided hair styles are not lit from behind.
+
+**Armour** is picked from the client's `pskins.csv`: 85 of the 1953 material
+families cover the full wearable set (body, arms, gloves, lbody, legs, boots)
+and each declares its own sheet per piece and gender, so the figure is dressed
+in one coherent family instead of the mixed placeholder sheets the builder
+used before. The default is the client's first family (`Hard Leather`, pskin
+301). The cloak keeps its own sheet: it belongs to the equipped cloak item,
+not to the armour material.
+
+This is still a preview contract, not equipment support: a material is a
+*texture* family, and the client's per-item mesh **extension** (which of an
+item's variants is worn) and per-slot **dye** are not resolved. Both are
+server-side notions — the dye table does not exist in the client at all — and
+they belong to the Phase 2 appearance contract, not to the builder. Explicit
+animation-state selection remains open too: `/character/…/anim` serves one
+auto-resolved idle.
 
 This is a preview contract, not complete equipment or animation-state support.
 `pskins`/item/dye resolution and explicit animation-state selection remain

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCharacter } from './character';
+import { armourMaterialParam, parseCharacter } from './character';
 
 // Real mesh list of figures/BSaracenF.NIF (49 shapes as exported).
 const SARACEN_F = [
@@ -148,5 +148,15 @@ describe('parseCharacter', () => {
 		expect(parseCharacter(['Body', 'Head', 'Legs', 'Tail'])).toBeNull();
 		expect(parseCharacter(['Body1', 'Body2', 'Head', 'Tail', 'Wing1', 'Wing2'])).toBeNull();
 		expect(parseCharacter([])).toBeNull();
+	});
+});
+
+describe('armourMaterialParam', () => {
+	it('sends the picked material as a query value', () => {
+		expect(armourMaterialParam('Plate')).toBe('Plate');
+	});
+
+	it('omits the parameter when nothing is picked, so the server default applies', () => {
+		expect(armourMaterialParam('')).toBeUndefined();
 	});
 });

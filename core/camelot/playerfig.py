@@ -11,9 +11,9 @@ Doctrine (notes/character-rules.md §8.15/§9/§11, all evidence-backed):
   the hair look from ``fig3haircolormap.csv`` (16 S/T/M triplets per
   race+style), the eyes from ``fig3eyecolormap.csv`` and the skin tone
   from ``fig3skincolormap.csv`` (tints).
-- Armor sheets default to the client pskin families the reference viewer
-  bakes (``cthbody01_01_m`` & co), all of which exist in the client
-  (validation group 7).
+- Armor sheets resolve through ``pskins.csv``: the material family
+  (``Plate``, ``Hard Leather``…) declares one sheet per body piece and
+  gender, and the viewer multiplies nothing on top.
 """
 from __future__ import annotations
 
@@ -24,26 +24,24 @@ from . import appearance as app
 from . import fig3, figure, gamedata
 from .mpak import MpakArchive
 
-# Default pskin sheet family per body slot — matches the DAoC-Tools-baked
-# default look (all proven to exist in the client, validation group 7).
-# Lbody (Highlander/Norse sets) shares the legs atlas: its UVs cover the
-# upper half of the same sheet the legs piece samples.
-#
+# Body-piece slots whose sheet comes from the pskin material. `Lbody`
+# (Highlander/Norse sets) shares the legs atlas: its UVs cover the upper
+# half of the same sheet the legs piece samples.
+_ARMOUR_SLOTS = ("Body", "Arms", "Gloves", "Lbody", "Legs", "Boots")
+
+# The armour material a preview starts on when the caller names none: the
+# client's first pskin family (id 301), a real material rather than the
+# hand-picked preview this path used to carry.
+DEFAULT_MATERIAL = "Hard Leather"
+
 # Cloak: the fig3 cloak pieces carry no texture of their own (only a
 # NiMaterialProperty — checked in `fig010/012.mpk`), the sheet comes from the
-# equipped cloak item. The client's default cloak object (`objects.csv` id 57,
-# "Cloak") points at Cata skin 4972 = `Cat_cloak.dds`, which is exactly the
-# sheet the DAoC-Tools viewer bakes for `PART:cloak:1` (armor-manifest
-# `cat_cloak.png`). It is gender-neutral (no `_m`/`_f` variant).
-_SLOT_SHEETS = {
-    "Body": "cthbody01_01",
-    "Lbody": "lealegs01_01",
-    "Legs": "lealegs01_01",
-    "Boots": "leaboots01_01",
-    "Arms": "ctharms01_01",
-    "Gloves": "leagloves01_01",
-    "Cloak": "Cat_cloak",
-}
+# equipped cloak item, not from the armour material. The client's default
+# cloak object (`objects.csv` id 57, "Cloak") points at Cata skin 4972 =
+# `Cat_cloak.dds`, which is exactly the sheet the DAoC-Tools viewer bakes for
+# `PART:cloak:1` (armor-manifest `cat_cloak.png`). It is gender-neutral (no
+# `_m`/`_f` variant).
+_CLOAK_SHEET = "Cat_cloak.dds"
 
 _RIG_PATH_CACHE: dict[tuple[str, str], str | None] = {}
 
@@ -121,10 +119,31 @@ def pieces_for(client_dir: str, tables, race_id: int, *, face: int = 1,
     return out
 
 
+def armour_sheets(client_dir: str, female: bool, material: str | None):
+    """The armour material's `(slot, sheet name)` pairs, or None.
+
+    `material` is a `pskins.csv` textual name; an unknown or incomplete
+    family resolves to None rather than a half-dressed figure, and the
+    caller keeps the default.
+    """
+    if material is None:
+        material = DEFAULT_MATERIAL
+    entry = app.pskins(client_dir).by_name(material)
+    if entry is None or not entry.complete():
+        return None
+    out = []
+    for slot in _ARMOUR_SLOTS:
+        sheet = entry.sheet(slot, female)
+        if sheet:
+            out.append((slot, sheet))
+    return out
+
+
 def textures_for(client_dir: str, tables, race_id: int, female: bool,
                  *, face: int = 1, hair_style_key: int = 1,
                  hair_color: int = 1, eye_color: int = 1, skin_tone: int = 1,
-                 cloak: int = 0, hair_part: fig3.Part | None = None):
+                 cloak: int = 0, hair_part: fig3.Part | None = None,
+                 material: str | None = None):
     """`SlotTexture`s for the picked appearance (sheets + engine tints).
 
     The skin tone and most hair colours are tints (`fig3tints.csv`): the
@@ -164,17 +183,16 @@ def textures_for(client_dir: str, tables, race_id: int, female: bool,
             add("Hair", app.hair_composite(client_dir, cell[0], cell[2]),
                 tint=app.hair_tint_rgb(client_dir, race_id, hair_style_key, hair_color),
                 double_sided=hair_part.double_sided if hair_part else None)
-    for slot, stem in _SLOT_SHEETS.items():
-        # The cloak sheet is only meaningful when a cloak piece is attached
-        # (otherwise the export would embed ~175 KB no mesh samples).
-        if slot == "Cloak" and cloak <= 0:
-            continue
-        gendered = client_sheet(client_dir, f"{stem}_f.dds" if female
-                                else f"{stem}_m.dds")
-        plain = client_sheet(client_dir, f"{stem}.dds")
-        found = gendered or plain
+    for slot, sheet in armour_sheets(client_dir, female, material) or ():
+        name, raw = client_sheet(client_dir, sheet)
+        if raw is not None:
+            out.append(gamedata.SlotTexture(slot, name, raw))
+    # The cloak sheet belongs to the equipped cloak item, not to the armour
+    # material, and is only meaningful when a cloak piece is attached.
+    if cloak > 0:
+        found = client_sheet(client_dir, _CLOAK_SHEET)
         if found:
-            out.append(gamedata.SlotTexture(slot, found[0], found[1]))
+            out.append(gamedata.SlotTexture("Cloak", found[0], found[1]))
     return out
 
 
@@ -185,7 +203,7 @@ def client_sheet(client_dir, name):
 
 def build(client_dir: str, desc: str, *, face: int = 1, hair_style: int = 1,
           hair_color: int = 1, eye_color: int = 1, skin_tone: int = 1,
-          cloak: int = 0):
+          cloak: int = 0, material: str | None = None):
     """Assemble a whole player figure for (race, gender, appearance).
 
     Returns ``(data, [(slot, name, dds), ...])`` or None when the race has
@@ -204,7 +222,8 @@ def build(client_dir: str, desc: str, *, face: int = 1, hair_style: int = 1,
                             face=face, hair_style_key=hair_style,
                             hair_color=hair_color, eye_color=eye_color,
                             skin_tone=skin_tone, cloak=cloak,
-                            hair_part=pieces.get("Hair"))
+                            hair_part=pieces.get("Hair"),
+                            material=material)
     attached = 0
     for slot, part in pieces.items():
         piece = fig3.load_part(client_dir, part)
