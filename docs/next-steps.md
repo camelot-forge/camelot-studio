@@ -243,8 +243,9 @@ After Phase 0, implement only the gaps confirmed by the audit:
 - complete fig3 skin-tone and hair-color handling without heuristic fallbacks;
 - reproduce the engine's hair/decal and armor material compositing;
 - close unresolved animation and texture-coverage cases;
-- validate the current 30 race/gender builder rows in a real browser, then
-  add and validate the missing traditional fig3 rows;
+- validate the 36 race/gender builder rows (18 races × 2) in a real browser;
+  the three traditional fig3 rows shipped 2026-09-23, the per-piece hair
+  sidedness flag 2026-09-24;
 - document intentional refusals and fallback policy.
 
 Every change must ship with tests and, for visual behavior, a reproducible

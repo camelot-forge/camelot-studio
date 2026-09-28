@@ -69,12 +69,12 @@ product contract; run the commands above for the authoritative local result.
 Corpus tests skip without `DAOC_CLIENT`, and the web suite is run separately
 from `core/`.
 
-Dated V2 baseline (2026-09-23): 259 core tests passed and 4 failed. The
+Dated V2 baseline (2026-09-24): 271 core tests passed and 4 failed. The
 failures cover a changed `Boar_CATA` animation link, two legacy version
 expectations and one historical Ettin bbox golden; they require a separate
 data/test decision before being treated as regressions or as an accepted
 baseline.
-The web suite passed 29/29; `pnpm check` reports zero errors and four existing
+The web suite passed 34/34; `pnpm check` reports zero errors and four existing
 warnings.
 
 ## Known limits
@@ -145,7 +145,13 @@ model; the options response exposes seven faces, the race's positional hair
 styles (eight for Briton male, `Bald` included), 16 hair colors, eight eye
 colors, eight skin tones and the race's cloak variants. Skin tone, hair
 style/color, eye color, cloak and gender changes returned successful
-model/texture requests in a browser pass against `DAOC_CLIENT V2`.
+model/texture requests in a browser pass against `DAOC CLIENT V2`.
+
+All 18 races share the same creation-screen shape on the V2 corpus: seven
+faces, eight skin tones, eight eye colors and 16 hair colors each; only the
+hair-style count varies (4-8, by race). Hair pieces keep their per-piece
+`fig3parts` **Double Sided** flag through assembly, glTF export and the viewer
+material, so the client's single-sided hair styles are not lit from behind.
 
 This is a preview contract, not complete equipment or animation-state support.
 `pskins`/item/dye resolution and explicit animation-state selection remain
