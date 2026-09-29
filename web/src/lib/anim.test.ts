@@ -74,3 +74,24 @@ describe('gameToKeyTime', () => {
 		expect(gameToKeyTime({ ...clip, duration: 0, rate: 0 }, 1.25)).toBe(1.25);
 	});
 });
+
+describe('gameToKeyTime on a one-shot clip', () => {
+	const clamp: AnimClip = { kfa: 'd.kfa', duration: 2, rate: 0.5, loop: false, tracks: [] };
+
+	it('holds the last frame instead of wrapping back to the start', () => {
+		expect(gameToKeyTime(clamp, 0)).toBeCloseTo(0);
+		expect(gameToKeyTime(clamp, 1)).toBeCloseTo(0.5);
+		// past the end: the client plays a `clamp` clip once and stops
+		expect(gameToKeyTime(clamp, 5)).toBeCloseTo(2 * 0.5);
+	});
+
+	it('still wraps when the clip loops', () => {
+		const loop: AnimClip = { ...clamp, loop: true };
+		expect(gameToKeyTime(loop, 5)).toBeCloseTo(1 * 0.5);
+	});
+
+	it('treats a missing loop flag as looping, so old clips keep playing', () => {
+		const legacy = { kfa: 'x.kfa', duration: 2, rate: 1, tracks: [] } as AnimClip;
+		expect(gameToKeyTime(legacy, 5)).toBeCloseTo(1);
+	});
+});

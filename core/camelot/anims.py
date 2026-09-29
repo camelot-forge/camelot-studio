@@ -23,8 +23,11 @@ from __future__ import annotations
 
 import itertools
 import os
+from dataclasses import dataclass, field
 
 __all__ = [
+    "AnimState",
+    "anim_states",
     "anim_timing",
     "animation_tracks",
     "load_bone_table",
@@ -112,8 +115,65 @@ _ANIM_SLOT_PRIORITY = (
 _TABLE_CACHE: dict[tuple[str, str, float], list[list[str]]] = {}
 
 
+@dataclass(frozen=True)
+class AnimState:
+    """One playable state of a figure, resolved through the client's tables.
+
+    `slot` is the `anims.csv` column name the game uses ("Idle", "C-Idle",
+    "Walk", "Fly"…); `kfa` the file it points at, `animnifs_id` the row that
+    owns it. `loop` is the row's own `type` column: the client loops `loop`
+    clips and plays `clamp` ones once, so the viewer must not wrap a clamp.
+    `duration` and `rate` are the game's timing (`frames / fps` seconds over
+    `fps / native` rate), not the KFA's own key spacing.
+    """
+
+    slot: str
+    kfa: str
+    animnifs_id: str
+    loop: bool
+    duration: float
+    fps: float
+    _client_dir: str = field(repr=False, compare=False)
+
+    def rate(self, client_dir: str | None = None) -> float:
+        """The game's fps over this clip's own key density.
+
+        Resolved on demand: a player anim set carries 166 slots, and
+        opening each KFA to fill a `rate` turned the states route into a
+        22s request. 1.0 means "play at the file's own key seconds", which
+        is the correct fallback for an unreadable clip.
+        """
+        from .kfa import load_kfa
+
+        root = client_dir or self._client_dir
+        try:
+            native = native_fps(load_kfa(os.path.join(root, "anims", self.kfa)))
+        except (OSError, ValueError, KeyError, IndexError):
+            return 1.0
+        return self.fps / native if native else 1.0
+
+    def as_dict(self, with_rate: bool = False) -> dict:
+        out = {
+            "slot": self.slot,
+            "kfa": self.kfa,
+            "animnifs_id": self.animnifs_id,
+            "loop": self.loop,
+            "duration": self.duration,
+        }
+        if with_rate:
+            out["rate"] = self.rate()
+        return out
+
+
 def _cached_table(client_dir: str, name: str) -> list[list[str]]:
-    key = (client_dir, name, os.path.getmtime(os.path.join(client_dir, "gamedata.mpk")))
+    # The mtime is only a cache key so an edited gamedata.mpk re-reads; a
+    # client without one (loose-file debug mode, synthetic tests) must not
+    # raise out of a lookup that is allowed to come back empty.
+    try:
+        stamp = os.path.getmtime(os.path.join(client_dir, "gamedata.mpk"))
+    except OSError:
+        stamp = 0.0
+    key = (client_dir, name, stamp)
     hit = _TABLE_CACHE.get(key)
     if hit is None:
         from .gamedata import _read_table
@@ -126,27 +186,22 @@ def _cached_table(client_dir: str, name: str) -> list[list[str]]:
     return hit
 
 
-def resolve_anim_from_gamedata(client_dir: str, nif_path: str) -> str | None:
-    """The client's own animation link for a figure, or ``None``.
+def _anim_set_ids(client_dir: str, nif_path: str) -> list[str]:
+    """The `anims.csv` set ids a figure belongs to, best match first.
 
-    ``monnifs.csv`` (Name = NIF basename) gives the Anim Set id, ``anims.csv``
-    gives that set's animation ids per slot, ``animnifs.csv`` maps each id to
-    its .kfa file. This is how the game links creatures whose animation files
-    are not named after the model: Arachite02 -> ``sect_idle.kfa``,
-    amazon -> ``Hoplite_Idle.kfa``, amb_bat -> ``amb_bat_fly.kfa``,
-    b_avmon01 -> ``undead_idle.kfa``.
+    `monnifs.csv` (Name = NIF basename) carries the Anim Set id. When no row
+    names the figure, the animation *set* does (`Boar Keggars` vs
+    `Boar_Keggers.nif`, Stingray, wolverine…), matched normalised first and
+    then as a unique one-character spelling variant — the tables say
+    `Keggars` for `Keggers`.
     """
-    from .gamedata import ANIMNIFS_FILE, MONNIFS_NAME, MONNIFS_SET, norm_name
+    from .gamedata import MONNIFS_NAME, MONNIFS_SET, norm_name
 
     base = os.path.splitext(os.path.basename(nif_path))[0].lower()
-    try:
-        monnifs = _cached_table(client_dir, "monnifs.csv")
-        anims = _cached_table(client_dir, "anims.csv")
-        animnifs = _cached_table(client_dir, "animnifs.csv")
-    except OSError:
-        return None
-    if not monnifs or not anims or not animnifs:
-        return None
+    monnifs = _cached_table(client_dir, "monnifs.csv")
+    anims = _cached_table(client_dir, "anims.csv")
+    if not monnifs or not anims:
+        return []
 
     set_ids: list[str] = []
     fallback_sid = None
@@ -162,26 +217,117 @@ def resolve_anim_from_gamedata(client_dir: str, nif_path: str) -> str | None:
             fallback_sid = row[MONNIFS_SET].strip()
     if not set_ids and fallback_sid:
         set_ids = [fallback_sid]
+    if set_ids:
+        return set_ids
+    wanted = norm_name(base)
+    exact = [r[0].strip() for r in anims[2:] if r and len(r) > 1 and norm_name(r[1]) == wanted]
+    if exact:
+        return list(dict.fromkeys(exact))
+    near = [
+        r[0].strip()
+        for r in anims[2:]
+        if r and len(r) > 1 and len(wanted) >= 6 and _levenshtein1(wanted, norm_name(r[1]))
+    ]
+    near = list(dict.fromkeys(near))
+    return near if len(near) == 1 else []
+
+
+def _set_slots(client_dir: str, set_id: str) -> dict[str, str]:
+    """`{slot name: animnifs id}` of one anim set, from `anims.csv`.
+
+    The row is keyed by its set id, not its name: descriptions repeat
+    across sets, so matching on the description would let an unrelated
+    figure's row shadow the real one.
+    """
+    anims = _cached_table(client_dir, "anims.csv")
+    header = anims[1] if len(anims) > 1 else []
+    for row in anims[2:]:
+        if not row or row[0].strip() != set_id:
+            continue
+        slots: dict[str, str] = {}
+        for i in range(2, min(len(header), len(row))):
+            value = row[i].strip()
+            if value and value != "0":
+                slots.setdefault(header[i].strip(), value)
+        return slots
+    return {}
+
+
+def anim_states(client_dir: str, nif_path: str) -> list[AnimState]:
+    """Every playable state of a figure, keyed by the client's slot name.
+
+    Unlike :func:`resolve_idle_kfa`, which returns one clip, this walks the
+    whole anim set: the server needs to be able to say *which* state a
+    character is in, and that choice is a slot name in `anims.csv`, not a
+    file. Each state is resolved by animnifs **id**, so the ambiguous
+    KFA basenames on V2 (92 duplicated, 58 of them disagreeing on timing and
+    loop type) cannot corrupt a state's duration.
+
+    States whose KFA is absent from `anims/`, or whose row carries no usable
+    timing, are dropped. Everything here comes from the tables: `rate` is
+    resolved on demand by :meth:`AnimState.rate`, so listing a 166-slot
+    player anim set stays a table read.
+    """
+    animnifs = _cached_table(client_dir, "animnifs.csv")
+    if not animnifs:
+        return []
+    if not os.path.isdir(os.path.join(client_dir, "anims")):
+        return []
+    by_id: dict[str, list[str]] = {}
+    for row in animnifs[2:]:
+        if row and row[0].strip().isdigit() and len(row) > 6:
+            by_id.setdefault(row[0].strip(), row)
+    try:
+        entries = {e.lower(): e for e in os.listdir(os.path.join(client_dir, "anims"))}
+    except OSError:
+        entries = {}
+
+    states: list[AnimState] = []
+    for set_id in _anim_set_ids(client_dir, nif_path):
+        for slot, anim_id in _set_slots(client_dir, set_id).items():
+            row = by_id.get(anim_id)
+            if row is None:
+                continue
+            real = entries.get(row[2].strip().lower())
+            if not real:
+                continue
+            timing = _row_timing(row)
+            if timing is None:
+                continue
+            fps, frames = timing
+            states.append(
+                AnimState(
+                    slot=slot,
+                    kfa=real,
+                    animnifs_id=anim_id,
+                    loop=row[6].strip().lower() != "clamp",
+                    duration=frames / fps,
+                    fps=fps,
+                    _client_dir=client_dir,
+                )
+            )
+        if states:
+            break
+    return states
+
+
+def resolve_anim_from_gamedata(client_dir: str, nif_path: str) -> str | None:
+    """The client's own animation link for a figure, or ``None``.
+
+    ``monnifs.csv`` (Name = NIF basename) gives the Anim Set id, ``anims.csv``
+    gives that set's animation ids per slot, ``animnifs.csv`` maps each id to
+    its .kfa file. This is how the game links creatures whose animation files
+    are not named after the model: Arachite02 -> ``sect_idle.kfa``,
+    amazon -> ``Hoplite_Idle.kfa``, amb_bat -> ``amb_bat_fly.kfa``,
+    b_avmon01 -> ``undead_idle.kfa``.
+    """
+    from .gamedata import ANIMNIFS_FILE
+
+    set_ids = _anim_set_ids(client_dir, nif_path)
     if not set_ids:
-        # Orphan models: no monnifs row, but the animation *set* names the
-        # figure (`Boar Keggars` vs Boar_Keggers.nif, Stingray, wolverine…).
-        # Normalised match first, then a unique one-character spelling
-        # variant (the tables say `Keggars` for `Keggers`); the rig gates
-        # still validate the result.
-        wanted = norm_name(base)
-        exact = [r[0].strip() for r in anims[2:] if r and len(r) > 1 and norm_name(r[1]) == wanted]
-        if exact:
-            set_ids = list(dict.fromkeys(exact))
-        else:
-            near = [
-                r[0].strip()
-                for r in anims[2:]
-                if r and len(r) > 1 and len(wanted) >= 6 and _levenshtein1(wanted, norm_name(r[1]))
-            ]
-            near = list(dict.fromkeys(near))
-            if len(near) == 1:
-                set_ids = near
-    if not set_ids:
+        return None
+    animnifs = _cached_table(client_dir, "animnifs.csv")
+    if not animnifs:
         return None
 
     by_id: dict[str, str] = {}
@@ -189,23 +335,13 @@ def resolve_anim_from_gamedata(client_dir: str, nif_path: str) -> str | None:
         if len(row) > ANIMNIFS_FILE and row[0].strip().isdigit():
             by_id.setdefault(row[0].strip(), row[ANIMNIFS_FILE].strip())
 
-    anim_dir = os.path.join(client_dir, "anims")
     try:
-        entries = {e.lower(): e for e in os.listdir(anim_dir)}
+        entries = {e.lower(): e for e in os.listdir(os.path.join(client_dir, "anims"))}
     except OSError:
         return None
 
-    header = anims[1] if len(anims) > 1 else []
     for sid in set_ids:
-        slots: dict[str, str] = {}
-        for row in anims[2:]:
-            if not row or row[0].strip() != sid:
-                continue
-            for i in range(2, min(len(header), len(row))):
-                value = row[i].strip()
-                if value and value != "0":
-                    slots.setdefault(header[i].strip().lower(), value)
-            break
+        slots = {k.lower(): v for k, v in _set_slots(client_dir, sid).items()}
         # Prefer a standing idle: some sets fill their "Idle" slots with a
         # sitting animation (the black cat: Idle/Idle1 = SIT_TAILSWIPE,
         # Idle2 = SIT_IDLE, Idle3 = STAND_IDLE) — for a viewer default the
@@ -224,7 +360,7 @@ def resolve_anim_from_gamedata(client_dir: str, nif_path: str) -> str | None:
             candidates.append((penalty, rank, real))
         if candidates:
             candidates.sort()
-            return os.path.join(anim_dir, candidates[0][2])
+            return os.path.join(client_dir, "anims", candidates[0][2])
     return None
 
 
@@ -352,33 +488,50 @@ def native_fps(pose) -> float:
     return min(_NATIVE_RATES, key=lambda r: abs(1.0 / r - median))
 
 
-def anim_timing(client_dir: str, kfa_path: str) -> tuple[float, float] | None:
-    """Raw ``(fps, frames)`` game timing for a KFA from ``animnifs.csv``.
-
-    Matched by KFA basename (case-insensitive), first hit wins. Returns
-    ``None`` when the row is missing or unusable (caller falls back to
-    stamped file timing).
-    """
+def _animnifs_rows(client_dir: str) -> list[list[str]]:
     from .gamedata import _read_table
 
     try:
-        rows = _read_table(client_dir, "animnifs.csv")
+        return _read_table(client_dir, "animnifs.csv")
     except (OSError, ValueError):
+        return []
+
+
+def _row_timing(row: list[str]) -> tuple[float, float] | None:
+    """``(fps, frames)`` of one animnifs row, or None when unusable."""
+    if len(row) < 6 or not row[2].strip().lower().endswith(".kfa"):
         return None
+    try:
+        frames, fps = float(row[3]), float(row[4])
+    except ValueError:
+        return None
+    return None if fps <= 0 or frames <= 0 else (fps, frames)
+
+
+def anim_timing(client_dir: str, kfa_path: str) -> tuple[float, float] | None:
+    """Raw ``(fps, frames)`` game timing for a KFA from ``animnifs.csv``.
+
+    Matched by KFA basename (case-insensitive). A basename is **not** a
+    unique key — 92 of them carry several rows on V2 and 58 of those
+    disagree on (type, frames, fps), e.g. ``ettin_swim.kfa`` is both a
+    10-frame 15 fps loop and a 40-frame 30 fps clamp. Taking the first row
+    would invent a duration, so a basename whose rows disagree resolves to
+    ``None`` and the caller falls back to stamped file timing. Callers that
+    know the animnifs id use :func:`anim_states` instead, which is keyed by
+    id and is never ambiguous.
+    """
     want = os.path.basename(kfa_path).lower()
-    for row in rows:
-        if len(row) < 6 or not row[2].strip().lower().endswith(".kfa"):
+    found: tuple[float, float] | None = None
+    for row in _animnifs_rows(client_dir):
+        if len(row) < 6 or row[2].strip().lower() != want:
             continue
-        if row[2].strip().lower() != want:
+        timing = _row_timing(row)
+        if timing is None:
             continue
-        try:
-            frames, fps = float(row[3]), float(row[4])
-        except ValueError:
+        if found is not None and found != timing:
             return None
-        if fps <= 0 or frames <= 0:
-            return None
-        return fps, frames
-    return None
+        found = timing
+    return found
 
 
 def animation_tracks(

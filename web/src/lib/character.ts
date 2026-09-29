@@ -144,3 +144,24 @@ function slotOf(
 export function armourMaterialParam(material: string): string | undefined {
 	return material ? material : undefined;
 }
+
+/** One playable state of a figure, as `/character/…/states` reports it. */
+export interface AnimStateSlot {
+	slot: string;
+	kfa: string;
+	animnifs_id: string;
+	loop: boolean;
+	duration: number;
+	rate: number;
+}
+
+/**
+ * The states a picker may offer, in the client's own order.
+ *
+ * The table lists some slots whose clip is not in `anims/`; those cannot be
+ * played, so they are dropped. A `clamp` state is kept — a one-shot death
+ * clip is a real state, the caller decides whether to loop it.
+ */
+export function animStateSlots(states: Partial<AnimStateSlot>[]): AnimStateSlot[] {
+	return states.filter((s): s is AnimStateSlot => !!s.slot && !!s.kfa);
+}

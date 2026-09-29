@@ -3,7 +3,7 @@
 	import Viewer from '$lib/components/Viewer.svelte';
 	import Stepper from '$lib/components/Stepper.svelte';
 	import { api } from '$lib/api/client';
-	import { armourMaterialParam } from '$lib/character';
+	import { animStateSlots, armourMaterialParam, type AnimStateSlot } from '$lib/character';
 	import { loadFromGlb as loadGlb, type LoadedModel } from '$lib/gltf/load';
 	import type { AnimClip } from '$lib/anim';
 	import type { CharacterOptions } from '$lib/api/client';
@@ -26,12 +26,23 @@
 	let skinTone = $state(1);
 	let cloak = $state(0);
 	let material = $state('');
+	let animState = $state('Idle');
+	let states = $state<AnimStateSlot[]>([]);
 	let raceOptions = $state<CharacterOptions | null>(null);
 
 	let model = $state<LoadedModel | null>(null);
 	let anim = $state<AnimClip | null>(null);
 	let error = $state<string | null>(null);
 	let loading = $state(false);
+
+	async function loadStates() {
+		// The states are the figure's own anim set, so a race change resets
+		// the pick; a figure that has no Idle falls back to its first state.
+		states = animStateSlots(await api.characterStates(raceId, female).catch(() => []));
+		if (!states.some((s) => s.slot === animState)) {
+			animState = states.find((s) => s.loop)?.slot ?? states[0]?.slot ?? 'Idle';
+		}
+	}
 
 	async function onRace(entry: Race) {
 		raceId = female ? entry.female : entry.male;
@@ -41,6 +52,7 @@
 		// Materials are not race- or gender-specific: seed the pick once
 		// and keep the user's choice across race/gender switches.
 		if (!material) material = raceOptions?.material ?? '';
+		await loadStates();
 		await rebuild();
 	}
 
@@ -49,9 +61,7 @@
 		const entry = RACES.find((r) => r.male === raceId || r.female === raceId);
 		if (entry) raceId = female ? entry.female : entry.male;
 		raceOptions = await api.characterOptions(raceId, female).catch(() => null);
-		// Materials are not race- or gender-specific: seed the pick once
-		// and keep the user's choice across race/gender switches.
-		if (!material) material = raceOptions?.material ?? '';
+		await loadStates();
 		await rebuild();
 	}
 
@@ -89,7 +99,7 @@
 			if (!res.ok) throw new Error(`model failed (${res.status})`);
 			const buf = await res.arrayBuffer();
 			model = await loadGlb(buf, `character-${raceId}-${female ? 'f' : 'm'}.glb`);
-			anim = await api.characterAnim(raceId, female).catch(() => null);
+			anim = await api.characterAnim(raceId, female, animState).catch(() => null);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 			model = null;
@@ -238,6 +248,22 @@
 								>
 									{#each raceOptions.materials as name (name)}
 										<option value={name}>{name}</option>
+									{/each}
+								</select>
+							</div>
+						{/if}
+						{#if states.length}
+							<div class="row">
+								<span class="lbl">State</span>
+								<select
+									value={animState}
+									onchange={(e) => {
+										animState = e.currentTarget.value;
+										rebuild();
+									}}
+								>
+									{#each states as s (s.slot)}
+										<option value={s.slot}>{s.slot}</option>
 									{/each}
 								</select>
 							</div>

@@ -69,12 +69,12 @@ product contract; run the commands above for the authoritative local result.
 Corpus tests skip without `DAOC_CLIENT`, and the web suite is run separately
 from `core/`.
 
-Dated V2 baseline (2026-09-24): 286 core tests passed and 4 failed. The
+Dated V2 baseline (2026-09-24): 301 core tests passed and 4 failed. The
 failures cover a changed `Boar_CATA` animation link, two legacy version
 expectations and one historical Ettin bbox golden; they require a separate
 data/test decision before being treated as regressions or as an accepted
 baseline.
-The web suite passed 36/36; `pnpm check` reports zero errors and three existing
+The web suite passed 42/42; `pnpm check` reports zero errors and three existing
 warnings.
 
 ## Known limits
@@ -162,13 +162,20 @@ used before. The default is the client's first family (`Hard Leather`, pskin
 301). The cloak keeps its own sheet: it belongs to the equipped cloak item,
 not to the armour material.
 
+**Animation states** are the figure's own anim set, not one auto-picked idle.
+`/character/…/states` lists the `anims.csv` slots the client's tables declare
+(166 for a player figure: `Idle`, `Walk`, `Run`, `Fly`, `Death`, the `EM …`
+emotes…), each with its KFA, its animnifs id, the game's duration and the
+`loop`/`clamp` flag; `?state=<slot>` on `/character/…/anim` plays one, and the
+response carries the clip's key-density rate. A `clamp` clip is a one-shot and
+the viewer holds its last frame instead of wrapping. Without `state` the
+route still serves the resolver's idle, so existing callers are unchanged.
+
 This is still a preview contract, not equipment support: a material is a
 *texture* family, and the client's per-item mesh **extension** (which of an
 item's variants is worn) and per-slot **dye** are not resolved. Both are
 server-side notions — the dye table does not exist in the client at all — and
-they belong to the Phase 2 appearance contract, not to the builder. Explicit
-animation-state selection remains open too: `/character/…/anim` serves one
-auto-resolved idle.
+they belong to the Phase 2 appearance contract, not to the builder.
 
 This is a preview contract, not complete equipment or animation-state support.
 `pskins`/item/dye resolution and explicit animation-state selection remain

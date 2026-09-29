@@ -52,6 +52,21 @@ class CharacterOptions(BaseModel):
     material: str = ""
 
 
+class AnimStateSummary(BaseModel):
+    """One playable state of a figure, as the client's tables declare it.
+
+    `rate` is optional: it needs the clip's own key density, so the routes
+    that do not play the clip omit it rather than open every KFA.
+    """
+
+    slot: str
+    kfa: str
+    animnifs_id: str
+    loop: bool
+    duration: float
+    rate: float | None = None
+
+
 class AssetDetail(AssetSummary):
     metadata: dict[str, Any] = {}
 

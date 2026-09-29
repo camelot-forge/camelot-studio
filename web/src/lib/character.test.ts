@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { armourMaterialParam, parseCharacter } from './character';
+import { animStateSlots, armourMaterialParam, parseCharacter } from './character';
 
 // Real mesh list of figures/BSaracenF.NIF (49 shapes as exported).
 const SARACEN_F = [
@@ -158,5 +158,26 @@ describe('armourMaterialParam', () => {
 
 	it('omits the parameter when nothing is picked, so the server default applies', () => {
 		expect(armourMaterialParam('')).toBeUndefined();
+	});
+});
+
+describe('animStateSlots', () => {
+	it('keeps the client slot order so the picker mirrors the table', () => {
+		const states = [
+			{ slot: 'Idle', kfa: 'a.kfa', loop: true },
+			{ slot: 'Walk', kfa: 'b.kfa', loop: true },
+			{ slot: 'Death', kfa: 'c.kfa', loop: false }
+		];
+		expect(animStateSlots(states).map((s) => s.slot)).toEqual(['Idle', 'Walk', 'Death']);
+	});
+
+	it('drops states with no clip, which the client lists but cannot play', () => {
+		expect(animStateSlots([{ slot: 'Idle', kfa: '', loop: true }])).toEqual([]);
+	});
+
+	it('keeps a clamp state: one-shot clips are still real states', () => {
+		const slots = animStateSlots([{ slot: 'Death', kfa: 'd.kfa', loop: false }]);
+		expect(slots).toHaveLength(1);
+		expect(slots[0].loop).toBe(false);
 	});
 });

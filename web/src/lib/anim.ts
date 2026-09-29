@@ -19,6 +19,10 @@ export interface AnimClip {
 	kfa: string;
 	duration: number; // loop length, game seconds
 	rate: number; // game seconds -> KFA key seconds multiplier
+	// The client's `animnifs` type: `loop` clips wrap, `clamp` ones are
+	// one-shots. Absent means the daemon did not report it, so the clip
+	// loops (the historical behaviour).
+	loop?: boolean;
 	tracks: AnimTrack[];
 }
 
@@ -106,9 +110,13 @@ export function samplePositions(clip: AnimClip, t: number): Map<string, Vec3> {
 	return out;
 }
 
-/** Map a game-loop time to KFA key seconds (animnifs rate). */
+/** Map a game time to KFA key seconds (animnifs rate). */
 export function gameToKeyTime(clip: AnimClip, tGame: number): number {
 	if (!(clip.duration > 0)) return tGame;
 	const rate = clip.rate > 0 ? clip.rate : 1;
-	return (((tGame % clip.duration) + clip.duration) % clip.duration) * rate;
+	const clamped = clip.loop === false;
+	const t = clamped
+		? Math.min(Math.max(tGame, 0), clip.duration)
+		: ((tGame % clip.duration) + clip.duration) % clip.duration;
+	return t * rate;
 }

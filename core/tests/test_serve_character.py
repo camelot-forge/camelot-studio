@@ -295,3 +295,63 @@ def test_character_options_expose_the_armour_materials(client_dir, tmp_path):
 def test_unknown_material_falls_back_instead_of_failing(client_dir, tmp_path):
     client = _client(client_dir, tmp_path)
     assert client.get("/api/v1/character/4/true/model?material=nope").status_code == 200
+
+
+def test_character_states_lists_the_client_slots(client_dir, tmp_path):
+    """The state list is the figure's anim set, read from the client's
+    tables: a server must be able to name the state it wants, not only ever
+    receive the one idle the builder happened to pick."""
+    client = _client(client_dir, tmp_path)
+    body = client.get("/api/v1/character/4/true/states").json()
+    slots = [s["slot"] for s in body]
+    assert "Idle" in slots
+    assert len(slots) > 1
+    idle = next(s for s in body if s["slot"] == "Idle")
+    assert idle["kfa"].lower().endswith(".kfa")
+    assert idle["loop"] is True
+    assert idle["duration"] > 0
+    # the id is the animnifs row that owns the clip
+    assert idle["animnifs_id"].isdigit()
+    # the list is a table read: it must not open the clips to fill a rate
+    assert idle.get("rate") is None
+
+
+def test_character_anim_can_serve_a_named_state(client_dir, tmp_path):
+    client = _client(client_dir, tmp_path)
+    states = client.get("/api/v1/character/4/true/states").json()
+    walk = next((s for s in states if "walk" in s["slot"].lower()), None)
+    assert walk is not None, [s["slot"] for s in states]
+
+    clip = client.get(f"/api/v1/character/4/true/anim?state={walk['slot']}").json()
+    assert clip["kfa"].lower() == walk["kfa"].lower()
+    assert clip["loop"] is walk["loop"]
+    assert clip["duration"] == pytest.approx(walk["duration"])
+    assert clip["rate"] > 0, "a played state carries the key-density rate"
+    assert clip["tracks"], "a named state must carry its tracks"
+
+
+def test_character_anim_transports_the_loop_flag(client_dir, tmp_path):
+    """`clamp` clips are one-shots: the viewer must learn that from the
+    response instead of always wrapping."""
+    client = _client(client_dir, tmp_path)
+    states = client.get("/api/v1/character/4/true/states").json()
+    clamps = [s for s in states if not s["loop"]]
+    if not clamps:
+        pytest.skip("this race has no clamp state")
+    clip = client.get(f"/api/v1/character/4/true/anim?state={clamps[0]['slot']}").json()
+    assert clip["loop"] is False
+
+
+def test_character_anim_rejects_an_unknown_state(client_dir, tmp_path):
+    client = _client(client_dir, tmp_path)
+    res = client.get("/api/v1/character/4/true/anim?state=Dance")
+    assert res.status_code == 404
+
+
+def test_character_anim_default_is_still_the_idle(client_dir, tmp_path):
+    """No state asked for keeps the existing behaviour, so the builder and
+    the asset route are untouched."""
+    client = _client(client_dir, tmp_path)
+    plain = client.get("/api/v1/character/4/true/anim").json()
+    named = client.get("/api/v1/character/4/true/anim?state=Idle").json()
+    assert plain["kfa"].lower() == named["kfa"].lower()

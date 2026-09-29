@@ -18,7 +18,7 @@ from ..mpak import MpakArchive, MpakError
 from .cache import read_json, write_json
 from .config import ServeConfig
 from .index import Asset, AssetIndex
-from .models import CharacterOptions
+from .models import AnimStateSummary, CharacterOptions
 
 # Export-cache schema/behaviour version (bump when export output changes).
 _EXPORT_VERSION = "19"
@@ -290,23 +290,9 @@ def build_router(config: ServeConfig, index: AssetIndex,
         return Response(content=pack_glb(glb_doc, glb_bin),
                             media_type="model/gltf-binary")
 
-    @router.get("/character/{race_id}/{female}/anim")
-    def character_anim(race_id: int, female: bool) -> Response:
-        """The player idle of (race, gender) as viewer tracks.
-
-        The clip is resolved through the client's tables — the Catacombs
-        figure of the race (`sar_f` & co) first: those sets carry the live
-        client's player poses, and it is served **engine-faithful**: every
-        channel the clip carries is applied absolute (rotations and
-        translations), the way the client overwrites its node transforms.
-        Partial fixes (dropping "static" channels, rebasing single bones)
-        broke the pose chain — see notes/character-rules.md and the skill."""
-        import tempfile
-        from pathlib import Path as _Path
-
+    def _player_figure(race_id: int, female: bool):
+        """`(description, figure stem)` of a playable race row, or a 404."""
         from .. import fig3, gamedata
-        from ..anims import animation_tracks, resolve_idle_kfa
-        from ..playerfig import rig_bytes
 
         tables = fig3.read_tables(str(config.root))
         desc = tables.race_desc.get(race_id)
@@ -317,8 +303,60 @@ def build_router(config: ServeConfig, index: AssetIndex,
         )
         if name is None:
             raise HTTPException(status_code=404, detail="no player figure for this race")
+        return desc, name
+
+    @router.get("/character/{race_id}/{female}/states", response_model=list[AnimStateSummary])
+    def character_states(race_id: int, female: bool) -> list[AnimStateSummary]:
+        """The figure's playable states, as the client's anim set declares
+        them (`Idle`, `C-Idle`, `Walk`, `Run`, `Fly`…).
+
+        A server needs to *name* the state a character is in; the client's
+        slot names are the only stable identifiers for that, and each
+        carries the `loop`/`clamp` flag and the game timing the viewer must
+        play it with.
+        """
+        from ..anims import anim_states
+
+        _desc, name = _player_figure(race_id, female)
+        states = anim_states(
+            str(config.root), os.path.join(str(config.root), "figures", name + ".NIF")
+        )
+        return [AnimStateSummary(**s.as_dict()) for s in states]
+
+    @router.get("/character/{race_id}/{female}/anim")
+    def character_anim(race_id: int, female: bool, state: str | None = None) -> Response:
+        """A player animation as viewer tracks, the idle by default.
+
+        `state` names one of the figure's `anims.csv` slots
+        (see `/character/…/states`); without it the resolver's idle is
+        served, so existing callers are unchanged. Clips are served
+        **engine-faithful**: every channel the clip carries is applied
+        absolute (rotations and translations), the way the client
+        overwrites its node transforms. Partial fixes (dropping "static"
+        channels, rebasing single bones) broke the pose chain — see
+        notes/character-rules.md and the skill."""
+        import tempfile
+        from pathlib import Path as _Path
+
+        from ..anims import anim_states, animation_tracks, resolve_idle_kfa
+        from ..playerfig import rig_bytes
+
+        _desc, name = _player_figure(race_id, female)
         virtual = os.path.join(str(config.root), "figures", name + ".NIF")
-        kfa_path = resolve_idle_kfa(str(config.root), virtual)
+        loop: bool | None = None
+        if state is None:
+            kfa_path = resolve_idle_kfa(str(config.root), virtual)
+        else:
+            wanted = state.strip().lower()
+            picked = next(
+                (s for s in anim_states(str(config.root), virtual)
+                 if s.slot.lower() == wanted),
+                None,
+            )
+            if picked is None:
+                raise HTTPException(status_code=404, detail=f"unknown state: {state}")
+            kfa_path = os.path.join(str(config.root), "anims", picked.kfa)
+            loop = picked.loop
         if kfa_path is None:
             raise HTTPException(status_code=404, detail="no idle animation for this race")
         raw = rig_bytes(str(config.root), race_id, female)
@@ -336,6 +374,8 @@ def build_router(config: ServeConfig, index: AssetIndex,
                 raise HTTPException(status_code=500, detail=f"anim failed: {exc}") from exc
         if not tracks["tracks"]:
             raise HTTPException(status_code=404, detail="no idle animation for this race")
+        if loop is not None:
+            tracks["loop"] = loop
         return Response(content=json.dumps(tracks), media_type="application/json")
 
     @router.get("/character/{race_id}/{female}/texture")

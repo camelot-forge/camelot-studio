@@ -32,7 +32,9 @@ await page
 	.click();
 await page.waitForTimeout(6000);
 
-const select = page.locator('select');
+const select = page
+	.locator('.row', { has: page.locator('.lbl', { hasText: 'Armour' }) })
+	.locator('select');
 const optionCount = await select.locator('option').count();
 const initial = await select.inputValue();
 console.log(`armour select present: ${(await select.count()) > 0}`);
@@ -53,13 +55,31 @@ for (const material of ['Plate', 'Cloth']) {
 	await page.screenshot({ path: `${outDir}/builder-armour-${material.toLowerCase()}.png` });
 }
 
+// The state picker: the figure's own anim set, not just an idle.
+const stateSelect = page
+	.locator('.row', { has: page.locator('.lbl', { hasText: 'State' }) })
+	.locator('select');
+const stateOptions = await stateSelect
+	.locator('option')
+	.evaluateAll((os) => os.map((o) => o.value));
+console.log(`state options (${stateOptions.length}): ${stateOptions.slice(0, 8).join(', ')}…`);
+const walk = stateOptions.find((s) => /walk/i.test(s));
+if (walk) {
+	await stateSelect.selectOption(walk);
+	await page.waitForTimeout(8000);
+	console.log(`after state=${walk}: value=${JSON.stringify(await stateSelect.inputValue())}`);
+}
+await stateSelect.selectOption('Idle');
+await page.waitForTimeout(6000);
+
 // Gender switch keeps the pick and rebuilds.
 await page
 	.getByRole('button', { name: /^male$/i })
 	.first()
 	.click();
-await page.waitForTimeout(7000);
-console.log(`after gender=male: value=${JSON.stringify(await select.inputValue())}`);
+await page.waitForTimeout(8000);
+console.log(`after gender=male: armour=${JSON.stringify(await select.inputValue())}`);
+console.log(`after gender=male: state=${JSON.stringify(await stateSelect.inputValue())}`);
 await page.screenshot({ path: `${outDir}/builder-armour-male.png` });
 
 console.log(`model requests (${models.length}):`);

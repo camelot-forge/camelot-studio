@@ -1,7 +1,8 @@
 """Unit and corpus tests for idle-KFA resolution and track building."""
 
-
 import os
+
+import pytest
 
 from camelot.anims import native_fps, resolve_idle_kfa
 
@@ -489,3 +490,251 @@ def test_gamedata_links_creature_animations_from_client(client_dir):
         got = resolve_idle_kfa(client_dir, os.path.join(client_dir, "figures", nif))
         assert got is not None, nif
         assert os.path.basename(got).lower() == want, nif
+
+
+# --- animation states (animnifs slots, types and duplicates) ---------------
+
+def _write_gamedata_rows(tmp_path, tables: dict[str, list[list[str]]]):
+    from camelot.mpak import write_mpak
+
+    def to_csv(rows: list[list[str]]) -> bytes:
+        return ("\n".join(",".join(c) for c in rows) + "\n").encode("latin1")
+
+    write_mpak(
+        str(tmp_path / "gamedata.mpk"),
+        "gamedata",
+        [(f"{name}.csv", to_csv(rows)) for name, rows in tables.items()],
+    )
+
+
+def _touch_kfas(tmp_path, *names: str):
+    """Placeholder KFA files: `anim_states` needs the clip to exist in
+    `anims/`, but only its bytes decide `rate` (asserted in the corpus tier)."""
+    anims = tmp_path / "anims"
+    anims.mkdir(exist_ok=True)
+    for name in names:
+        (anims / name).write_bytes(b"kfa")
+
+
+def test_anim_states_expose_the_named_slots(tmp_path):
+    """A figure's playable states are the named slots of its anim set, not one
+    auto-picked idle: the client's `anims.csv` header names them (Idle,
+    C-Idle, Walk, Run, Fly…)."""
+    from camelot.anims import anim_states
+
+    _write_gamedata_rows(tmp_path, {
+        "anims": [
+            ["Anim", "", "", "", "", "", ""],
+            ["Anim Set ID", "Name", "Idle", "C-Idle", "Walk", "Run", "Fly"],
+            ["10", "Saracen", "1", "2", "3", "4", "5"],
+        ],
+        "monnifs": [
+            ["Information", "", "NIF", "Anim"],
+            ["ID", "Textual Name", "Name", "Anim Set ID"],
+            ["1", "Saracen Female", "sar_f", "10"],
+        ],
+        "animnifs": [
+            ["Anim", "", "", "", "", "base", " "],
+            ["NIFS", "name", "NIF Name", "frames", "fps", " fps", "type"],
+            ["1", "a", "sar_f_idle.kfa", "16", "3", "15", "loop"],
+            ["2", "b", "sar_f_cidle.kfa", "18", "15", "15", "loop"],
+            ["3", "c", "sar_f_walk.kfa", "7", "15", "15", "loop"],
+            ["4", "d", "sar_f_run.kfa", "16", "30", "30", "loop"],
+            ["5", "e", "sar_f_fly.kfa", "20", "15", "15", "clamp"],
+        ],
+    })
+    _touch_kfas(tmp_path, "sar_f_idle.kfa", "sar_f_cidle.kfa", "sar_f_walk.kfa",
+                "sar_f_run.kfa", "sar_f_fly.kfa")
+    states = anim_states(str(tmp_path), "figures/sar_f.NIF")
+    assert [s.slot for s in states] == ["Idle", "C-Idle", "Walk", "Run", "Fly"]
+    assert states[0].kfa == "sar_f_idle.kfa"
+    assert states[0].loop is True
+    assert states[0].duration == pytest.approx(16 / 3)
+    # a clamp clip is a one-shot: the viewer must not wrap it
+    assert states[4].loop is False
+
+
+def test_anim_states_carry_the_game_timing_not_the_file_timing(tmp_path):
+    from camelot.anims import anim_states
+
+    _write_gamedata_rows(tmp_path, {
+        "anims": [
+            ["Anim", "", ""],
+            ["Anim Set ID", "Name", "Idle"],
+            ["10", "Boar", "1"],
+        ],
+        "monnifs": [
+            ["Information", "", "NIF", "Anim"],
+            ["ID", "Textual Name", "Name", "Anim Set ID"],
+            ["1", "Boar", "boar", "10"],
+        ],
+        "animnifs": [
+            ["Anim", "", "", "", "", "base", " "],
+            ["NIFS", "name", "NIF Name", "frames", "fps", " fps", "type"],
+            ["1", "a", "boar_idle.kfa", "16", "3", "15", "loop"],
+        ],
+    })
+    _touch_kfas(tmp_path, "boar_idle.kfa")
+    (idle,) = anim_states(str(tmp_path), "figures/BOAR.NIF")
+    # the game's 16 frames at 3 fps, not the file's own key spacing
+    assert idle.duration == pytest.approx(16 / 3)
+
+
+def test_anim_states_prefer_the_exact_anims_row_over_a_near_match(tmp_path):
+    """`anims.csv` reuses descriptions across anim sets; a set that only
+    matches loosely must not shadow the figure's own row."""
+    from camelot.anims import anim_states
+
+    _write_gamedata_rows(tmp_path, {
+        "anims": [
+            ["Anim", "", ""],
+            ["Anim Set ID", "Name", "Idle"],
+            ["1", "some other creature", "1"],
+            ["10", "boar", "2"],
+        ],
+        "monnifs": [
+            ["Information", "", "NIF", "Anim"],
+            ["ID", "Textual Name", "Name", "Anim Set ID"],
+            ["1", "Boar", "boar", "10"],
+        ],
+        "animnifs": [
+            ["Anim", "", "", "", "", "base", " "],
+            ["NIFS", "name", "NIF Name", "frames", "fps", " fps", "type"],
+            ["1", "a", "wrong_idle.kfa", "10", "15", "15", "loop"],
+            ["2", "b", "boar_idle.kfa", "16", "3", "15", "loop"],
+        ],
+    })
+    _touch_kfas(tmp_path, "wrong_idle.kfa", "boar_idle.kfa")
+    (idle,) = anim_states(str(tmp_path), "figures/boar.NIF")
+    assert idle.kfa == "boar_idle.kfa"
+    assert idle.duration == pytest.approx(16 / 3)
+
+
+def test_anim_timing_refuses_an_ambiguous_basename(tmp_path):
+    """A KFA basename is not a unique key: 92 basenames carry several
+    animnifs rows and 58 of them disagree on (type, frames, fps). Refusing
+    beats silently taking the first row."""
+    from camelot.anims import anim_timing
+
+    _write_gamedata_rows(tmp_path, {
+        "animnifs": [
+            ["NIFS", "name", "NIF Name", "frames", "fps", " fps", "type"],
+            ["1", "a", "ettin_swim.kfa", "10", "15", "15", "loop"],
+            ["2", "b", "ettin_swim.kfa", "40", "30", "30", "clamp"],
+            ["3", "c", "boar_idle.kfa", "16", "3", "15", "loop"],
+        ],
+    })
+    assert anim_timing(str(tmp_path), "anims/boar_idle.kfa") == (3.0, 16.0)
+    assert anim_timing(str(tmp_path), "anims/ettin_swim.kfa") is None
+
+
+def test_anim_timing_still_answers_for_a_consistent_duplicate(tmp_path):
+    from camelot.anims import anim_timing
+
+    _write_gamedata_rows(tmp_path, {
+        "animnifs": [
+            ["NIFS", "name", "NIF Name", "frames", "fps", " fps", "type"],
+            ["1", "a", "ettin_swim.kfa", "10", "15", "15", "loop"],
+            ["2", "b", "ettin_swim.kfa", "10", "15", "15", "loop"],
+        ],
+    })
+    # identical rows are not ambiguous
+    assert anim_timing(str(tmp_path), "anims/ettin_swim.kfa") == (15.0, 10.0)
+
+
+# --- corpus tier: the real anim sets ---------------------------------------
+
+def test_anim_states_on_the_real_client_carry_the_game_rate(client_dir):
+    """`rate` is the game's fps over the clip's own key density: 16 frames at
+    3 fps over a 15 fps file is 0.2, which is why classic idles loop for
+    5.33s while their keys span 1.07s."""
+    from camelot.anims import anim_states
+    from camelot.kfa import load_kfa
+
+    states = {s.slot: s for s in anim_states(
+        client_dir, os.path.join(client_dir, "figures", "BSaracenF.NIF")
+    )}
+    idle = states["Idle"]
+    row = _row(client_dir, idle.animnifs_id)
+    fps, frames = float(row[4]), float(row[3])
+    pose = load_kfa(os.path.join(client_dir, "anims", idle.kfa))
+    assert idle.rate(client_dir) == pytest.approx(fps / native_fps(pose))
+    assert idle.duration == pytest.approx(frames / fps)
+    assert idle.loop is (row[6].strip().lower() == "loop")
+
+
+def _row(client_dir, animnifs_id):
+    from camelot.anims import _cached_table
+
+    for row in _cached_table(client_dir, "animnifs.csv")[2:]:
+        if row and row[0].strip() == animnifs_id:
+            return row
+    raise AssertionError(f"no animnifs row {animnifs_id}")
+
+
+def test_anim_states_agree_with_the_idle_resolver_on_the_client(client_dir):
+    """The state list and the single-idle resolver must not disagree about
+    which file is the idle: a server that picks states and a viewer that
+    picks a default would otherwise show different clips."""
+    from camelot.anims import anim_states, resolve_idle_kfa
+
+    for figure in ("BSaracenF.NIF", "Boar.NIF", "Ettin.NIF"):
+        path = os.path.join(client_dir, "figures", figure)
+        states = anim_states(client_dir, path)
+        if not states:
+            continue
+        idle = resolve_idle_kfa(client_dir, path)
+        assert idle is not None, figure
+        slots = {s.slot: s for s in states}
+        assert os.path.basename(idle).lower() in {
+            s.kfa.lower() for s in slots.values()
+        }, f"{figure}: {os.path.basename(idle)} is not one of {sorted(s.kfa for s in slots.values())}"
+
+
+def test_anim_states_cover_the_player_races_on_the_client(client_dir):
+    from camelot.anims import anim_states
+
+    total = 0
+    for race in ("bri_m", "bri_f", "tro_m", "fro_f", "dwa_m", "val_f"):
+        states = anim_states(client_dir, os.path.join(client_dir, "figures", race + ".NIF"))
+        assert states, race
+        assert any(s.slot.lower() == "idle" for s in states), race
+        total += len(states)
+    assert total > 6
+
+
+def test_anim_states_do_not_open_every_clip(client_dir, monkeypatch):
+    """Listing a figure's states must stay a table read: a player anim set
+    carries 166 slots, and opening each KFA to compute `rate` turned the
+    states route into a 22s request the browser gave up on."""
+    from camelot import anims
+
+    opened: list[str] = []
+    real = anims.native_fps
+
+    def spy(pose):
+        opened.append(pose.path)
+        return real(pose)
+
+    monkeypatch.setattr(anims, "native_fps", spy)
+    states = anims.anim_states(
+        client_dir, os.path.join(client_dir, "figures", "BSaracenF.NIF")
+    )
+    assert len(states) > 10
+    assert opened == [], f"anim_states opened {len(opened)} clips"
+
+
+def test_anim_state_rate_is_computed_on_demand(client_dir):
+    """`rate` needs the clip's key density, so it is resolved when a state is
+    actually asked for, not while the list is built."""
+    from camelot.anims import anim_states
+    from camelot.kfa import load_kfa
+
+    states = {s.slot: s for s in anim_states(
+        client_dir, os.path.join(client_dir, "figures", "BSaracenF.NIF")
+    )}
+    idle = states["Idle"]
+    row = _row(client_dir, idle.animnifs_id)
+    assert idle.rate(client_dir) == pytest.approx(float(row[4]) / native_fps(
+        load_kfa(os.path.join(client_dir, "anims", idle.kfa))
+    ))

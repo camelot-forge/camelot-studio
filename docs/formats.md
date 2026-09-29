@@ -312,12 +312,29 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   Every file is authored at 15 or 30 fps key density (`native_fps`: median
   rotation-key interval, snapped), and the game plays `frames` key intervals
   at `fps` frames per game second: rate `fps / native` over a loop of
-  `frames / fps` game seconds. This is verified for selected unique rows.
-  The current resolver matches by KFA basename and returns the first matching
-  row, so duplicate basenames with different timing are unresolved. The
-  current API/viewer also does not preserve the table's `loop` versus `clamp`
-  state; it always loops the returned duration. Missing rows and `fps <= 0`
-  fall back to stamped file timing.
+  `frames / fps` game seconds. Missing rows and `fps <= 0` fall back to
+  stamped file timing.
+  - **A KFA basename is not a unique key.** 92 of the 3978 basenames carry
+    several `animnifs` rows, and 58 of those disagree on (type, frames, fps)
+    — `ettin_swim.kfa` is both a 10-frame 15 fps `loop` and a 40-frame 30 fps
+    `clamp`. Taking the first row invents a duration, so the by-basename
+    lookup now refuses a basename whose rows disagree and falls back to
+    stamped timing.
+  - **States are keyed by animnifs id, through the set's slot names.**
+    `anims.anim_states` walks `monnifs -> anims -> animnifs` and returns the
+    set's slots (`Idle`, `C-Idle`, `Walk`, `Run`, `Fly`, `EM Wave`… — 166 for
+    a player figure), each with its file, id, `frames / fps` duration and the
+    `type` column's `loop`/`clamp` flag. That is the only stable identifier
+    a server can use to say which state a character is in, and it is immune
+    to the duplicated basenames above. `rate` needs the clip's own key
+    density, so it is computed on demand: opening all 166 clips to fill it
+    turned the states route into a 22s request.
+  - **`anims.csv` rows are keyed by set id, never by description** —
+    descriptions repeat across sets, so a name match would let an unrelated
+    figure's row shadow the real one.
+  - `clamp` clips are one-shots: the clip response carries the flag and the
+    viewer holds the last frame instead of wrapping. A missing flag means
+    loop, so older responses keep playing.
 - Items: statics (3/60 skinned), textured (58/60), attach nodes
   `BACK`/`BELT`/`GROUND`.
 

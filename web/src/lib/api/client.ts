@@ -4,6 +4,8 @@
 // or pointed at it from the dev/static build via `?api=http://localhost:8760`
 // (persisted in localStorage).
 
+import type { AnimStateSlot } from '$lib/character';
+
 export interface Health {
 	status: string;
 	version: string;
@@ -162,15 +164,30 @@ export const api = {
 	characterAnim: async (
 		raceId: number,
 		female: boolean,
+		state?: string,
 		signal?: AbortSignal
 	): Promise<AnimClip | null> => {
+		const qs = state ? `?state=${encodeURIComponent(state)}` : '';
 		const res = await fetch(
-			`${getApiBase()}/api/v1/character/${raceId}/${female ? 'true' : 'false'}/anim`,
+			`${getApiBase()}/api/v1/character/${raceId}/${female ? 'true' : 'false'}/anim${qs}`,
 			{ signal }
 		);
 		if (res.status === 404) return null;
 		if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 		return (await res.json()) as AnimClip;
+	},
+	characterStates: async (
+		raceId: number,
+		female: boolean,
+		signal?: AbortSignal
+	): Promise<AnimStateSlot[]> => {
+		const res = await fetch(
+			`${getApiBase()}/api/v1/character/${raceId}/${female ? 'true' : 'false'}/states`,
+			{ signal }
+		);
+		if (res.status === 404) return [];
+		if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+		return (await res.json()) as AnimStateSlot[];
 	},
 	anim: async (id: string, signal?: AbortSignal): Promise<AnimClip | null> => {
 		const res = await fetch(`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim`, {
