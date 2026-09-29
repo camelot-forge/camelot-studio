@@ -133,7 +133,11 @@ class AnimState:
     loop: bool
     duration: float
     fps: float
-    _client_dir: str = field(repr=False, compare=False)
+    # The clip's own key density, when the caller already read it. Leaving
+    # it None is not an error: `rate` falls back to 1.0 rather than opening
+    # every clip of a 166-slot anim set.
+    native_fps: float | None = None
+    _client_dir: str = field(default="", repr=False, compare=False)
 
     def rate(self, client_dir: str | None = None) -> float:
         """The game's fps over this clip's own key density.
@@ -145,11 +149,13 @@ class AnimState:
         """
         from .kfa import load_kfa
 
-        root = client_dir or self._client_dir
-        try:
-            native = native_fps(load_kfa(os.path.join(root, "anims", self.kfa)))
-        except (OSError, ValueError, KeyError, IndexError):
-            return 1.0
+        native = self.native_fps
+        if native is None:
+            root = client_dir or self._client_dir
+            try:
+                native = native_fps(load_kfa(os.path.join(root, "anims", self.kfa)))
+            except (OSError, ValueError, KeyError, IndexError):
+                return 1.0
         return self.fps / native if native else 1.0
 
     def as_dict(self, with_rate: bool = False) -> dict:

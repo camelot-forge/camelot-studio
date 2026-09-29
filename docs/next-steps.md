@@ -154,6 +154,10 @@ record these differences rather than silently copying the guide:
 The first OpenDAoC adapter acceptance gate is therefore:
 
 1. pin the `DAOC CLIENT V2` profile, exact client build and relevant hashes;
+   **measured 2026-09-24: the corpus is client build `1.130`**
+   (`game.dll` `VS_VERSION_INFO`), while the OpenDAoC page states the server
+   accepts `1.127`. This gap must be resolved — by pinning a 1.127 corpus or
+   by confirming 1.130 compatibility — before any acceptance test passes;
 2. pin an OpenDAoC source commit, a database schema/commit and an image tag;
 3. choose and document whether the server data profile is the official 1.65
    database, a later client profile, or a tested compatibility overlay;
@@ -251,7 +255,15 @@ After Phase 0, implement only the gaps confirmed by the audit:
 Every change must ship with tests and, for visual behavior, a reproducible
 manual verification case.
 
-## Phase 2 — Define the server-facing content contract
+**Status: closed 2026-09-24.** The skin-tone/hair-colour tints, the hair `M`
+decal bake, the positional `Bald` slots, the per-piece Double Sided flag, the
+`pskins` armour materials and the named animation states all shipped with
+tests; the 36 rows are covered by a corpus test and a Playwright pass
+(`web/scripts/armour_check.mjs`). Remaining items are the item-level
+**extension** and **dye**, which are server notions and moved to Phase 2.
+The backlog detail is `workspace/notes/builder-fidelity-gaps.md`.
+
+## Phase 2 — Define the server-facing content contract (first cut done)
 
 Create a versioned manifest schema for the server-facing pipeline. It should
 describe, without embedding proprietary client binaries:
@@ -268,7 +280,32 @@ describe, without embedding proprietary client binaries:
 Each server target should consume this contract through a small adapter. The
 adapters must not reimplement client table or fig3 semantics.
 
-## Phase 3 — Build the server content pack
+**Delivered (2026-09-24) as `core/camelot/pack.py`, schema `1.0.0`.** The
+manifest covers the fields above except the per-item extension and the dye,
+which cannot exist yet: both are server concepts (the dye table is not in
+the client at all). Covered today: logical ids, figure/rig ids, appearance
+slots (piece, sheet, tint, sidedness) with their `gamedata` keys, animation
+states keyed by animnifs id with `loop`/`clamp` and the contributing anim
+set, the client build read from `game.dll`, the schema version, and the
+validation status with its unresolved references.
+
+**Findings that change the roadmap:**
+
+- the V2 corpus reports **client build `1.130`**, read from `game.dll`'s
+  `VS_VERSION_INFO` — the OpenDAoC docs state the server accepts `game.dll`
+  1.127. That gap is now a recorded fact in every manifest instead of an
+  assumption, and it is the first item of the OpenDAoC acceptance gate;
+- an `anims.csv` set is **not a clean per-figure namespace**: the Cata Troll
+  male (set 263, 182 slots) borrows cat clips for slots like `Back`
+  (`Cat_WB_HM.kfa`). The manifest records the contributing set per state so
+  an adapter can reason about the rig a clip was authored on;
+- a null tint is meaningful, not missing data: skin tone 1 and hair colour 1
+  carry no tint (the client paints them white).
+
+**Still open in Phase 2**: the target projections and the adapter interfaces.
+The schema is stable enough to write an OpenDAoC projection against.
+
+## Phase 3 — Build the server content pack (manifest + reports done)
 
 Implement an offline packaging command or module that:
 
@@ -280,6 +317,17 @@ Implement an offline packaging command or module that:
 6. records client-version compatibility and a reproducible build identifier.
 
 The initial target is a locally generated content pack, not a hosted service.
+
+**Delivered (2026-09-24)**: `camelot pack --out DIR` does steps 1, 2, 3
+(manifests + reports), 5 and 6 — it reads `$DAOC_CLIENT`, resolves the
+references, writes `manifest/content.json` + `reports/validation.json` +
+`checksums.lock`, refuses to publish on an unresolved reference, and records
+the client build. Against V2: 36 figures, 324 appearance slots, 5958
+animation states, 0 unresolved, ~4.5 s, byte-identical on rebuild.
+
+**Still open in Phase 3**: step 4's candidate patch/pack assembly and the
+glTF/JSON artifacts themselves, plus the per-target projections
+(`targets/dolsharp`, `targets/opendaoc`) and the client patch manifest.
 
 ## Phase 4 — Validate the OpenDAoC integration first, then DOLSharp
 

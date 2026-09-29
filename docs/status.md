@@ -16,6 +16,7 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot roundtrip <f>` | read → write → read (multiset compare; legacy 4.x = N/A) |
 | `camelot batch <manifest> --out <report> [--read-only] [--limit N]` | bulk validation, live progress; `$DAOC_CLIENT` rewrites `DAOC CLIENT/...` manifest paths |
 | `camelot mpak list <archive>` / `get <archive> <entry>` / `pack <out> <name> <files…>` | MPAK reader/writer (`.mpk`/`.npk`) |
+| `camelot pack --out DIR [--id ID] [--version V] [--material M] [--dry-run]` | build the server content pack: versioned manifest, validation report, checksums lock |
 | `camelot serve [--root DIR] [--port N] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn) |
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
@@ -24,6 +25,51 @@ inside pyffi — see `formats.md` §7). Re-run and version the report against
 `DAOC_CLIENT V2` before treating the count as a current KPI.
 `core/camelot/legacy.py` reads the retained NetImmerse 4.x mesh corpus
 (read-only; a 4.x writer is not implemented).
+
+## Server content pack (Phases 2-3, first cut)
+
+`camelot pack` reads the client corpus and emits the **server-neutral
+contract** the roadmap asks for. It is an offline, reproducible build — no
+daemon, no server, no proprietary bytes in the output.
+
+```sh
+DAOC_CLIENT="…/DAOC CLIENT V2" .venv/bin/camelot pack --out ./pack \
+  --id daoc.studio --version 0.1.0
+```
+
+```text
+pack/
+  manifest/content.json     the contract (schema 1.0.0)
+  reports/validation.json   what resolved, what did not, and the timings
+  checksums.lock            SHA-256 per artifact
+```
+
+Against the V2 corpus: **36 figures, 324 appearance slots, 5958 animation
+states, 0 unresolved**, in ~4.5 s, byte-identical on rebuild.
+
+**The contract** carries namespaced logical ids (`daoc.player.tro_m`), the
+rig, per-slot appearance (piece, sheet, engine tint, `fig3parts` Double Sided
+flag) with the `gamedata` key each came from, and per-state animation
+(slot, KFA, animnifs id, `loop`/`clamp`, game duration, contributing anim
+set). It also carries the **client build read from `game.dll`'s
+`VS_VERSION_INFO`** — the V2 corpus is `1.130`, not the `1.127` the OpenDAoC
+docs state, which is exactly the kind of assumption the pack is meant to
+replace with a recorded fact.
+
+Three properties are enforced by tests rather than convention:
+
+- **Deterministic** — same corpus, same bytes. The wall-clock timing lives
+  only in the report, never in hashed content.
+- **Honest** — a reference the client tables did not resolve is recorded as
+  `unresolved` and the build **refuses to publish** (`--dry-run` reports
+  without raising). It is never guessed.
+- **Byte-free** — sheet *names* are in the contract, sheet *bytes* never
+  are; the glTF and DDS live in artifacts beside it.
+
+**Not yet done**: the per-target projections (`targets/dolsharp`,
+`targets/opendaoc`), the glTF/JSON artifacts themselves, and the deployment
+path. Those are Phases 3-4 and need the OpenDAoC acceptance gate first —
+see `docs/next-steps.md`.
 
 ## Architecture decisions
 
@@ -69,7 +115,7 @@ product contract; run the commands above for the authoritative local result.
 Corpus tests skip without `DAOC_CLIENT`, and the web suite is run separately
 from `core/`.
 
-Dated V2 baseline (2026-09-24): 301 core tests passed and 4 failed. The
+Dated V2 baseline (2026-09-24): 326 core tests passed and 4 failed. The
 failures cover a changed `Boar_CATA` animation link, two legacy version
 expectations and one historical Ettin bbox golden; they require a separate
 data/test decision before being treated as regressions or as an accepted
@@ -171,17 +217,12 @@ response carries the clip's key-density rate. A `clamp` clip is a one-shot and
 the viewer holds its last frame instead of wrapping. Without `state` the
 route still serves the resolver's idle, so existing callers are unchanged.
 
-This is still a preview contract, not equipment support: a material is a
-*texture* family, and the client's per-item mesh **extension** (which of an
-item's variants is worn) and per-slot **dye** are not resolved. Both are
-server-side notions — the dye table does not exist in the client at all — and
-they belong to the Phase 2 appearance contract, not to the builder.
-
-This is a preview contract, not complete equipment or animation-state support.
-`pskins`/item/dye resolution and explicit animation-state selection remain
-open; the fixed default armour preview is unchanged. A successful route
-currently means a usable preview, not that every required mesh or texture is
-present.
+A successful route means a usable preview, not that every required mesh or
+texture is present. A material is a *texture* family; the client's per-item
+mesh **extension** (which of an item's variants is worn) and per-slot **dye**
+are not resolved. Both are server notions — the dye table does not exist in
+the client at all — and they belong to the Phase 2 appearance contract, not
+to the builder.
 
 One gamedata link is known to point at a clip authored on another rig: the
 male Troll (`tro_m`) resolves `Cat_troll_idle.kfa`, whose absolute

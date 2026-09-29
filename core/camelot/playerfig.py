@@ -250,3 +250,15 @@ def build(client_dir: str, desc: str, *, face: int = 1, hair_style: int = 1,
     if attached == 0:
         return None
     return data, textures
+
+
+# The client's playable race rows: `fig3descriptions.csv` ids 1..36, one pair
+# per race (male = 2k-1, female = 2k). The table also carries NPC rows
+# (Bainshee 37, the three Minotaur 61-63) and stale duplicates (189-200), so
+# "has a Face part" is not enough to mean "playable" — the ids are.
+PLAYABLE_RACE_IDS = tuple(range(1, 37))
+
+
+def is_playable(race_id: int) -> bool:
+    """True for the 18 playable races' 36 gender rows."""
+    return race_id in PLAYABLE_RACE_IDS

@@ -13,6 +13,8 @@ Commands:
                                   decompress one entry to stdout
   camelot mpak pack <out> <name> <file...>
                                   build an MPAK archive from files
+  camelot pack --out DIR          build the server content pack (manifest +
+                                  reports) from $DAOC_CLIENT
   camelot serve [--root DIR]      local daemon: asset library + viewer
 
 Paths in the manifest starting with ``DAOC CLIENT/`` are resolved against the
@@ -22,6 +24,7 @@ the env var and keeps those literal prefixes).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import tempfile
@@ -321,6 +324,93 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_pack(args) -> int:
+    """Build the server-facing content pack from a client corpus.
+
+    Reads the corpus through the format layer, resolves the appearance and
+    animation references the client's tables declare, and writes the
+    versioned manifest plus a validation report. The build is
+    reproducible: the same corpus produces the same bytes, so the
+    checksums in `checksums.lock` mean something. An unresolved reference
+    is reported and (unless `--dry-run`) refuses the build rather than
+    shipping a guess.
+    """
+    from . import pack as pack_mod
+
+    client = args.client or os.environ.get("DAOC_CLIENT")
+    if not client or not os.path.isdir(client):
+        print("pack: no client corpus (pass --client or set $DAOC_CLIENT)", file=sys.stderr)
+        return 2
+
+    started = time.time()
+    print(f"reading {client} ...", flush=True)
+    try:
+        manifest = pack_mod.build_player_pack(
+            client, pack_id=args.id, version=args.version,
+            material=args.material, with_states=not args.no_states,
+        )
+    except (OSError, ValueError, KeyError, IndexError) as exc:
+        print(f"pack: build failed: {exc}", file=sys.stderr)
+        return 1
+
+    states = sum(len(f.anim_states) for f in manifest.figures)
+    slots = sum(len(f.appearance) for f in manifest.figures)
+    print(
+        f"  {len(manifest.figures)} figures, {slots} appearance slots, {states} anim states",
+        flush=True,
+    )
+    report = manifest.validate(strict=False)
+    if not report.ok:
+        for ref in report.unresolved:
+            print(f"  UNRESOLVED {ref.ref}: {ref.reason}", file=sys.stderr)
+        for err in report.errors:
+            print(f"  ERROR {err}", file=sys.stderr)
+
+    reports = os.path.join(args.out, "reports")
+    os.makedirs(reports, exist_ok=True)
+    # `elapsed_seconds` lives only in the report: the manifest is hashed
+    # into checksums.lock, so a wall-clock field there would make every
+    # build differ from the last.
+    payload = {
+        "ok": report.ok,
+        "figures": len(manifest.figures),
+        "appearance_slots": slots,
+        "anim_states": states,
+        "unresolved": [u.to_dict() for u in report.unresolved],
+        "errors": report.errors,
+        "client_build": manifest.client_build,
+        "client_profile": manifest.client_profile,
+        "elapsed_seconds": round(time.time() - started, 2),
+    }
+    stable = {k: v for k, v in payload.items() if k != "elapsed_seconds"}
+    with open(os.path.join(reports, "validation.json"), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+    if not report.ok and not args.dry_run:
+        print("pack: refusing to publish a pack with unresolved references", file=sys.stderr)
+        return 1
+    if args.dry_run:
+        print("dry run: no manifest written")
+        return 0
+
+    os.makedirs(os.path.join(args.out, "manifest"), exist_ok=True)
+    manifest.artifacts = pack_mod.artifact_hashes({
+        os.path.join("reports", "validation.json"): (
+            json.dumps(stable, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8"),
+    })
+    # The manifest hashes the report, so the lock covers the whole build in
+    # one place.
+    with open(os.path.join(args.out, "manifest", "content.json"), "wb") as fh:
+        fh.write(manifest.to_bytes())
+    lock_lines = [f"{d}  {n}" for n, d in sorted(manifest.artifacts.items())]
+    with open(os.path.join(args.out, "checksums.lock"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lock_lines) + "\n")
+    print(f"wrote {args.out}/manifest/content.json")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="camelot",
@@ -382,6 +472,16 @@ def main(argv=None) -> int:
     pp.add_argument("name", help="internal archive name")
     pp.add_argument("files", nargs="+")
     p.set_defaults(func=cmd_mpak)
+
+    p = sub.add_parser("pack", help="build the server content pack")
+    p.add_argument("--client", help="client corpus (default: $DAOC_CLIENT)")
+    p.add_argument("--out", required=True, help="output pack directory")
+    p.add_argument("--id", default="daoc.studio", help="pack id")
+    p.add_argument("--version", default="0.1.0", help="pack version")
+    p.add_argument("--material", help="pskins material to describe (default: first family)")
+    p.add_argument("--no-states", action="store_true", help="skip the anim sets")
+    p.add_argument("--dry-run", action="store_true", help="report only, write no manifest")
+    p.set_defaults(func=cmd_pack)
 
     p = sub.add_parser("serve", help="local daemon: asset library + viewer")
     p.add_argument("--root", help="client directory (default: $DAOC_CLIENT)")
