@@ -85,3 +85,56 @@ def test_pack_fails_without_a_client(tmp_path):
         "--id", "p", "--version", "1",
     ])
     assert code != 0
+
+
+def test_contract_accepts_a_user_supplied_figure(client_dir, tmp_path):
+    """The authoring path: a user adds their own content to the contract
+    with `--add-figure`, and it lands beside the built-in rows with its own
+    logical id and no renumbering."""
+    from camelot.cli import main
+
+    out = tmp_path / "pack"
+    code = main([
+        "contract", "--client", str(client_dir), "--out", str(out),
+        "--id", "p", "--version", "1", "--no-states", "--no-artifacts",
+        "--add-figure", "daoc.custom.broken_sword:object:broken_sword",
+    ])
+    assert code == 0
+    doc = json.loads((out / "manifest" / "content.json").read_text())
+    ids = [f["logical_id"] for f in doc["figures"]]
+    assert "daoc.custom.broken_sword" in ids
+    assert len(ids) == 37
+    assert "daoc.player.tro_m" in ids, "the built-in rows survived"
+
+
+def test_contract_rejects_a_malformed_add_figure(client_dir, tmp_path):
+    from camelot.cli import main
+
+    code = main([
+        "contract", "--client", str(client_dir), "--out", str(tmp_path / "p"),
+        "--id", "p", "--version", "1", "--no-states", "--no-artifacts",
+        "--add-figure", "not-namespaced",
+    ])
+    assert code != 0
+
+
+def test_contract_can_emit_artifacts(client_dir, tmp_path):
+    from camelot.cli import main
+
+    out = tmp_path / "pack"
+    code = main([
+        "contract", "--client", str(client_dir), "--out", str(out),
+        "--id", "p", "--version", "1", "--no-states",
+        "--figures", "2",  # just Briton female, to keep the test quick
+    ])
+    assert code == 0
+    doc = json.loads((out / "manifest" / "content.json").read_text())
+    glbs = {n: d for n, d in doc["artifacts"].items() if n.endswith(".glb")}
+    assert glbs, "no glTF artifact was hashed"
+    lock = (out / "checksums.lock").read_text()
+    for name, digest in glbs.items():
+        assert name in lock and digest in lock
+        assert (out / name).read_bytes()[:4] == b"glTF", name
+    # the figure points at its own artifact
+    figure = next(f for f in doc["figures"] if f["figure_id"] == 2)
+    assert figure["artifacts"]["model"].endswith(".glb")

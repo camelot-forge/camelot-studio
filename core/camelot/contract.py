@@ -142,6 +142,14 @@ class Figure:
     #: Provenance: the packed archive the bytes came from and their hash.
     archive: str | None = None
     archive_sha256: str | None = None
+    #: Pack-relative artifact paths by role, e.g. {"model": "artifacts/x.glb"}.
+    _artifacts: dict[str, str] = field(default_factory=dict, repr=False)
+
+    def artifact_for(self, kind: str) -> str | None:
+        return self._artifacts.get(kind)
+
+    def link_artifact(self, kind: str, rel: str) -> None:
+        self._artifacts[kind] = rel
 
     def to_dict(self) -> dict:
         return {
@@ -156,6 +164,7 @@ class Figure:
             "anim_states": [s.to_dict() for s in self.anim_states],
             "archive": self.archive,
             "archive_sha256": self.archive_sha256,
+            "artifacts": dict(sorted(self._artifacts.items())),
         }
 
 
@@ -400,3 +409,91 @@ def build_player_manifest(
         ))
         manifest.unresolved.extend(unresolved)
     return manifest
+
+
+# --- artifacts: turning the description into loadable content ---------------
+
+#: What a figure's artifacts are: the logical role, the file suffix, and
+#: whether the export needs the appearance glued on.
+_ARTIFACT_KINDS = {"model": ".glb"}
+
+
+def emit_artifacts(
+    client_dir: str, manifest: Manifest, out_dir: str, *, kinds=("model",)
+) -> list[str]:
+    """Write the content each figure describes, and hash it into the pack.
+
+    This is the step that turns an inventory into a pack: without it the
+    manifest names files that exist only in the retail client. Every file
+    written is registered in :attr:`Manifest.artifacts` so the manifest and
+    the bytes are verifiable as a pair.
+
+    Returns the artifact paths, relative to ``out_dir``.
+    """
+    import hashlib
+    import json
+
+    from .glb import pack_glb
+    from .gltf import export_gltf
+    from .playerfig import build as build_figure
+
+    written: list[str] = []
+    for figure in manifest.figures:
+        if figure.kind != "player":
+            continue
+        desc = figure.name
+        if desc is None:
+            continue
+        for kind in kinds:
+            suffix = _ARTIFACT_KINDS.get(kind)
+            if suffix is None:
+                continue
+            try:
+                prepared = build_figure(client_dir, desc)
+            except (OSError, ValueError, KeyError, IndexError, AttributeError):
+                manifest.unresolved.append(Unresolved(
+                    ref=f"{figure.logical_id}:{kind}",
+                    reason="figure did not assemble",
+                ))
+                continue
+            if prepared is None:
+                manifest.unresolved.append(Unresolved(
+                    ref=f"{figure.logical_id}:{kind}", reason="no fig3 coverage",
+                ))
+                continue
+            data, textures = prepared
+            os.makedirs(os.path.join(out_dir, "artifacts"), exist_ok=True)
+            prefix = os.path.join(out_dir, "artifacts", f"{figure.logical_id}")
+            try:
+                export_gltf(
+                    f"{figure.logical_id}.nif", prefix, data=data,
+                    textures=textures, emit_skinned=True,
+                )
+            except (OSError, ValueError, KeyError, IndexError) as exc:
+                manifest.unresolved.append(Unresolved(
+                    ref=f"{figure.logical_id}:{kind}", reason=f"export failed: {exc}",
+                ))
+                continue
+            # export_gltf writes .gltf + .bin; the pack ships the packed GLB
+            # so a consumer needs no glTF loader split.
+            gltf_path, bin_path = prefix + ".gltf", prefix + ".bin"
+            if not (os.path.exists(gltf_path) and os.path.exists(bin_path)):
+                manifest.unresolved.append(Unresolved(
+                    ref=f"{figure.logical_id}:{kind}", reason="export produced no glTF",
+                ))
+                continue
+            with open(gltf_path, encoding="utf-8") as fh:
+                gltf_doc = json.load(fh)
+            with open(bin_path, "rb") as fh:
+                gltf_bin = fh.read()
+            rel = f"artifacts/{figure.logical_id}{suffix}"
+            with open(os.path.join(out_dir, rel), "wb") as fh:
+                fh.write(pack_glb(gltf_doc, gltf_bin))
+            for leftover in (gltf_path, bin_path, prefix + ".skin.json"):
+                if os.path.exists(leftover):
+                    os.remove(leftover)
+            with open(os.path.join(out_dir, rel), "rb") as fh:
+                manifest.artifacts[rel] = hashlib.sha256(fh.read()).hexdigest()
+            figure.link_artifact(kind, rel)
+            written.append(rel)
+    return written

@@ -253,3 +253,123 @@ def test_pack_exposes_a_tinted_variant_of_the_same_slots(client_dir):
     body = next(s for s in briton.appearance if s.slot == "Body")
     assert body.sheet == "b_plt1_body1f.tga"
     assert body.gamedata_key == "pskins:Plate:Body"
+
+
+# --- artifacts: the contract must point at real, loadable content ----------
+
+@pytest.mark.usefixtures("client_dir")
+def test_contract_can_emit_the_gltf_artifact_of_each_figure(client_dir, tmp_path):
+    """A description alone is not a pack. With artifacts on, every figure
+    gets a real GLB beside the manifest and the manifest hashes it — that is
+    what makes the two verifiable as a pair."""
+    from camelot import contract
+
+    manifest = contract.build_player_manifest(
+        client_dir, pack_id="p", version="1", with_states=False,
+    )
+    out = contract.emit_artifacts(client_dir, manifest, tmp_path)
+    assert out, "no artifact was written"
+    for figure in manifest.figures:
+        rel = figure.artifact_for("model")
+        assert rel, f"{figure.logical_id} has no model artifact"
+        path = tmp_path / rel
+        assert path.exists(), path
+        assert path.stat().st_size > 1024
+        assert path.read_bytes()[:4] == b"glTF", "not a GLB"
+
+
+@pytest.mark.usefixtures("client_dir")
+def test_artifacts_are_hashed_into_the_manifest(client_dir, tmp_path):
+    from camelot import contract
+
+    manifest = contract.build_player_manifest(
+        client_dir, pack_id="p", version="1", with_states=False,
+    )
+    contract.emit_artifacts(client_dir, manifest, tmp_path)
+    assert manifest.artifacts
+    for name, digest in manifest.artifacts.items():
+        assert (tmp_path / name).exists()
+        import hashlib
+        assert hashlib.sha256((tmp_path / name).read_bytes()).hexdigest() == digest
+
+
+@pytest.mark.usefixtures("client_dir")
+def test_artifacts_are_reproducible(client_dir, tmp_path):
+    """Two builds of the same corpus must produce byte-identical GLBs, or
+    the checksums are noise."""
+    from camelot import contract
+
+    def build(out):
+        m = contract.build_player_manifest(
+            client_dir, pack_id="p", version="1", with_states=False,
+        )
+        contract.emit_artifacts(client_dir, m, out)
+        return m
+
+    first, second = build(tmp_path / "a"), build(tmp_path / "b")
+    assert first.to_bytes() == second.to_bytes()
+    rel = first.figures[0].artifact_for("model")
+    assert (tmp_path / "a" / rel).read_bytes() == (tmp_path / "b" / rel).read_bytes()
+
+
+# --- authoring: adding content the client does not ship --------------------
+
+def test_a_figure_can_be_declared_without_a_client_row():
+    """The point of a custom pack: content the stock client has no row for.
+    It is described the same way as a built-in figure, so a target adapter
+    cannot tell them apart and needs no special case."""
+    from camelot import contract
+
+    manifest = contract.Manifest(pack_id="p", version="1")
+    manifest.figures.append(contract.Figure(
+        logical_id="daoc.custom.broken_sword",
+        figure_id=0, kind="object", name="Broken Sword", rig=None,
+    ))
+    # strict is the default: a figure the client cannot back must not
+    # publish. strict=False is how a dry run reports it instead.
+    with pytest.raises(contract.UnresolvedReferenceError):
+        manifest.validate()
+    report = manifest.validate(strict=False)
+    assert report.ok is False
+    assert any("no rig resolved" in e for e in report.errors)
+
+
+def test_a_custom_figure_can_name_its_own_artifact():
+    from camelot import contract
+
+    fig = contract.Figure(
+        logical_id="daoc.custom.broken_sword", figure_id=0, kind="object",
+    )
+    fig.link_artifact("model", "artifacts/broken_sword.glb")
+    assert fig.artifact_for("model") == "artifacts/broken_sword.glb"
+    assert fig.to_dict()["artifacts"]["model"] == "artifacts/broken_sword.glb"
+
+
+def test_a_custom_manifest_validates_when_its_artifacts_are_named():
+    from camelot import contract
+
+    manifest = contract.Manifest(pack_id="p", version="1")
+    fig = contract.Figure(
+        logical_id="daoc.custom.broken_sword", figure_id=0, kind="object",
+        rig="broken_sword",
+    )
+    fig.link_artifact("model", "artifacts/broken_sword.glb")
+    manifest.figures.append(fig)
+    manifest.artifacts["artifacts/broken_sword.glb"] = "b" * 64
+    assert manifest.validate().ok
+
+
+def test_adding_a_figure_does_not_renumber_the_builtin_ones(client_dir):
+    """Ids must stay stable: a server may already have persisted them."""
+    from camelot import contract
+
+    before = contract.build_player_manifest(
+        client_dir, pack_id="p", version="1", with_states=False,
+    )
+    ids_before = {f.logical_id: f.figure_id for f in before.figures}
+    before.figures.append(contract.Figure(
+        logical_id="daoc.custom.mine", figure_id=9999, kind="object", rig="mine",
+    ))
+    after = {f.logical_id: f.figure_id for f in before.figures}
+    for key, value in ids_before.items():
+        assert after[key] == value

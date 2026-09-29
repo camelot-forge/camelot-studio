@@ -353,6 +353,34 @@ def cmd_pack(args) -> int:
         print(f"contract: build failed: {exc}", file=sys.stderr)
         return 1
 
+    # A user may add content the stock client has no row for. Their figures
+    # are appended, never renumbered: a server may already have persisted
+    # the built-in ids.
+    for spec in args.add_figure or []:
+        parts = spec.split(":")
+        if len(parts) < 3:
+            print(f"contract: bad --add-figure {spec!r}, want id:kind:rig", file=sys.stderr)
+            return 2
+        logical_id, kind, rig = parts[0], parts[1], parts[2]
+        try:
+            manifest.figures.append(contract_mod.Figure(
+                logical_id=logical_id, figure_id=int(parts[3]) if len(parts) > 3 else 0,
+                kind=kind, rig=rig or None,
+            ))
+        except ValueError as exc:
+            print(f"contract: --add-figure {spec!r}: {exc}", file=sys.stderr)
+            return 2
+    if args.figures:
+        # A deliberate restriction is a note, not an unresolved reference:
+        # only a reference the client could not answer may block publication.
+        keep = set(args.figures)
+        dropped = [f.logical_id for f in manifest.figures if f.figure_id not in keep]
+        manifest.figures = [f for f in manifest.figures if f.figure_id in keep]
+        if dropped:
+            manifest.notes.append(
+                f"restricted to fig3 rows {sorted(keep)}; omitted {len(dropped)} rows"
+            )
+
     states = sum(len(f.anim_states) for f in manifest.figures)
     slots = sum(len(f.appearance) for f in manifest.figures)
     print(
@@ -394,12 +422,25 @@ def cmd_pack(args) -> int:
         print("dry run: no manifest written")
         return 0
 
+    if not args.no_artifacts:
+        print("exporting glTF artifacts ...", flush=True)
+        try:
+            contract_mod.emit_artifacts(client, manifest, args.out)
+        except (OSError, ValueError, KeyError, IndexError) as exc:
+            print(f"contract: artifact export failed: {exc}", file=sys.stderr)
+            return 1
+        for ref in manifest.unresolved:
+            print(f"  UNRESOLVED {ref.ref}: {ref.reason}", file=sys.stderr)
+
     os.makedirs(os.path.join(args.out, "manifest"), exist_ok=True)
-    manifest.artifacts = contract_mod.artifact_hashes({
+    # Merge, never replace: emit_artifacts has already hashed the content
+    # files, and overwriting here would leave the lock covering only the
+    # report while the manifest claims to pin the GLBs.
+    manifest.artifacts.update(contract_mod.artifact_hashes({
         os.path.join("reports", "validation.json"): (
             json.dumps(stable, indent=2, sort_keys=True) + "\n"
         ).encode("utf-8"),
-    })
+    }))
     # The manifest hashes the report, so the lock covers the whole build in
     # one place.
     with open(os.path.join(args.out, "manifest", "content.json"), "wb") as fh:
@@ -480,6 +521,12 @@ def main(argv=None) -> int:
     p.add_argument("--version", default="0.1.0", help="pack version")
     p.add_argument("--material", help="pskins material to describe (default: first family)")
     p.add_argument("--no-states", action="store_true", help="skip the anim sets")
+    p.add_argument("--no-artifacts", action="store_true",
+                   help="describe only, emit no glTF")
+    p.add_argument("--figures", type=int, nargs="*", metavar="ID",
+                   help="restrict to these fig3 row ids (default: all 36)")
+    p.add_argument("--add-figure", action="append", metavar="ID:KIND:RIG[:ROWID]",
+                   help="add a custom figure, e.g. daoc.custom.sword:object:sword")
     p.add_argument("--dry-run", action="store_true", help="report only, write no manifest")
     p.set_defaults(func=cmd_pack)
 

@@ -16,7 +16,7 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot roundtrip <f>` | read → write → read (multiset compare; legacy 4.x = N/A) |
 | `camelot batch <manifest> --out <report> [--read-only] [--limit N]` | bulk validation, live progress; `$DAOC_CLIENT` rewrites `DAOC CLIENT/...` manifest paths |
 | `camelot mpak list <archive>` / `get <archive> <entry>` / `pack <out> <name> <files…>` | MPAK reader/writer (`.mpk`/`.npk`) |
-| `camelot contract --out DIR [--id ID] [--version V] [--material M] [--dry-run]` | build the server content **contract**: versioned manifest, validation report, checksums lock |
+| `camelot contract --out DIR [--id ID] [--version V] [--material M] [--figures ID…] [--add-figure ID:KIND:RIG[:ROW]] [--no-states] [--no-artifacts] [--dry-run]` | build the server content **contract**: versioned manifest, glTF artifacts, validation report, checksums lock |
 | `camelot serve [--root DIR] [--port N] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn) |
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
@@ -40,12 +40,15 @@ DAOC_CLIENT="…/DAOC CLIENT V2" .venv/bin/camelot contract --out ./pack \
 ```text
 pack/
   manifest/content.json     the contract (schema 1.0.0)
+  artifacts/<id>.glb        the content itself, one packed GLB per figure
   reports/validation.json   what resolved, what did not, and the timings
   checksums.lock            SHA-256 per artifact
 ```
 
 Against the V2 corpus: **36 figures, 324 appearance slots, 5958 animation
-states, 0 unresolved**, in ~4.5 s, byte-identical on rebuild.
+states, 36 GLB artifacts, 0 unresolved**, 42 MB, ~31 s, byte-identical on
+rebuild. The GLBs are the *only* Studio-authored bytes in the pack; the
+client's own NIF/DDS are never copied.
 
 **The contract** carries namespaced logical ids (`daoc.player.tro_m`), the
 rig, per-slot appearance (piece, sheet, engine tint, `fig3parts` Double Sided
@@ -66,16 +69,21 @@ Three properties are enforced by tests rather than convention:
 - **Byte-free** — sheet *names* are in the contract, sheet *bytes* never
   are; the glTF and DDS live in artifacts beside it.
 
-**What this is not**: a deployable content pack. The contract is an
-*inventory* — names and gamedata keys, no glTF, no DDS, no archive, nothing
-a client or a server can load. The name is `contract` rather than `pack`
-precisely so that gap stays visible. Getting to a real pack needs, in
-order: the glTF/JSON artifacts, a path to add a user's own content, a
-per-target projection, and archive assembly.
+**Adding your own content**: `--add-figure daoc.custom.sword:object:sword`
+appends a figure the stock client has no row for. It lands beside the
+built-in rows with its own logical id and **never renumbers them** — a server
+may already have persisted those ids. `--figures 2 13` restricts the build
+to specific fig3 rows (a note in the manifest, not an unresolved reference:
+a deliberate restriction is not a missing answer).
 
-**Not yet done**: those four steps, plus the deployment path. The per-target
-projections need the OpenDAoC acceptance gate first — see
-`docs/next-steps.md`.
+**What this is not yet**: an *installable* pack. The GLBs are Studio-authored
+glTF, not the client's own NIF/DDS, so a stock client cannot load them
+directly — deployment needs a target projection plus a client patch
+manifest, which is Phase 3 step 4 and Phase 4. The name is `contract` rather
+than `pack` for exactly that reason.
+
+**Not yet done**: the per-target projections (DOLSharp, OpenDAoC) and archive
+assembly. Both need the OpenDAoC acceptance gate — see `docs/next-steps.md`.
 
 ## Architecture decisions
 
