@@ -329,7 +329,7 @@ def _player_appearance(
     return slots, unresolved
 
 
-def build_player_pack(
+def build_player_manifest(
     client_dir: str, *, pack_id: str, version: str,
     material: str | None = None, with_states: bool = True,
 ) -> Manifest:

@@ -16,7 +16,7 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot roundtrip <f>` | read → write → read (multiset compare; legacy 4.x = N/A) |
 | `camelot batch <manifest> --out <report> [--read-only] [--limit N]` | bulk validation, live progress; `$DAOC_CLIENT` rewrites `DAOC CLIENT/...` manifest paths |
 | `camelot mpak list <archive>` / `get <archive> <entry>` / `pack <out> <name> <files…>` | MPAK reader/writer (`.mpk`/`.npk`) |
-| `camelot pack --out DIR [--id ID] [--version V] [--material M] [--dry-run]` | build the server content pack: versioned manifest, validation report, checksums lock |
+| `camelot contract --out DIR [--id ID] [--version V] [--material M] [--dry-run]` | build the server content **contract**: versioned manifest, validation report, checksums lock |
 | `camelot serve [--root DIR] [--port N] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn) |
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
@@ -26,14 +26,14 @@ inside pyffi — see `formats.md` §7). Re-run and version the report against
 `core/camelot/legacy.py` reads the retained NetImmerse 4.x mesh corpus
 (read-only; a 4.x writer is not implemented).
 
-## Server content pack (Phases 2-3, first cut)
+## Server content contract (Phases 2-3, first cut)
 
-`camelot pack` reads the client corpus and emits the **server-neutral
+`camelot contract` reads the client corpus and emits the **server-neutral
 contract** the roadmap asks for. It is an offline, reproducible build — no
 daemon, no server, no proprietary bytes in the output.
 
 ```sh
-DAOC_CLIENT="…/DAOC CLIENT V2" .venv/bin/camelot pack --out ./pack \
+DAOC_CLIENT="…/DAOC CLIENT V2" .venv/bin/camelot contract --out ./pack \
   --id daoc.studio --version 0.1.0
 ```
 
@@ -66,10 +66,16 @@ Three properties are enforced by tests rather than convention:
 - **Byte-free** — sheet *names* are in the contract, sheet *bytes* never
   are; the glTF and DDS live in artifacts beside it.
 
-**Not yet done**: the per-target projections (`targets/dolsharp`,
-`targets/opendaoc`), the glTF/JSON artifacts themselves, and the deployment
-path. Those are Phases 3-4 and need the OpenDAoC acceptance gate first —
-see `docs/next-steps.md`.
+**What this is not**: a deployable content pack. The contract is an
+*inventory* — names and gamedata keys, no glTF, no DDS, no archive, nothing
+a client or a server can load. The name is `contract` rather than `pack`
+precisely so that gap stays visible. Getting to a real pack needs, in
+order: the glTF/JSON artifacts, a path to add a user's own content, a
+per-target projection, and archive assembly.
+
+**Not yet done**: those four steps, plus the deployment path. The per-target
+projections need the OpenDAoC acceptance gate first — see
+`docs/next-steps.md`.
 
 ## Architecture decisions
 

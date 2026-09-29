@@ -280,7 +280,7 @@ describe, without embedding proprietary client binaries:
 Each server target should consume this contract through a small adapter. The
 adapters must not reimplement client table or fig3 semantics.
 
-**Delivered (2026-09-24) as `core/camelot/pack.py`, schema `1.0.0`.** The
+**Delivered (2026-09-24) as `core/camelot/contract.py`, schema `1.0.0`.** The
 manifest covers the fields above except the per-item extension and the dye,
 which cannot exist yet: both are server concepts (the dye table is not in
 the client at all). Covered today: logical ids, figure/rig ids, appearance
@@ -318,7 +318,7 @@ Implement an offline packaging command or module that:
 
 The initial target is a locally generated content pack, not a hosted service.
 
-**Delivered (2026-09-24)**: `camelot pack --out DIR` does steps 1, 2, 3
+**Delivered (2026-09-24)**: `camelot contract --out DIR` does steps 1, 2, 3
 (manifests + reports), 5 and 6 — it reads `$DAOC_CLIENT`, resolves the
 references, writes `manifest/content.json` + `reports/validation.json` +
 `checksums.lock`, refuses to publish on an unresolved reference, and records

@@ -13,8 +13,8 @@ Commands:
                                   decompress one entry to stdout
   camelot mpak pack <out> <name> <file...>
                                   build an MPAK archive from files
-  camelot pack --out DIR          build the server content pack (manifest +
-                                  reports) from $DAOC_CLIENT
+  camelot contract --out DIR      build the server content contract (manifest
+                                  + reports + checksums) from $DAOC_CLIENT
   camelot serve [--root DIR]      local daemon: asset library + viewer
 
 Paths in the manifest starting with ``DAOC CLIENT/`` are resolved against the
@@ -335,22 +335,22 @@ def cmd_pack(args) -> int:
     is reported and (unless `--dry-run`) refuses the build rather than
     shipping a guess.
     """
-    from . import pack as pack_mod
+    from . import contract as contract_mod
 
     client = args.client or os.environ.get("DAOC_CLIENT")
     if not client or not os.path.isdir(client):
-        print("pack: no client corpus (pass --client or set $DAOC_CLIENT)", file=sys.stderr)
+        print("contract: no client corpus (pass --client or set $DAOC_CLIENT)", file=sys.stderr)
         return 2
 
     started = time.time()
     print(f"reading {client} ...", flush=True)
     try:
-        manifest = pack_mod.build_player_pack(
+        manifest = contract_mod.build_player_manifest(
             client, pack_id=args.id, version=args.version,
             material=args.material, with_states=not args.no_states,
         )
     except (OSError, ValueError, KeyError, IndexError) as exc:
-        print(f"pack: build failed: {exc}", file=sys.stderr)
+        print(f"contract: build failed: {exc}", file=sys.stderr)
         return 1
 
     states = sum(len(f.anim_states) for f in manifest.figures)
@@ -388,14 +388,14 @@ def cmd_pack(args) -> int:
         fh.write("\n")
 
     if not report.ok and not args.dry_run:
-        print("pack: refusing to publish a pack with unresolved references", file=sys.stderr)
+        print("contract: refusing to publish with unresolved references", file=sys.stderr)
         return 1
     if args.dry_run:
         print("dry run: no manifest written")
         return 0
 
     os.makedirs(os.path.join(args.out, "manifest"), exist_ok=True)
-    manifest.artifacts = pack_mod.artifact_hashes({
+    manifest.artifacts = contract_mod.artifact_hashes({
         os.path.join("reports", "validation.json"): (
             json.dumps(stable, indent=2, sort_keys=True) + "\n"
         ).encode("utf-8"),
@@ -473,7 +473,7 @@ def main(argv=None) -> int:
     pp.add_argument("files", nargs="+")
     p.set_defaults(func=cmd_mpak)
 
-    p = sub.add_parser("pack", help="build the server content pack")
+    p = sub.add_parser("contract", help="build the server content contract")
     p.add_argument("--client", help="client corpus (default: $DAOC_CLIENT)")
     p.add_argument("--out", required=True, help="output pack directory")
     p.add_argument("--id", default="daoc.studio", help="pack id")
