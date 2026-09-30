@@ -168,6 +168,37 @@ The first OpenDAoC adapter acceptance gate is therefore:
 6. use a pinned image and reproducible deployment metadata rather than
    `latest` for acceptance tests.
 
+**Gate status 2026-09-30 — the server side passes, the client side cannot
+run here.** Measured, in `workspace/notes`:
+
+- the server builds, starts and serves: 0 build errors, MariaDB with 110
+  tables and 34 545 `itemtemplate` rows, listening on 10300 with real
+  script compilation. The missing `serverconfig.xml` blocker is cleared;
+- three documentation corrections: the data path is **SQL/MariaDB, not
+  XML** (the audit's XML-package concern is obsolete), the compose file
+  publishes **no port for the database** (a host-run server fails on every
+  query while the config looks right), and the project targets **1.65**
+  data, not the current client;
+- the documented version gate is a red herring: `client_version_min/max`
+  are both `-1` ("any") and never fire. The real gate is the packet-lib
+  registry, matched by **exact equality**, topping out at 1129 while a
+  1.130 client would send 1130;
+- **a retail client cannot connect directly.** It must go through
+  `connect.exe`, a memory patcher .NET that the OpenDAoC client ships;
+  pointing `login.dat` at port 10300 deadlocks, because that port is a
+  *game* port and the retail flow expects a *login server*.
+
+The appearance test is therefore **not executed**, and no client-side
+return is assumed anywhere in the pipeline. The projection data it would
+have confirmed is already extracted and testable without a client: the
+server's `race` ids (1..18 playable) and `itemtemplate.Model`/
+`Item_Type`, with a two-entry name-normalisation table (`Norse` ->
+`Norseman`, `Half Ogre` -> `HalfOgre`).
+
+A testable client run is a **packaging** deliverable, not a prerequisite:
+it needs a Linux x86-64 host with the 1.127 client and the documented
+`connect.exe` command line, not a developer workstation.
+
 The official 1.127 client statement and 1.65 database baseline are not, by
 themselves, proof that every asset and appearance mapping is compatible. That
 compatibility is an explicit audit result, not an assumption.
