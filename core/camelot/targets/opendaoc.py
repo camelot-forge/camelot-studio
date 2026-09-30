@@ -1,0 +1,204 @@
+"""OpenDAoC projection.
+
+Everything here comes from the server's own source and tables, not from
+guesswork:
+
+- ``RACE_IDS`` is the ``race`` table read from the OpenDAoC database: the
+  18 playable races numbered 1..18, the three Minotaurs 19..21 (not
+  playable, so not projected).
+- ``SERVER_RACE_NAMES`` normalises the two races the client spells
+  differently from the server: ``fig3descriptions.csv`` says ``Norse`` and
+  ``Half Ogre`` where the server's table says ``Norseman`` and ``HalfOgre``.
+  Matching on the client's spelling alone would silently drop two of the
+  eighteen races.
+- The wire format is the one ``CharacterCreateRequestHandler`` reads:
+  ``Race = byte & 0x1F``, ``Gender = (byte >> 7) & 1``, then
+  ``CreationModel = packet.ReadShortLowEndian()``.
+- ``CreationModel`` is a **bitfield, not a plain id**: the handler reads the
+  body size as ``(CreationModel >> 11) & 3`` and autobans a player whose
+  size is zero.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+__all__ = [
+    "DEFAULT_MODEL_FIELDS",
+    "RACE_IDS",
+    "SERVER_RACE_NAMES",
+    "OpendaocFigure",
+    "pack_model",
+    "pack_race_gender",
+    "project",
+    "server_race_name",
+    "unpack_gender",
+    "unpack_model_size",
+    "unpack_race",
+]
+
+#: The server's `race` table (read from the OpenDAoC database). 1..18 are
+#: the playable races; 19..21 are Minotaurs, which no player figure maps to.
+RACE_IDS = {
+    "briton": 1, "avalonian": 2, "highlander": 3, "saracen": 4,
+    "norseman": 5, "troll": 6, "dwarf": 7, "kobold": 8, "celt": 9,
+    "firbolg": 10, "elf": 11, "lurikeen": 12, "inconnu": 13,
+    "valkyn": 14, "sylvan": 15, "halforge": 16, "frostalf": 17,
+    "shar": 18,
+}
+
+#: How the server's `race` table spells each race, keyed by the server name.
+SERVER_RACE_NAMES = {
+    "briton": "Briton", "avalonian": "Avalonian", "highlander": "Highlander",
+    "saracen": "Saracen", "norseman": "Norseman", "troll": "Troll",
+    "dwarf": "Dwarf", "kobold": "Kobold", "celt": "Celt",
+    "firbolg": "Firbolg", "elf": "Elf", "lurikeen": "Lurikeen",
+    "inconnu": "Inconnu", "valkyn": "Valkyn", "sylvan": "Sylvan",
+    "halforge": "HalfOgre", "frostalf": "Frostalf", "shar": "Shar",
+}
+
+#: Client spellings that differ from the server's. `fig3descriptions.csv`
+#: says "Norse" and "Half Ogre"; the server says "Norseman" and "HalfOgre".
+CLIENT_SPELLING_ALIASES = {
+    "norse": "Norseman",
+    "norseman": "Norseman",
+    "half ogre": "HalfOgre",
+    "halfogre": "HalfOgre",
+    "halforge": "HalfOgre",
+}
+
+#: Model sub-fields other than size. The client sends them per character;
+#: the projection carries neutral defaults because the contract does not
+#: describe them yet (see `next-steps.md`, extension and dye).
+DEFAULT_MODEL_FIELDS = {
+    "skin": -1,
+    "hair": -1,
+    "face": -1,
+    "hair_color": -1,
+    "eye_color": -1,
+}
+
+#: A player's body size, from the client's creation screen (1..3).
+DEFAULT_SIZE = 1
+
+# Bit layout of the model word, from the server's decoder.
+_SIZE_SHIFT = 11
+_SIZE_MASK = 0b11
+_SKIN_MASK = 0b111_1111_11  # bits 2..10
+_HAIR_MASK = 0b11          # bits 0..1
+
+
+def _race_key(name: str) -> str:
+    """Normalise a race name from either side to the server's key."""
+    cleaned = (name or "").strip()
+    if cleaned.lower() in SERVER_RACE_NAMES:
+        return cleaned.lower()
+    if cleaned.lower() in CLIENT_SPELLING_ALIASES:
+        return SERVER_RACE_NAMES_INDEX[CLIENT_SPELLING_ALIASES[cleaned.lower()].lower()]
+    raise KeyError(
+        f"race {name!r} is not in the OpenDAoC race table; "
+        f"known: {sorted(SERVER_RACE_NAMES)}"
+    )
+
+
+#: Server name -> key, so an alias can hop to it in one step.
+SERVER_RACE_NAMES_INDEX = {v.lower(): k for k, v in SERVER_RACE_NAMES.items()}
+
+
+def server_race_name(name: str) -> str:
+    """The server's own spelling of a race, from the client's if needed."""
+    return SERVER_RACE_NAMES[_race_key(name)]
+
+
+def pack_race_gender(race: int, female: bool) -> int:
+    """The byte the client sends: race in the low five bits, gender in bit 7.
+
+    ``CharacterCreateRequestHandler`` reads ``Race = byte & 0x1F`` and
+    ``Gender = (byte >> 7) & 1``, so a race above 31 cannot be expressed
+    and is refused rather than truncated.
+    """
+    if not 0 <= race <= 0x1F:
+        raise ValueError(f"race {race} does not fit in the five wire bits")
+    return (race & 0x1F) | (0x80 if female else 0)
+
+
+def unpack_race(byte: int) -> int:
+    return byte & 0x1F
+
+
+def unpack_gender(byte: int) -> bool:
+    return bool((byte >> 7) & 0x01)
+
+
+def pack_model(size: int = DEFAULT_SIZE, **fields) -> int:
+    """The 16-bit model word, packed the way the client's creation packet is.
+
+    The size lives in bits 11-12 because the server reads it as
+    ``(CreationModel >> 11) & 3`` and **autobans** a size of zero, so a zero
+    size is refused here rather than shipped.
+    """
+    if not 1 <= size <= 3:
+        raise ValueError(f"body size {size} would be autobanned by the server")
+    word = (size & _SIZE_MASK) << _SIZE_SHIFT
+    skin = int(fields.get("skin", DEFAULT_MODEL_FIELDS["skin"]))
+    hair = int(fields.get("hair", DEFAULT_MODEL_FIELDS["hair"]))
+    if skin >= 0:
+        word |= (skin & _SKIN_MASK) << 2
+    if hair >= 0:
+        word |= hair & _HAIR_MASK
+    return word & 0xFFFF
+
+
+def unpack_model_size(word: int) -> int:
+    return (word >> _SIZE_SHIFT) & _SIZE_MASK
+
+
+@dataclass
+class OpendaocFigure:
+    """One contract figure, expressed in the server's vocabulary."""
+
+    logical_id: str
+    race: str
+    race_id: int
+    gender: int          # 0 = male, 1 = female, as the server stores it
+    race_gender: int     # the packed wire byte
+    model: int           # the packed model word
+    rig: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "logical_id": self.logical_id,
+            "race": self.race,
+            "race_id": self.race_id,
+            "gender": self.gender,
+            "race_gender": self.race_gender,
+            "model": self.model,
+            "rig": self.rig,
+        }
+
+
+def project(figure) -> OpendaocFigure:
+    """Map a contract :class:`~camelot.contract.Figure` onto the server.
+
+    The figure's name is the client's spelling ("Norse Male"), so the race
+    is taken from it after normalisation. An unknown race raises rather
+    than defaulting: a projection that guessed would create characters on
+    the wrong race, and the failure would only show up in-game.
+    """
+    if figure.kind != "player":
+        raise KeyError(f"{figure.logical_id}: only player figures project")
+    name = figure.name or ""
+    # "Troll Male" / "Half Ogre Female" -> the race part
+    parts = name.split()
+    race_part = " ".join(parts[:-1]) if len(parts) > 1 else parts[0]
+    race = server_race_name(race_part)
+    race_id = RACE_IDS[_race_key(race_part)]
+    female = bool(figure.female)
+    return OpendaocFigure(
+        logical_id=figure.logical_id,
+        race=race,
+        race_id=race_id,
+        gender=1 if female else 0,
+        race_gender=pack_race_gender(race_id, female),
+        model=pack_model(size=DEFAULT_SIZE, **DEFAULT_MODEL_FIELDS),
+        rig=figure.rig,
+    )

@@ -82,8 +82,23 @@ directly — deployment needs a target projection plus a client patch
 manifest, which is Phase 3 step 4 and Phase 4. The name is `contract` rather
 than `pack` for exactly that reason.
 
-**Not yet done**: the per-target projections (DOLSharp, OpenDAoC) and archive
-assembly. Both need the OpenDAoC acceptance gate — see `docs/next-steps.md`.
+**The OpenDAoC projection** (`core/camelot/targets/opendaoc.py`) maps each
+figure onto the server's own vocabulary, read from its source and tables
+rather than guessed: the `race` ids 1..18, the wire byte
+(`Race = byte & 0x1F`, `Gender = (byte >> 7) & 1`) and the **model
+bitfield** — the handler reads the body size as `(CreationModel >> 11) & 3`
+and autobans a zero one, so the projection refuses to emit one. All 36
+figures project, covering race ids 1..18 with no gap.
+
+The one thing the corpus spelling would have broken: `fig3descriptions.csv`
+says `Norse` and `Half Ogre` where the server's `race` table says
+`Norseman` and `HalfOgre`. Matching on the client's spelling alone would
+have dropped two of the eighteen races — a failure that would only surface
+in-game. A projection refuses an unknown race rather than defaulting.
+
+**Not yet done**: archive assembly, the client patch manifest, and the
+DOLSharp projection. The appearance test needs a Linux host with the 1.127
+client — see `docs/next-steps.md`.
 
 ## Architecture decisions
 
