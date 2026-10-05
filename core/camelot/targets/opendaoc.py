@@ -20,20 +20,23 @@ guesswork:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 __all__ = [
     "DEFAULT_MODEL_FIELDS",
     "RACE_IDS",
     "SERVER_RACE_NAMES",
     "OpendaocFigure",
+    "RaceTableReport",
     "pack_model",
     "pack_race_gender",
+    "parse_race_sql",
     "project",
     "server_race_name",
     "unpack_gender",
     "unpack_model_size",
     "unpack_race",
+    "verify_race_table",
 ]
 
 #: The server's `race` table (read from the OpenDAoC database). 1..18 are
@@ -174,6 +177,61 @@ class OpendaocFigure:
             "model": self.model,
             "rig": self.rig,
         }
+
+
+@dataclass
+class RaceTableReport:
+    """What a server's own `race` table says about our projection."""
+
+    ok: bool
+    missing: list[str] = field(default_factory=list)
+    mismatched: list[tuple] = field(default_factory=list)
+    server_names: dict = field(default_factory=dict)
+
+
+def parse_race_sql(path: str) -> dict[int, str]:
+    """Read `(id, 'Name')` rows out of the server's `race.sql` dump.
+
+    Parsing the dump rather than connecting means the check runs offline
+    and in CI, against the same bytes a deployment would import.
+    """
+    import re
+
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    rows = re.findall(r"\(\s*(\d+)\s*,\s*'([^']*)'", text)
+    return {int(i): name for i, name in rows}
+
+
+def verify_race_table(keys, race_sql_path: str) -> RaceTableReport:
+    """Check our projected `race` ids against a server's own table.
+
+    Three ways a projection can be wrong, all of them silent in game: a race
+    the server does not have, a race on a different id, and a name the
+    server spells differently. All three are reported rather than the first.
+    """
+    server = parse_race_sql(race_sql_path)
+    by_name = {name.lower(): rid for rid, name in server.items()}
+    missing: list[str] = []
+    mismatched: list[tuple] = []
+    for key in keys:
+        if key not in SERVER_RACE_NAMES or key not in RACE_IDS:
+            # Either we do not project it or we have no id for it: both mean
+            # the claim cannot be checked, which is a failure to report, not
+            # an exception to raise.
+            missing.append(key)
+            continue
+        name = SERVER_RACE_NAMES[key].lower()
+        if name not in by_name:
+            missing.append(key)
+        elif by_name[name] != RACE_IDS[key]:
+            mismatched.append((key, RACE_IDS[key], by_name[name]))
+    return RaceTableReport(
+        ok=not missing and not mismatched,
+        missing=missing,
+        mismatched=mismatched,
+        server_names={name: rid for rid, name in server.items()},
+    )
 
 
 def project(figure) -> OpendaocFigure:

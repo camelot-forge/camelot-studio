@@ -123,3 +123,75 @@ def test_a_projection_is_deterministic(client_dir):
     a = [opendaoc.project(f).to_dict() for f in manifest.figures]
     b = [opendaoc.project(f).to_dict() for f in manifest.figures]
     assert a == b
+
+
+# --- verification against a real server's data ----------------------------
+
+_FIXTURE_RACES = [
+    (1, "Briton"), (2, "Avalonian"), (4, "Saracen"), (6, "Troll"),
+    (15, "Sylvan"), (16, "HalfOgre"), (19, "AlbionMinotaur"),
+]
+RACE_SQL = (
+    "CREATE TABLE IF NOT EXISTS `race` (\n"
+    "  `id` int(11) NOT NULL,\n"
+    "  `name` varchar(255) NOT NULL\n"
+    ");\n\n"
+    "INSERT INTO `race` (`id`, `name`) VALUES\n"
+    + ",\n".join(f"({i}, '{n}')" for i, n in _FIXTURE_RACES)
+    + ";\n"
+)
+
+
+def test_verification_accepts_a_projection_the_server_agrees_with(tmp_path):
+    """The projection is a claim about a real server. Verifying it against
+    the server's own table is what turns the claim into a fact."""
+    from camelot.targets import opendaoc
+
+    dump = tmp_path / "race.sql"
+    dump.write_text(RACE_SQL)
+    # every race the fixture carries must verify against its projected id
+    report = opendaoc.verify_race_table(["briton", "troll", "sylvan"], str(dump))
+    assert report.ok
+    assert report.missing == []
+
+
+def test_verification_reports_a_race_the_server_numbers_differently(tmp_path):
+    from camelot.targets import opendaoc
+
+    # the server puts Troll on 9 where we project 6
+    dump = tmp_path / "race.sql"
+    dump.write_text(RACE_SQL.replace("(6, 'Troll')", "(9, 'Troll')"))
+    report = opendaoc.verify_race_table(["troll"], str(dump))
+    assert report.ok is False
+    assert report.mismatched == [("troll", 6, 9)]
+
+
+def test_verification_reports_a_race_the_server_does_not_have(tmp_path):
+    from camelot.targets import opendaoc
+
+    dump = tmp_path / "race.sql"
+    dump.write_text(RACE_SQL)
+    report = opendaoc.verify_race_table(["troll", "sylvan"], str(dump))
+    assert report.ok
+    report = opendaoc.verify_race_table(["troll", "centaur"], str(dump))
+    assert report.ok is False
+    assert report.missing == ["centaur"]
+
+
+def test_verification_of_the_real_client_projection_against_the_real_table():
+    """The end-to-end claim, checked against the OpenDAoC database's own
+    `race.sql` when it is available. Skipped without it: the database is a
+    separate repository and must not be a test dependency."""
+    import os
+
+    from camelot.targets import opendaoc
+
+    dump = os.environ.get("OPENDAOC_RACE_SQL")
+    if not dump or not os.path.exists(dump):
+        pytest.skip("set $OPENDAOC_RACE_SQL to OpenDAoC-Database/.../race.sql")
+    report = opendaoc.verify_race_table(opendaoc.RACE_IDS.keys(), dump)
+    assert report.ok, (report.missing, report.mismatched)
+    # every playable race we project must exist, and nothing we project may
+    # be one of the three Minotaurs
+    assert not set(report.server_names) & {"albionminotaur", "midgardminotaur",
+                                           "hiberniaminotaur"}
