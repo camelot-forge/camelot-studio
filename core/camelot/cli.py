@@ -432,6 +432,19 @@ def cmd_pack(args) -> int:
         for ref in manifest.unresolved:
             print(f"  UNRESOLVED {ref.ref}: {ref.reason}", file=sys.stderr)
 
+    if not args.no_targets:
+        print("projecting onto the target servers ...", flush=True)
+        try:
+            from .targets import TARGETS
+
+            written = write_targets(manifest, args.out,
+                                    targets=args.target or list(TARGETS))
+        except (OSError, ValueError, KeyError, IndexError) as exc:
+            print(f"contract: projection failed: {exc}", file=sys.stderr)
+            return 1
+        for path in written:
+            print(f"  wrote {path}")
+
     os.makedirs(os.path.join(args.out, "manifest"), exist_ok=True)
     # Merge, never replace: emit_artifacts has already hashed the content
     # files, and overwriting here would leave the lock covering only the
@@ -449,7 +462,78 @@ def cmd_pack(args) -> int:
     with open(os.path.join(args.out, "checksums.lock"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lock_lines) + "\n")
     print(f"wrote {args.out}/manifest/content.json")
+
+    if args.package:
+        try:
+            lock = package_pack(manifest, args.out, args.package)
+        except (OSError, ValueError) as exc:
+            print(f"contract: packaging failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"packaged {args.package} ({len(lock)} members)")
     return 0
+
+
+
+def write_targets(manifest, out_dir: str, *, targets) -> list[str]:
+    """Write each requested target projection beside the contract.
+
+    A projection is a separate file per target so a server adapter reads one
+    document and never parses the neutral contract.
+    """
+    import json
+
+    from . import contract as contract_mod
+    from .targets import TARGETS
+
+    written: list[str] = []
+    for name in targets:
+        module = TARGETS.get(name)
+        if module is None:
+            raise ValueError(f"unknown target {name!r}, known: {sorted(TARGETS)}")
+        rows = []
+        skipped: list[dict] = []
+        for figure in manifest.figures:
+            try:
+                rows.append(module.project(figure).to_dict())
+            except (KeyError, ValueError) as exc:
+                # A target that cannot express a figure says so in its own
+                # projection instead of failing the build: the pack is still
+                # valid for the figures the target does understand, and a
+                # silent omission is what nobody would notice.
+                skipped.append({"logical_id": figure.logical_id, "reason": str(exc)})
+        rel = os.path.join("targets", name, "figures.json")
+        path = os.path.join(out_dir, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = {
+            "target": name,
+            "schema_version": contract_mod.SCHEMA_VERSION,
+            "figures": rows,
+            "unprojected": skipped,
+        }
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        written.append(rel)
+    return written
+
+
+def package_pack(manifest, out_dir: str, path: str) -> dict:
+    """Collapse everything written under `out_dir` into one archive.
+
+    The lock returned is over the archive's members, so the pack and its
+    contents are verifiable as a pair.
+    """
+    from . import assemble as assemble_mod
+
+    files: dict[str, bytes] = {}
+    for root, _dirs, names in os.walk(out_dir):
+        for name in names:
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, out_dir)
+            with open(full, "rb") as fh:
+                files[rel] = fh.read()
+    lock = assemble_mod.archive(manifest, path, files=files)
+    return lock
 
 
 def main(argv=None) -> int:
@@ -527,6 +611,12 @@ def main(argv=None) -> int:
                    help="restrict to these fig3 row ids (default: all 36)")
     p.add_argument("--add-figure", action="append", metavar="ID:KIND:RIG[:ROWID]",
                    help="add a custom figure, e.g. daoc.custom.sword:object:sword")
+    p.add_argument("--target", action="append",
+                   help="project onto these targets (default: all)")
+    p.add_argument("--no-targets", action="store_true",
+                   help="skip the target projections")
+    p.add_argument("--package", metavar="PATH.tar.gz",
+                   help="assemble the written pack into one deployable archive")
     p.add_argument("--dry-run", action="store_true", help="report only, write no manifest")
     p.set_defaults(func=cmd_pack)
 

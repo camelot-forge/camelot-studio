@@ -16,7 +16,7 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot roundtrip <f>` | read → write → read (multiset compare; legacy 4.x = N/A) |
 | `camelot batch <manifest> --out <report> [--read-only] [--limit N]` | bulk validation, live progress; `$DAOC_CLIENT` rewrites `DAOC CLIENT/...` manifest paths |
 | `camelot mpak list <archive>` / `get <archive> <entry>` / `pack <out> <name> <files…>` | MPAK reader/writer (`.mpk`/`.npk`) |
-| `camelot contract --out DIR [--id ID] [--version V] [--material M] [--figures ID…] [--add-figure ID:KIND:RIG[:ROW]] [--no-states] [--no-artifacts] [--dry-run]` | build the server content **contract**: versioned manifest, glTF artifacts, validation report, checksums lock |
+| `camelot contract --out DIR [--id ID] [--version V] [--material M] [--figures ID…] [--add-figure ID:KIND:RIG[:ROW]] [--target NAME] [--package P.tar.gz] [--no-states] [--no-artifacts] [--no-targets] [--dry-run]` | build the server content **pack**: contract, glTF artifacts, target projections, validation report, checksums lock, deployable archive |
 | `camelot serve [--root DIR] [--port N] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn) |
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
@@ -96,9 +96,26 @@ says `Norse` and `Half Ogre` where the server's `race` table says
 have dropped two of the eighteen races — a failure that would only surface
 in-game. A projection refuses an unknown race rather than defaulting.
 
-**Not yet done**: archive assembly, the client patch manifest, and the
-DOLSharp projection. The appearance test needs a Linux host with the 1.127
-client — see `docs/next-steps.md`.
+**Packaging** (`core/camelot/assemble.py`): `--package` collapses the whole
+tree into one reproducible `.tar.gz` with a member-level lock. Against V2:
+41 members, 14 MB, containing the contract, 36 GLBs, the OpenDAoC projection
+and a self-describing `PACK.json` (id, version, client build, figure count,
+unresolved list). Every member is pinned to mtime 0 and fixed ownership —
+a timestamp would make two builds of one corpus differ and render the lock
+meaningless. A target that cannot yet express a figure records it under
+`unprojected` in its own file rather than failing the build or dropping it
+silently.
+
+**Not yet done**: the DOLSharp projection, the client patch manifest (which
+needs NIF/MPAK *writing*, Phase 5), and the end-to-end appearance test. A
+stock client can load none of this yet: the GLBs are Studio-authored glTF
+and a DAoC client reads NIF from MPAK. Deploying new *assets* therefore
+needs a writer; deploying new *server data* does not, and that is the path
+the pack already serves.
+
+The test run needs a Linux x86-64 host with the 1.127 client and the
+`connect.exe` command line — see
+`workspace/notes`.
 
 ## Architecture decisions
 

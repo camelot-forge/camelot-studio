@@ -11,4 +11,9 @@ rather than branching inside a shared one.
 """
 from __future__ import annotations
 
-__all__ = ["opendaoc"]
+from . import opendaoc
+
+__all__ = ["TARGETS", "opendaoc"]
+
+#: Registered projections, by the name a pack writes under `targets/`.
+TARGETS = {"opendaoc": opendaoc}
