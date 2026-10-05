@@ -28,6 +28,7 @@ __all__ = [
     "DEFAULT_MODEL_FIELDS",
     "DEFAULT_SIZE_RANGE",
     "NPC_CLASS",
+    "NPC_TEMPLATE_CLASS",
     "RACE_IDS",
     "SERVER_RACE_NAMES",
     "TEMPLATE_ID_BASE",
@@ -405,28 +406,36 @@ def build_creature_templates(creatures, *, base: int = TEMPLATE_ID_BASE):
     ]
 
 
-def npctemplate_xml(rows) -> bytes:
-    """The `ArrayOfNPCTemplate` package `LoaderUnloaderXML` can read.
+#: The DataObject **class** name the loader matches the root element
+#: against (`CoreDatabase/Tables/DbNpcTemplate.cs`). It is NOT the table
+#: name: the table is `NpcTemplate`, the class is `DbNpcTemplate`, and the
+#: loader does `types.First(t => t.Name.Equals(root.Replace("ArrayOf", "")))`.
+#: Getting this wrong loads nothing and only logs
+#: "Could no guess Type of XML Package".
+NPC_TEMPLATE_CLASS = "DbNpcTemplate"
 
-    The root element is what the loader matches against a DataObject class
-    name (`.Replace("ArrayOf", "")`), and each child is the class name, so
-    both spellings matter: a mismatch loads nothing and only says
-    "Could no guess Type of XML Package".
+
+def npctemplate_xml(rows) -> bytes:
+    """The `ArrayOfDbNpcTemplate` package `LoaderUnloaderXML` can read.
+
+    The root element must be `ArrayOf<ClassName>` and each child named after
+    the class, because that is the only thing the loader matches on -- it
+    never reads the table name from the file.
     """
     from xml.sax.saxutils import escape
 
     parts = [
         '<?xml version="1.0" encoding="utf-8"?>',
         (
-            '<ArrayOfNPCTemplate'
+            f'<ArrayOf{NPC_TEMPLATE_CLASS}'
             ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
             ' xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
         ),
     ]
     for row in rows:
-        parts.append("  <NPCTemplate>")
+        parts.append(f"  <{NPC_TEMPLATE_CLASS}>")
         for column, value in row.to_dict().items():
             parts.append(f"    <{column}>{escape(str(value))}</{column}>")
-        parts.append("  </NPCTemplate>")
-    parts.append("</ArrayOfNPCTemplate>")
+        parts.append(f"  </{NPC_TEMPLATE_CLASS}>")
+    parts.append(f"</ArrayOf{NPC_TEMPLATE_CLASS}>")
     return ("\n".join(parts) + "\n").encode("utf-8")

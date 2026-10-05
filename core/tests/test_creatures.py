@@ -54,15 +54,22 @@ def test_size_and_level_are_ranges_as_the_server_writes_them():
 def test_the_npc_template_xml_is_in_the_loaders_own_format():
     """`LoaderUnloaderXML` guesses the type from the root element: it must be
     `ArrayOf<ClassName>` and each child named after the class, or the server
-    logs 'Could no guess Type of XML Package' and loads nothing."""
+    logs 'Could no guess Type of XML Package' and loads nothing.
+
+    The class name is the trap: the *table* is `NpcTemplate`, but the class
+    is `DbNpcTemplate`, and a package named after the table is silently
+    rejected. This was measured, not inferred -- the first real deployment
+    came back FAILURE in the server's own AutoXMLUpdate table."""
     rows = [
         opendaoc.project_creature(template_id=1, model_id=88, name="A"),
         opendaoc.project_creature(template_id=2, model_id=606, name="B"),
     ]
     xml = opendaoc.npctemplate_xml(rows).decode("utf-8")
     root = ET.fromstring(xml)
-    assert root.tag == "ArrayOfNPCTemplate"
-    assert [c.tag for c in root] == ["NPCTemplate", "NPCTemplate"]
+    # the loader matches the CLASS name, never the table name: the table is
+    # `NpcTemplate`, the class is `DbNpcTemplate`
+    assert root.tag == "ArrayOfDbNpcTemplate"
+    assert [c.tag for c in root] == ["DbNpcTemplate", "DbNpcTemplate"]
     assert root[0].findtext("Model") == "88"
 
 
