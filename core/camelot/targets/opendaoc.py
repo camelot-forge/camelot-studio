@@ -23,15 +23,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 __all__ = [
+    "DEFAULT_BODY_SIZE",
+    "DEFAULT_LEVEL_RANGE",
     "DEFAULT_MODEL_FIELDS",
+    "DEFAULT_SIZE_RANGE",
+    "NPC_CLASS",
     "RACE_IDS",
     "SERVER_RACE_NAMES",
+    "TEMPLATE_ID_BASE",
+    "OpendaocCreature",
     "OpendaocFigure",
     "RaceTableReport",
+    "build_creature_templates",
+    "check_template_ids",
+    "npctemplate_xml",
     "pack_model",
     "pack_race_gender",
     "parse_race_sql",
+    "parse_template_ids",
     "project",
+    "project_creature",
     "server_race_name",
     "unpack_gender",
     "unpack_model_size",
@@ -80,8 +91,10 @@ DEFAULT_MODEL_FIELDS = {
     "eye_color": -1,
 }
 
-#: A player's body size, from the client's creation screen (1..3).
-DEFAULT_SIZE = 1
+#: A player's body size, from the client's creation screen (1..3). Not to
+#: be confused with `DEFAULT_SIZE_RANGE`: a player carries a number in the
+#: model bitfield, a spawn carries a range in its own text column.
+DEFAULT_BODY_SIZE = 1
 
 # Bit layout of the model word, from the server's decoder.
 _SIZE_SHIFT = 11
@@ -132,7 +145,7 @@ def unpack_gender(byte: int) -> bool:
     return bool((byte >> 7) & 0x01)
 
 
-def pack_model(size: int = DEFAULT_SIZE, **fields) -> int:
+def pack_model(size: int = DEFAULT_BODY_SIZE, **fields) -> int:
     """The 16-bit model word, packed the way the client's creation packet is.
 
     The size lives in bits 11-12 because the server reads it as
@@ -257,6 +270,163 @@ def project(figure) -> OpendaocFigure:
         race_id=race_id,
         gender=1 if female else 0,
         race_gender=pack_race_gender(race_id, female),
-        model=pack_model(size=DEFAULT_SIZE, **DEFAULT_MODEL_FIELDS),
+        model=pack_model(size=DEFAULT_BODY_SIZE, **DEFAULT_MODEL_FIELDS),
         rig=figure.rig,
     )
+
+# --- creatures (npctemplate) ------------------------------------------------
+
+#: The class the server instantiates for a plain creature. The server's own
+#: `npctemplate` rows use `DOL.GS.GameNPC` for anything without a special AI.
+NPC_CLASS = "DOL.GS.GameNPC"
+
+#: Where a pack's own spawn ids start. The default sits inside a free span
+#: of the OpenDAoC database (its rows run to 90 162 132, then jump to
+#: 601 580 490), but a free span is NEVER assumed: `parse_template_ids`
+#: reads the server's own table and `check_template_ids` refuses a
+#: collision, because reusing a spawn id silently replaces that creature.
+TEMPLATE_ID_BASE = 100_000_000
+
+#: How the server writes a spawn's size and level. Its own rows use ranges
+#: (`'50-58'`), and a single number where a range belongs still imports --
+#: but silently pins every spawn to one value.
+DEFAULT_SIZE_RANGE = "50-58"
+DEFAULT_LEVEL_RANGE = "1-5"
+
+
+@dataclass
+class OpendaocCreature:
+    """One creature as the server's `npctemplate` row."""
+
+    template_id: int
+    name: str
+    model_id: int
+    class_type: str = NPC_CLASS
+    size: str = DEFAULT_SIZE_RANGE
+    level: str = DEFAULT_LEVEL_RANGE
+    nif: str | None = None
+    anim_set: int | None = None
+
+    @property
+    def model(self) -> int:
+        """The server's column name for the client model id."""
+        return self.model_id
+
+    def to_dict(self) -> dict:
+        """The row in the server's own column spelling.
+
+        `Model` is a quoted string on the wire, not a number: the server's
+        rows carry `'606'`, and the XML the loader reads is the serialised
+        form of that.
+        """
+        return {
+            "TemplateId": self.template_id,
+            "Name": self.name,
+            "ClassType": self.class_type,
+            "Model": str(self.model_id),
+            "Size": self.size,
+            "Level": self.level,
+        }
+
+
+def project_creature(
+    template_id: int, model_id: int, name: str,
+    nif: str | None = None, anim_set: int | None = None,
+) -> OpendaocCreature:
+    """Place a creature model on the server.
+
+    `model_id` is `monnifs.ID`, the id the client resolves -- so the
+    creature appears without any client change, which is the whole point of
+    surveying the stock corpus before writing new assets.
+    """
+    if template_id <= 0:
+        raise ValueError(f"template id {template_id} must be positive")
+    if model_id <= 0:
+        raise ValueError(f"model id {model_id} must be positive")
+    return OpendaocCreature(
+        template_id=template_id, name=name, model_id=model_id,
+        nif=nif, anim_set=anim_set,
+    )
+
+
+def check_template_ids(ids, *, existing) -> None:
+    """Refuse ids that would collide with the server's own, or repeat.
+
+    Overwriting a server's spawn by reusing its TemplateId is silent and
+    destructive: the row is replaced and the original creature is gone. The
+    existing range comes from the server's data, never from an assumption.
+    """
+    seen = set()
+    for template_id in ids:
+        if template_id in seen:
+            raise ValueError(f"template ids must be unique; {template_id} repeats")
+        if template_id in existing:
+            raise ValueError(
+                f"template id {template_id} would collide with the server's own"
+            )
+        seen.add(template_id)
+
+
+def parse_template_ids(path: str) -> set[int]:
+    """The `TemplateId`s already in a server's `npctemplate.sql` dump.
+
+    Read from the dump rather than a live connection so the check runs
+    offline and in CI, against the bytes a deployment would import.
+    """
+    import re
+
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    start = text.find("REPLACE INTO")
+    if start < 0:
+        start = text.find("INSERT INTO")
+    if start < 0:
+        return set()
+    values = text.find("VALUES", start)
+    body = text[values:] if values >= 0 else text[start:]
+    return {int(m.group(1)) for m in re.finditer(r"\(\s*(\d+)\s*,", body)}
+
+
+def build_creature_templates(creatures, *, base: int = TEMPLATE_ID_BASE):
+    """Assign each creature a spawn id, in model order.
+
+    Ordered by model id so a rebuild reassigns the same ids: a pack whose
+    ids shift would redeploy content onto different creatures.
+    """
+    return [
+        project_creature(
+            template_id=base + offset,
+            model_id=c.model_id,
+            name=c.name,
+            nif=c.nif,
+            anim_set=c.anim_set,
+        )
+        for offset, c in enumerate(creatures)
+    ]
+
+
+def npctemplate_xml(rows) -> bytes:
+    """The `ArrayOfNPCTemplate` package `LoaderUnloaderXML` can read.
+
+    The root element is what the loader matches against a DataObject class
+    name (`.Replace("ArrayOf", "")`), and each child is the class name, so
+    both spellings matter: a mismatch loads nothing and only says
+    "Could no guess Type of XML Package".
+    """
+    from xml.sax.saxutils import escape
+
+    parts = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        (
+            '<ArrayOfNPCTemplate'
+            ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
+            ' xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
+        ),
+    ]
+    for row in rows:
+        parts.append("  <NPCTemplate>")
+        for column, value in row.to_dict().items():
+            parts.append(f"    <{column}>{escape(str(value))}</{column}>")
+        parts.append("  </NPCTemplate>")
+    parts.append("</ArrayOfNPCTemplate>")
+    return ("\n".join(parts) + "\n").encode("utf-8")

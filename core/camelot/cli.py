@@ -445,6 +445,23 @@ def cmd_pack(args) -> int:
         for path in written:
             print(f"  wrote {path}")
 
+    if args.creatures is not None:
+        print("emitting the creature spawn package ...", flush=True)
+        existing = set()
+        if args.npctemplate_sql and os.path.exists(args.npctemplate_sql):
+            from .targets import opendaoc as oc
+
+            existing = oc.parse_template_ids(args.npctemplate_sql)
+        try:
+            rel = write_creatures(
+                args.out, limit=args.creatures or None,
+                base=args.template_id_base, existing=existing,
+            )
+        except (OSError, ValueError, KeyError, IndexError) as exc:
+            print(f"contract: creature package failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"  wrote {rel}")
+
     os.makedirs(os.path.join(args.out, "manifest"), exist_ok=True)
     # Merge, never replace: emit_artifacts has already hashed the content
     # files, and overwriting here would leave the lock covering only the
@@ -515,6 +532,45 @@ def write_targets(manifest, out_dir: str, *, targets) -> list[str]:
             fh.write("\n")
         written.append(rel)
     return written
+
+
+def write_creatures(out_dir: str, *, limit=None, base=None, existing=None) -> str:
+    """Emit the OpenDAoC spawn package for the client's creature models.
+
+    The spawn ids are checked against the server's own table before they are
+    written, because a reused id silently replaces that creature and the
+    original is gone with no error anywhere.
+    """
+    import json
+
+    from . import creatures as creatures_mod
+    from .targets import opendaoc
+
+    client = os.environ.get("DAOC_CLIENT")
+    if not client:
+        raise ValueError("$DAOC_CLIENT is required to read the creature table")
+    rows = creatures_mod.read_creatures(client)
+    if limit:
+        rows = rows[:limit]
+    base = base if base is not None else opendaoc.TEMPLATE_ID_BASE
+    templates = opendaoc.build_creature_templates(rows, base=base)
+    opendaoc.check_template_ids(
+        [t.template_id for t in templates], existing=existing or set(),
+    )
+    rel = os.path.join("targets", "opendaoc", "npctemplate.xml")
+    path = os.path.join(out_dir, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(opendaoc.npctemplate_xml(templates))
+    with open(os.path.join(out_dir, "targets", "opendaoc", "creatures.json"),
+              "w", encoding="utf-8") as fh:
+        json.dump(
+            {"count": len(templates), "base": base,
+             "creatures": [c.to_dict() for c in rows]},
+            fh, indent=2, sort_keys=True,
+        )
+        fh.write("\n")
+    return rel
 
 
 def package_pack(manifest, out_dir: str, path: str) -> dict:
@@ -615,8 +671,14 @@ def main(argv=None) -> int:
                    help="project onto these targets (default: all)")
     p.add_argument("--no-targets", action="store_true",
                    help="skip the target projections")
+    p.add_argument("--npctemplate-sql",
+                   help="the server's npctemplate.sql, to refuse id collisions")
     p.add_argument("--package", metavar="PATH.tar.gz",
                    help="assemble the written pack into one deployable archive")
+    p.add_argument("--creatures", type=int, metavar="N", nargs="?", const=0,
+                   help="also emit the OpenDAoC spawn package (all, or N models)")
+    p.add_argument("--template-id-base", type=int,
+                   help="first spawn id (default: the target's free range)")
     p.add_argument("--dry-run", action="store_true", help="report only, write no manifest")
     p.set_defaults(func=cmd_pack)
 
