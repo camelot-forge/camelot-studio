@@ -1,43 +1,49 @@
 diff --git a/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs b/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
-index d94a115cd..1516b9808 100644
+index d94a115cd..44cc43590 100644
 --- a/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
 +++ b/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
-@@ -211,7 +211,23 @@ namespace DOL.GS.DatabaseUpdate
+@@ -211,8 +211,25 @@ namespace DOL.GS.DatabaseUpdate
  					var tableHandler = new DataTableHandler(xmlType);
  					
  					// Find unique Fields
 -					var uniqueMember = DatabaseUtil.GetUniqueMembers(xmlType);
+-					
 +					var uniqueMember = DatabaseUtil.GetUniqueMembers(xmlType)
 +						.Where(constraint => constraint.Length > 0)
 +						.ToArray();
 +					if (uniqueMember.Length == 0)
 +					{
-+						// Everything except the generated object id and
-+						// auto-increment keys: DataObject mints a fresh
-+						// `<Table>_ID` GUID per instance, so comparing it
-+						// would make every row look new on every re-apply.
 +						var generatedId = string.Format("{0}_ID", tableHandler.TableName);
 +						var comparable = tableHandler.FieldElementBindings
 +							.Where(bind => !string.Equals(bind.ColumnName, generatedId, StringComparison.OrdinalIgnoreCase))
++							// Framework metadata, not package data: the database
++							// stores it at a different precision than the XML
++							// carries, so it never compares equal even when the
++							// displayed value is identical.
++							.Where(bind => !string.Equals(bind.ColumnName, "LastTimeRowUpdated", StringComparison.OrdinalIgnoreCase))
 +							.Where(bind => bind.PrimaryKey == null || !bind.PrimaryKey.AutoIncrement)
 +							.ToArray();
 +						if (comparable.Length > 0)
 +							uniqueMember = new[] { comparable };
 +					}
- 					
++
  					// Get all object "Method" Through Reflection
  					var classMethod = GameServer.Database.GetType().GetMethod("SelectAllObjects", Type.EmptyTypes);
-@@ -230,9 +246,11 @@ namespace DOL.GS.DatabaseUpdate
+ 					var genericMethod = classMethod.MakeGenericMethod(xmlType);
+@@ -222,6 +239,7 @@ namespace DOL.GS.DatabaseUpdate
+ 					var toDelete = new ConcurrentBag<DataObject>();
+ 					var toAdd = new ConcurrentBag<DataObject>();
+ 					
++
+ 					// Check if an Object already exists
+ 					xmlTable.AsParallel().ForAll(obj => {
+ 					                             	// Check if Exists Compare Unique and Non-Generated Primary Keys
+@@ -230,7 +248,7 @@ namespace DOL.GS.DatabaseUpdate
  					                             		                .Any(constraint => constraint
  					                             		                     .All(bind => bind.ValueType == typeof(string)
  					                             		                          ? bind.GetValue(entry).ToString().Equals(bind.GetValue(obj).ToString(), StringComparison.OrdinalIgnoreCase)
 -					                             		                          : bind.GetValue(entry) == bind.GetValue(obj)))
-+					                             		                          // GetValue boxes value types, and == on two
-+					                             		                          // boxes compares references, so an int column
-+					                             		                          // never matched itself. Equals compares values.
 +					                             		                          : Equals(bind.GetValue(entry), bind.GetValue(obj))))
  					                             		               );
--					                             	
+ 					                             	
  					                             	if (exists != null)
- 					                             	{
- 					                             		if (replace)
