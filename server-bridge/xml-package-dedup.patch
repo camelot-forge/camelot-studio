@@ -1,38 +1,43 @@
 diff --git a/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs b/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
-index d94a115cd..d88630f24 100644
+index d94a115cd..1516b9808 100644
 --- a/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
 +++ b/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
-@@ -211,7 +211,32 @@ namespace DOL.GS.DatabaseUpdate
+@@ -211,7 +211,23 @@ namespace DOL.GS.DatabaseUpdate
  					var tableHandler = new DataTableHandler(xmlType);
  					
  					// Find unique Fields
 -					var uniqueMember = DatabaseUtil.GetUniqueMembers(xmlType);
-+					//
-+					// An empty constraint group must not take part in the match:
-+					// `All()` over an empty group is vacuously true, so a type
-+					// with no usable key (DbNpcTemplate declares none, and
-+					// GetUniqueMembers drops auto-increment primary keys such as
-+					// StartupLocation's) made every incoming object look like it
-+					// already existed. The package then inserted nothing and was
-+					// still recorded as SUCCESS.
 +					var uniqueMember = DatabaseUtil.GetUniqueMembers(xmlType)
 +						.Where(constraint => constraint.Length > 0)
 +						.ToArray();
-+
-+					// With no usable key the whole row is compared instead.
-+					// Without this fallback the filter above would turn
-+					// "inserts nothing" into "inserts everything again on every
-+					// re-apply", because a package is re-applied whenever its
-+					// file hash changes.
 +					if (uniqueMember.Length == 0)
 +					{
++						// Everything except the generated object id and
++						// auto-increment keys: DataObject mints a fresh
++						// `<Table>_ID` GUID per instance, so comparing it
++						// would make every row look new on every re-apply.
++						var generatedId = string.Format("{0}_ID", tableHandler.TableName);
 +						var comparable = tableHandler.FieldElementBindings
++							.Where(bind => !string.Equals(bind.ColumnName, generatedId, StringComparison.OrdinalIgnoreCase))
 +							.Where(bind => bind.PrimaryKey == null || !bind.PrimaryKey.AutoIncrement)
 +							.ToArray();
-+
 +						if (comparable.Length > 0)
 +							uniqueMember = new[] { comparable };
 +					}
  					
  					// Get all object "Method" Through Reflection
  					var classMethod = GameServer.Database.GetType().GetMethod("SelectAllObjects", Type.EmptyTypes);
+@@ -230,9 +246,11 @@ namespace DOL.GS.DatabaseUpdate
+ 					                             		                .Any(constraint => constraint
+ 					                             		                     .All(bind => bind.ValueType == typeof(string)
+ 					                             		                          ? bind.GetValue(entry).ToString().Equals(bind.GetValue(obj).ToString(), StringComparison.OrdinalIgnoreCase)
+-					                             		                          : bind.GetValue(entry) == bind.GetValue(obj)))
++					                             		                          // GetValue boxes value types, and == on two
++					                             		                          // boxes compares references, so an int column
++					                             		                          // never matched itself. Equals compares values.
++					                             		                          : Equals(bind.GetValue(entry), bind.GetValue(obj))))
+ 					                             		               );
+-					                             	
+ 					                             	if (exists != null)
+ 					                             	{
+ 					                             		if (replace)
