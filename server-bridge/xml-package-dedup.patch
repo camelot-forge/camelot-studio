@@ -1,0 +1,38 @@
+diff --git a/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs b/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
+index d94a115cd..d88630f24 100644
+--- a/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
++++ b/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
+@@ -211,7 +211,32 @@ namespace DOL.GS.DatabaseUpdate
+ 					var tableHandler = new DataTableHandler(xmlType);
+ 					
+ 					// Find unique Fields
+-					var uniqueMember = DatabaseUtil.GetUniqueMembers(xmlType);
++					//
++					// An empty constraint group must not take part in the match:
++					// `All()` over an empty group is vacuously true, so a type
++					// with no usable key (DbNpcTemplate declares none, and
++					// GetUniqueMembers drops auto-increment primary keys such as
++					// StartupLocation's) made every incoming object look like it
++					// already existed. The package then inserted nothing and was
++					// still recorded as SUCCESS.
++					var uniqueMember = DatabaseUtil.GetUniqueMembers(xmlType)
++						.Where(constraint => constraint.Length > 0)
++						.ToArray();
++
++					// With no usable key the whole row is compared instead.
++					// Without this fallback the filter above would turn
++					// "inserts nothing" into "inserts everything again on every
++					// re-apply", because a package is re-applied whenever its
++					// file hash changes.
++					if (uniqueMember.Length == 0)
++					{
++						var comparable = tableHandler.FieldElementBindings
++							.Where(bind => bind.PrimaryKey == null || !bind.PrimaryKey.AutoIncrement)
++							.ToArray();
++
++						if (comparable.Length > 0)
++							uniqueMember = new[] { comparable };
++					}
+ 					
+ 					// Get all object "Method" Through Reflection
+ 					var classMethod = GameServer.Database.GetType().GetMethod("SelectAllObjects", Type.EmptyTypes);
