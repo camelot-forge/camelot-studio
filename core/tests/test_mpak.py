@@ -190,3 +190,42 @@ def test_a_rewritten_archive_reports_the_right_entry_count_byte(client_dir, tmp_
     finally:
         archive.close()
     assert out.read_bytes()[17] == (count ^ 12) & 0xFF
+
+
+def test_repack_preserves_the_header_and_replaces_one_entry(client_dir, tmp_path):
+    """The mod path: rewrite an archive, swapping one entry's content.
+
+    Used first to prove the container is accepted with content unchanged,
+    then to change a table. It carries the undecoded header field across,
+    because which entries exist does not change."""
+    import glob
+    import os
+
+    from camelot.mpak import MpakArchive, repack_mpak
+
+    source = min(glob.glob(os.path.join(client_dir, "figures", "fig3", "*.mpk")))
+    original = MpakArchive(source)
+    try:
+        name = original.entries[0]
+        out = tmp_path / "repacked.mpk"
+        repack_mpak(source, str(out), {name: b"replaced"})
+        head6 = original.header[5:11]
+    finally:
+        original.close()
+
+    after = MpakArchive(str(out))
+    try:
+        assert after.header[5:11] == head6
+        assert after.header[17] == (len(after.entries) ^ 12) & 0xFF
+        assert after.read(name) == b"replaced"
+    finally:
+        after.close()
+
+
+def test_repack_refuses_an_entry_the_archive_does_not_have(tmp_path):
+    from camelot.mpak import MpakError, repack_mpak, write_mpak
+
+    src = tmp_path / "s.mpk"
+    write_mpak(str(src), "s.mpk", [("a", b"1")])
+    with pytest.raises(MpakError, match="no such entry"):
+        repack_mpak(str(src), str(tmp_path / "o.mpk"), {"missing": b"x"})

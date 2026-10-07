@@ -167,6 +167,32 @@ def build_header(
     )
 
 
+def repack_mpak(source: str, out: str, replacements: dict[str, bytes]) -> None:
+    """Rewrite *source* to *out*, replacing the entries named in
+    *replacements* by new content.
+
+    The header's undecoded six bytes are carried across and byte 17 is
+    recomputed. Replacing an entry's content does not change *which entries
+    exist*, so the decoded fields and the container's identity are the same
+    as the archive it came from -- which is the whole point: a mod changes
+    a table, not the container.
+    """
+    archive = MpakArchive(source)
+    try:
+        entries = []
+        for name in archive.entries:
+            if name in replacements:
+                entries.append((name, replacements[name]))
+            else:
+                entries.append((name, archive.read(name)))
+        missing = set(replacements) - set(archive.entries)
+        if missing:
+            raise MpakError(f"{os.path.basename(source)}: no such entry: {sorted(missing)}")
+        write_mpak(out, archive.name, entries, checksum6=archive.header[5:11])
+    finally:
+        archive.close()
+
+
 def write_mpak(path: str, name: str, entries, *, checksum6: bytes | None = None) -> None:
     """Write an MPAK archive with *entries* (iterable of (entry_name, bytes)).
 

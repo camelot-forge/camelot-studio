@@ -61,3 +61,30 @@ That catches signature drift against the server's own assemblies. It does not
 replace booting it: table registration, script compilation and the loader's
 own behaviour only show up in a real run — the checksum verification and the
 `[DatabaseUpdate]` attribute were both wrong in ways only a boot revealed.
+
+
+## The client-side MPAK test (does the client accept a container we wrote?)
+
+Not a server matter, but it lives here because it gates the same ecosystem.
+The client's textures and its `gamedata` tables are MPAK archives; models and
+animations are loose files. Writing archives is therefore the prerequisite
+for any mod that brings a texture or a new id.
+
+Three tests, cheapest first. Stop at the first failure.
+
+```sh
+# A: content unchanged, container ours. Any observable difference is the
+#    container being rejected.
+.venv/bin/camelot mpak repack "$CLIENT/gamedata.mpk" /tmp/testA/gamedata.mpk
+# B: one entry's content changed -- does the client read modified data?
+.venv/bin/camelot mpak repack "$CLIENT/gamedata.mpk" /tmp/testB/gamedata.mpk \
+    --replace "monnifs.csv=/tmp/testB/monnifs.csv"
+# C: a new monnifs row -- a new id pointing at an existing NIF, no writer needed
+```
+
+Back the archive up first; the client should be tested on a copy.
+
+The header's undecoded six bytes (offsets 5..10) are carried across and byte
+17 is recomputed (`(entries ^ 12) & 0xFF`, decoded from all 1306 archives in
+the client). If test A fails, the six bytes are validated by the client and
+must be reversed before anything else.

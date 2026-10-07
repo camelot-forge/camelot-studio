@@ -227,7 +227,23 @@ def cmd_batch(args) -> int:
 
 
 def cmd_mpak(args) -> int:
-    from .mpak import MpakArchive, write_mpak
+    from .mpak import MpakArchive, repack_mpak, write_mpak
+
+    if args.mpak_cmd == "repack":
+        # The mod path: rewrite an archive, optionally swapping an entry's
+        # content. The header's undecoded field is carried across, so the
+        # container stays the one the client shipped.
+        replacements = {}
+        for spec in args.replace or []:
+            name, _, path = spec.partition("=")
+            if not path:
+                print(f"repack: --replace wants NAME=FILE, got {spec!r}", file=sys.stderr)
+                return 2
+            with open(path, "rb") as fh:
+                replacements[name] = fh.read()
+        repack_mpak(args.archive, args.out, replacements)
+        print(f"wrote {args.out} ({len(replacements)} entr{'y' if len(replacements) == 1 else 'ies'} replaced)")
+        return 0
 
     if args.mpak_cmd == "list":
         a = MpakArchive(args.archive)
@@ -637,6 +653,12 @@ def main(argv=None) -> int:
     gp = mp.add_parser("get", help="decompress one entry to stdout")
     gp.add_argument("archive")
     gp.add_argument("entry")
+    rp = mp.add_parser("repack", help="rewrite an archive, preserving its header")
+    rp.add_argument("archive")
+    rp.add_argument("out")
+    rp.add_argument("--replace", action="append", metavar="NAME=FILE",
+                    help="replace an entry's content with a file")
+
     pp = mp.add_parser("pack", help="build an MPAK archive from files")
     pp.add_argument("out")
     pp.add_argument("name", help="internal archive name")
