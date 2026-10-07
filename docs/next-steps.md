@@ -354,9 +354,17 @@ references, writes `manifest/content.json` + `reports/validation.json` +
 the client build. Against V2: 36 figures, 324 appearance slots, 5958
 animation states, 0 unresolved, ~4.5 s, byte-identical on rebuild.
 
-**Still open in Phase 3**: step 4's candidate patch/pack assembly and the
-glTF/JSON artifacts themselves, plus the per-target projections
-(`targets/dolsharp`, `targets/opendaoc`) and the client patch manifest.
+**Delivered (2026-10-06)**: the pack carries a **deployment document**
+instead of an XML data package -- declarative rows plus an allocation
+request, designed in `server-bridge/mod-loader.md`. A mod declares how many
+ids it needs and describes its rows; the manager allocates, records and
+writes. No mod chooses an id, so overlap is impossible rather than
+detected, and no mod ships SQL, so a third-party mod cannot execute what it
+likes against a database.
+
+**Still open in Phase 3**: the client patch manifest and the client payloads
+it would carry (`client` is already reserved in the deployment document and
+declared empty), plus the loader that consumes the document.
 
 ## Phase 4 — Validate the OpenDAoC integration
 
