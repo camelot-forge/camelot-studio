@@ -118,16 +118,19 @@ meaningless. A target that cannot yet express a figure records it under
 `unprojected` in its own file rather than failing the build or dropping it
 silently.
 
-**Not yet done**: the client patch manifest (which
-needs NIF/MPAK *writing*, Phase 5), and the end-to-end appearance test. A
-stock client can load none of this yet: the GLBs are Studio-authored glTF
-and a DAoC client reads NIF from MPAK. Deploying new *assets* therefore
-needs a writer; deploying new *server data* does not, and that is the path
-the pack already serves.
+**Not yet done**: the client patch manifest and the payloads it would carry
+(Phase 5), and NIF *writing*. A stock client cannot load the Studio-authored
+GLBs — it reads NIF from MPAK — so deploying new *assets* still waits on a NIF
+writer. Deploying new *server data* does not, and that path is now
+end-to-end: the loader consumes the deployment document on a booted server,
+and a rewritten `gamedata.mpk` is accepted by the 1.127 client (`formats.md`
+§5 documents the decoded header carriers).
 
-The test run needs a Linux x86-64 host with the 1.127 client and the
-`connect.exe` command line — see
-`workspace/notes`.
+The client-side run happened (2026-10-07), on a Linux x86-64 host with the
+1.127 client under Wine: a rewritten container, modified table data and a new
+model id all reach the world, and the loader's server half deploys the
+matching row and spawn. Records — including the traps this run paid for — are
+in `workspace/notes/`.
 
 ## Architecture decisions
 
@@ -231,9 +234,13 @@ warnings.
      bindMatrix or three.js would recompute (and discard) the exported
      inverse binds. Some player-race pairings remain refused.
 4. **pyffi 10.1.0.0**: 2 housing files fail (see `formats.md` §7).
-5. **MPAK header checksum**: the two *open* header fields (`formats.md` §5)
-   are written as deterministic placeholders; whether the game validates
-   them needs in-game confirmation.
+5. **MPAK header carriers**: decoded (`formats.md` §5) — the directory crc32
+   and the two compressed stream lengths, obfuscated. **The game reads them**:
+   it takes the lengths from the header instead of measuring the streams, and
+   exits during the loading screen when they disagree (measured in-client, no
+   message anywhere). The writer recomputes them on every rewrite; the corpus
+   tests pin them against the retail archives. The 8 bytes before a record's
+   decoded fields stay undecoded and are carried across.
 6. **Figure textures**: the retained coverage snapshot reports 525/617
    figures resolved, but it predates the current `DAOC_CLIENT V2` profile and
    counts table resolution rather than final rendered bytes. Re-run and

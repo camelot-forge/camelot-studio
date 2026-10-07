@@ -186,16 +186,17 @@ run here.** Measured, in `workspace/notes`:
   pointing `login.dat` at port 10300 deadlocks, because that port is a
   *game* port and the retail flow expects a *login server*.
 
-The appearance test is therefore **not executed**, and no client-side
-return is assumed anywhere in the pipeline. The projection data it would
-have confirmed is already extracted and testable without a client: the
-server's `race` ids (1..18 playable) and `itemtemplate.Model`/
-`Item_Type`, with a two-entry name-normalisation table (`Norse` ->
-`Norseman`, `Half Ogre` -> `HalfOgre`).
+The *appearance* test remains **not executed**, and no client-side return is
+assumed anywhere in the pipeline. The projection data it would have confirmed
+is already extracted and testable without a client: the server's `race` ids
+(1..18 playable) and `itemtemplate.Model`/`Item_Type`, with a two-entry
+name-normalisation table (`Norse` -> `Norseman`, `Half Ogre` -> `HalfOgre`).
 
-A testable client run is a **packaging** deliverable, not a prerequisite:
-it needs a Linux x86-64 host with the 1.127 client and the documented
-`connect.exe` command line, not a developer workstation.
+The *client acceptance* ladder — a different question from the appearance
+projection — **was executed** (2026-10-07): a rewritten MPAK container, a
+modified table and a new model id all reach the world, and the mod loader's
+server half deploys the matching row. Records:
+`workspace/notes/`.
 
 The official 1.127 client statement and 1.65 database baseline are not, by
 themselves, proof that every asset and appearance mapping is compatible. That
@@ -362,9 +363,16 @@ writes. No mod chooses an id, so overlap is impossible rather than
 detected, and no mod ships SQL, so a third-party mod cannot execute what it
 likes against a database.
 
+**Delivered (2026-10-07)**: the loader
+(`server-bridge/camelot-mod-loader/`) consumes the document on a booted
+server — allocation, row writes and the provenance table verified in real
+boots, including an end-to-end probe whose pack row spawns a client model id
+that ships in no archive.
+
 **Still open in Phase 3**: the client patch manifest and the client payloads
 it would carry (`client` is already reserved in the deployment document and
-declared empty), plus the loader that consumes the document.
+declared empty) — delivering a rewritten archive to the client, and the
+precedence rule when two mods patch one archive.
 
 ## Phase 4 — Validate the OpenDAoC integration
 
@@ -419,11 +427,14 @@ other. The allocation has to be deliberate for this to scale past a handful
 of authors.
 
 **The bottleneck is not the server, it is the client.** A mod that reuses
-existing assets (this pack's creatures) deploys today. A mod that *brings* a
-model or a texture cannot: the client reads NIF from MPAK, and writing those
-is Phase 5. Worse, two mods patching the same client files have no precedence
-mechanism at all, so client-side composition needs its own answer before any
-of this can be promised to third-party authors.
+existing assets (this pack's creatures) deploys today, and since 2026-10-07 so
+does one that changes client *tables* or adds model ids: `camelot mpak repack`
+output is accepted by the 1.127 client (header carriers recomputed,
+`formats.md` §5). What still cannot ship is a mod that *brings* a NIF — no
+writer yet — and, for anything client-side, the *delivery*: nothing carries
+the rewritten archive to the client, and two mods patching the same client
+files have no precedence mechanism at all. Client-side composition needs its
+own answer before any of this can be promised to third-party authors.
 
 **Why OpenDAoC and not DOLSharp.** OpenDAoC is the maintained,
 community-used server; DOLSharp is its older ancestor. The comparative
@@ -466,11 +477,14 @@ everyone else.
 
 ## Phase 5 — Editing and productization
 
-Only after the server pack works end to end:
+The server pack now works end to end, and the MPAK output *is* validated
+against the real client (2026-10-07). Remaining:
 
-- add the writers needed for in-place content replacement;
+- add the writer still needed for in-place content replacement (NIF);
 - provide safe KFA/mesh editing and re-rig workflows;
-- validate MPAK output against the real client;
+- carry a mod's client payload to the client, and give two mods patching one
+  archive a precedence rule — the delivery and arbitration half of the client
+  side;
 - add useful search, collections and annotations to the workbench;
 - package the tools for repeatable server-developer use;
 - separate public implementation documentation from private research.
@@ -496,8 +510,8 @@ shorten the Studio-to-server delivery loop.
 - **Id ranges are the composition mechanism.** A mod reserves a span; removal
   is exact and overlapping claims are detectable.
 - **The client side is the real constraint**, not the server: assets a mod
-  *brings* need NIF/MPAK writing (Phase 5), and client-file conflicts between
-  mods have no precedence mechanism today.
+  *brings* need NIF writing (MPAK writing is done and validated in-client),
+  and client-file conflicts between mods have no precedence mechanism today.
 
 - The canonical client corpus is `DAOC CLIENT V2`, resolved through
   `$DAOC_CLIENT`; its exact build version must be recorded in the client
