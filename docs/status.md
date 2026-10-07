@@ -173,7 +173,7 @@ product contract; run the commands above for the authoritative local result.
 Corpus tests skip without `DAOC_CLIENT`, and the web suite is run separately
 from `core/`.
 
-Dated V2 baseline (2026-09-24): 326 core tests passed and 4 failed. The
+Dated V2 baseline (2026-10-07): 390 core tests passed and 4 failed. The
 failures cover a changed `Boar_CATA` animation link, two legacy version
 expectations and one historical Ettin bbox golden; they require a separate
 data/test decision before being treated as regressions or as an accepted
