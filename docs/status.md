@@ -96,6 +96,18 @@ says `Norse` and `Half Ogre` where the server's `race` table says
 have dropped two of the eighteen races — a failure that would only surface
 in-game. A projection refuses an unknown race rather than defaulting.
 
+**The mod deployment document** (`core/camelot/mod.py`) is what a pack
+carries for the loader, and it settles two things the XML package format
+could not. A mod declares *how many* ids it needs per table and describes
+its rows as columns and values; it ships no SQL and never chooses an id.
+The manager allocates, records and writes, so overlap between mods is
+impossible by construction rather than detected, and a third-party mod
+cannot execute arbitrary statements against a database. The `client`
+section is declared empty for Phase 5.
+
+Against V2 that produces 906 declarative rows and one allocation
+(`npctemplate`, 906), with no `TemplateId` anywhere in the output.
+
 **Packaging** (`core/camelot/assemble.py`): `--package` collapses the whole
 tree into one reproducible `.tar.gz` with a member-level lock. Against V2:
 41 members, 14 MB, containing the contract, 36 GLBs, the OpenDAoC projection

@@ -28,22 +28,15 @@ __all__ = [
     "DEFAULT_MODEL_FIELDS",
     "DEFAULT_SIZE_RANGE",
     "NPC_CLASS",
-    "NPC_TEMPLATE_CLASS",
     "RACE_IDS",
     "SERVER_RACE_NAMES",
-    "TEMPLATE_ID_BASE",
-    "OpendaocCreature",
     "OpendaocFigure",
     "RaceTableReport",
-    "build_creature_templates",
-    "check_template_ids",
-    "npctemplate_xml",
+    "creature_row",
     "pack_model",
     "pack_race_gender",
     "parse_race_sql",
-    "parse_template_ids",
     "project",
-    "project_creature",
     "server_race_name",
     "unpack_gender",
     "unpack_model_size",
@@ -275,18 +268,11 @@ def project(figure) -> OpendaocFigure:
         rig=figure.rig,
     )
 
-# --- creatures (npctemplate) ------------------------------------------------
+# --- creatures: how a creature is expressed --------------------------------
 
 #: The class the server instantiates for a plain creature. The server's own
 #: `npctemplate` rows use `DOL.GS.GameNPC` for anything without a special AI.
 NPC_CLASS = "DOL.GS.GameNPC"
-
-#: Where a pack's own spawn ids start. The default sits inside a free span
-#: of the OpenDAoC database (its rows run to 90 162 132, then jump to
-#: 601 580 490), but a free span is NEVER assumed: `parse_template_ids`
-#: reads the server's own table and `check_template_ids` refuses a
-#: collision, because reusing a spawn id silently replaces that creature.
-TEMPLATE_ID_BASE = 100_000_000
 
 #: How the server writes a spawn's size and level. Its own rows use ranges
 #: (`'50-58'`), and a single number where a range belongs still imports --
@@ -294,148 +280,37 @@ TEMPLATE_ID_BASE = 100_000_000
 DEFAULT_SIZE_RANGE = "50-58"
 DEFAULT_LEVEL_RANGE = "1-5"
 
+# --- declarative rows for the mod deployment --------------------------------
 
-@dataclass
-class OpendaocCreature:
-    """One creature as the server's `npctemplate` row."""
-
-    template_id: int
-    name: str
-    model_id: int
-    class_type: str = NPC_CLASS
-    size: str = DEFAULT_SIZE_RANGE
-    level: str = DEFAULT_LEVEL_RANGE
-    nif: str | None = None
-    anim_set: int | None = None
-
-    @property
-    def model(self) -> int:
-        """The server's column name for the client model id."""
-        return self.model_id
-
-    def to_dict(self) -> dict:
-        """The row in the server's own column spelling.
-
-        `Model` is a quoted string on the wire, not a number: the server's
-        rows carry `'606'`, and the XML the loader reads is the serialised
-        form of that.
-        """
-        return {
-            "TemplateId": self.template_id,
-            "Name": self.name,
-            "ClassType": self.class_type,
-            "Model": str(self.model_id),
-            "Size": self.size,
-            "Level": self.level,
-        }
+#: How a creature's logical id is spelled. Keyed on the model id, because
+#: that is the corpus's own unique key for a creature: several creatures
+#: share a rig (`mino` is both the Stone and the Shade Minotaur), so the NIF
+#: stem is not an identity. The manager allocates the numeric row id; this
+#: only has to be unique within the mod.
+_ROW_ID_PREFIX = "spawn"
 
 
-def project_creature(
-    template_id: int, model_id: int, name: str,
-    nif: str | None = None, anim_set: int | None = None,
-) -> OpendaocCreature:
-    """Place a creature model on the server.
+def creature_row(
+    *, model_id: int, name: str, nif: str | None = None,
+    anim_set: int | None = None,
+) -> dict:
+    """One creature as a declarative row, with no id of its own.
 
-    `model_id` is `monnifs.ID`, the id the client resolves -- so the
-    creature appears without any client change, which is the whole point of
-    surveying the stock corpus before writing new assets.
+    `Model` is a client model id from `monnifs`, existing game data rather
+    than something the mod introduces, so it stays literal. The row's own
+    key column is deliberately absent: the manager fills it.
     """
-    if template_id <= 0:
-        raise ValueError(f"template id {template_id} must be positive")
     if model_id <= 0:
         raise ValueError(f"model id {model_id} must be positive")
-    return OpendaocCreature(
-        template_id=template_id, name=name, model_id=model_id,
-        nif=nif, anim_set=anim_set,
-    )
-
-
-def check_template_ids(ids, *, existing) -> None:
-    """Refuse ids that would collide with the server's own, or repeat.
-
-    Overwriting a server's spawn by reusing its TemplateId is silent and
-    destructive: the row is replaced and the original creature is gone. The
-    existing range comes from the server's data, never from an assumption.
-    """
-    seen = set()
-    for template_id in ids:
-        if template_id in seen:
-            raise ValueError(f"template ids must be unique; {template_id} repeats")
-        if template_id in existing:
-            raise ValueError(
-                f"template id {template_id} would collide with the server's own"
-            )
-        seen.add(template_id)
-
-
-def parse_template_ids(path: str) -> set[int]:
-    """The `TemplateId`s already in a server's `npctemplate.sql` dump.
-
-    Read from the dump rather than a live connection so the check runs
-    offline and in CI, against the bytes a deployment would import.
-    """
-    import re
-
-    with open(path, encoding="utf-8", errors="replace") as fh:
-        text = fh.read()
-    start = text.find("REPLACE INTO")
-    if start < 0:
-        start = text.find("INSERT INTO")
-    if start < 0:
-        return set()
-    values = text.find("VALUES", start)
-    body = text[values:] if values >= 0 else text[start:]
-    return {int(m.group(1)) for m in re.finditer(r"\(\s*(\d+)\s*,", body)}
-
-
-def build_creature_templates(creatures, *, base: int = TEMPLATE_ID_BASE):
-    """Assign each creature a spawn id, in model order.
-
-    Ordered by model id so a rebuild reassigns the same ids: a pack whose
-    ids shift would redeploy content onto different creatures.
-    """
-    return [
-        project_creature(
-            template_id=base + offset,
-            model_id=c.model_id,
-            name=c.name,
-            nif=c.nif,
-            anim_set=c.anim_set,
-        )
-        for offset, c in enumerate(creatures)
-    ]
-
-
-#: The DataObject **class** name the loader matches the root element
-#: against (`CoreDatabase/Tables/DbNpcTemplate.cs`). It is NOT the table
-#: name: the table is `NpcTemplate`, the class is `DbNpcTemplate`, and the
-#: loader does `types.First(t => t.Name.Equals(root.Replace("ArrayOf", "")))`.
-#: Getting this wrong loads nothing and only logs
-#: "Could no guess Type of XML Package".
-NPC_TEMPLATE_CLASS = "DbNpcTemplate"
-
-
-def npctemplate_xml(rows) -> bytes:
-    """The `ArrayOfDbNpcTemplate` package `LoaderUnloaderXML` can read.
-
-    The root element must be `ArrayOf<ClassName>` and each child named after
-    the class, because that is the only thing the loader matches on -- it
-    never reads the table name from the file.
-    """
-    from xml.sax.saxutils import escape
-
-    parts = [
-        '<?xml version="1.0" encoding="utf-8"?>',
-        (
-            f'<ArrayOf{NPC_TEMPLATE_CLASS}'
-            ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
-            ' xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
-        ),
-    ]
-    for row in rows:
-        parts.append(f"  <{NPC_TEMPLATE_CLASS}>")
-        for column, value in row.to_dict().items():
-            parts.append(f"    <{column}>{escape(str(value))}</{column}>")
-        parts.append(f"  </{NPC_TEMPLATE_CLASS}>")
-    parts.append(f"</ArrayOf{NPC_TEMPLATE_CLASS}>")
-    return ("\n".join(parts) + "\n").encode("utf-8")
+    values = {
+        "Name": name,
+        "ClassType": NPC_CLASS,
+        "Model": model_id,
+        "Size": DEFAULT_SIZE_RANGE,
+        "Level": DEFAULT_LEVEL_RANGE,
+    }
+    return {
+        "table": "npctemplate",
+        "id": f"{_ROW_ID_PREFIX}:{model_id}",
+        "values": values,
+    }

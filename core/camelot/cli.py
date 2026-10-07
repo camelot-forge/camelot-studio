@@ -447,15 +447,10 @@ def cmd_pack(args) -> int:
 
     if args.creatures is not None:
         print("emitting the creature spawn package ...", flush=True)
-        existing = set()
-        if args.npctemplate_sql and os.path.exists(args.npctemplate_sql):
-            from .targets import opendaoc as oc
-
-            existing = oc.parse_template_ids(args.npctemplate_sql)
         try:
             rel = write_creatures(
                 args.out, limit=args.creatures or None,
-                base=args.template_id_base, existing=existing,
+                mod_id=args.id, version=args.version,
             )
         except (OSError, ValueError, KeyError, IndexError) as exc:
             print(f"contract: creature package failed: {exc}", file=sys.stderr)
@@ -534,16 +529,16 @@ def write_targets(manifest, out_dir: str, *, targets) -> list[str]:
     return written
 
 
-def write_creatures(out_dir: str, *, limit=None, base=None, existing=None) -> str:
-    """Emit the OpenDAoC spawn package for the client's creature models.
+def write_creatures(out_dir: str, *, limit=None, mod_id: str = "daoc.studio.spawns",
+                    version: str = "0.1.0") -> str:
+    """Emit the declarative rows the mod loader will allocate ids for.
 
-    The spawn ids are checked against the server's own table before they are
-    written, because a reused id silently replaces that creature and the
-    original is gone with no error anywhere.
+    No ids are chosen here: the manager owns identity, which is what makes
+    overlap between mods impossible and lets the same mod install on two
+    servers under different ids.
     """
-    import json
-
     from . import creatures as creatures_mod
+    from . import mod as mod_mod
     from .targets import opendaoc
 
     client = os.environ.get("DAOC_CLIENT")
@@ -552,25 +547,18 @@ def write_creatures(out_dir: str, *, limit=None, base=None, existing=None) -> st
     rows = creatures_mod.read_creatures(client)
     if limit:
         rows = rows[:limit]
-    base = base if base is not None else opendaoc.TEMPLATE_ID_BASE
-    templates = opendaoc.build_creature_templates(rows, base=base)
-    opendaoc.check_template_ids(
-        [t.template_id for t in templates], existing=existing or set(),
-    )
-    rel = os.path.join("targets", "opendaoc", "npctemplate.xml")
-    path = os.path.join(out_dir, rel)
+    declarative = [
+        opendaoc.creature_row(
+            model_id=c.model_id, name=c.name, nif=c.nif, anim_set=c.anim_set,
+        )
+        for c in rows
+    ]
+    doc = mod_mod.deployment(mod_id, version, declarative)
+    path = os.path.join(out_dir, mod_mod.DEPLOYMENT_FILE)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as fh:
-        fh.write(opendaoc.npctemplate_xml(templates))
-    with open(os.path.join(out_dir, "targets", "opendaoc", "creatures.json"),
-              "w", encoding="utf-8") as fh:
-        json.dump(
-            {"count": len(templates), "base": base,
-             "creatures": [c.to_dict() for c in rows]},
-            fh, indent=2, sort_keys=True,
-        )
-        fh.write("\n")
-    return rel
+        fh.write(mod_mod.deployment_bytes(doc))
+    return mod_mod.DEPLOYMENT_FILE
 
 
 def package_pack(manifest, out_dir: str, path: str) -> dict:
@@ -671,14 +659,12 @@ def main(argv=None) -> int:
                    help="project onto these targets (default: all)")
     p.add_argument("--no-targets", action="store_true",
                    help="skip the target projections")
-    p.add_argument("--npctemplate-sql",
-                   help="the server's npctemplate.sql, to refuse id collisions")
+
     p.add_argument("--package", metavar="PATH.tar.gz",
                    help="assemble the written pack into one deployable archive")
     p.add_argument("--creatures", type=int, metavar="N", nargs="?", const=0,
                    help="also emit the OpenDAoC spawn package (all, or N models)")
-    p.add_argument("--template-id-base", type=int,
-                   help="first spawn id (default: the target's free range)")
+
     p.add_argument("--dry-run", action="store_true", help="report only, write no manifest")
     p.set_defaults(func=cmd_pack)
 
