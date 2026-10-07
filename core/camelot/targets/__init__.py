@@ -5,9 +5,10 @@ A projection is a thin translation layer. It knows the target's vocabulary
 KFA and gamedata semantics stay in `camelot`, so a second target never
 reimplements client behaviour.
 
-DOLSharp and OpenDAoC share the DOL lineage, but they are separate targets:
-each ships its own tables and its own vocabulary. Add a module per target
-rather than branching inside a shared one.
+OpenDAoC is the target. A projection knows that server's vocabulary -- its
+race numbering, its bit-packed model word -- and nothing else. The layout
+keeps one module per target so a future server would be an addition rather
+than a branch inside this one, but OpenDAoC is the only one there is.
 """
 from __future__ import annotations
 

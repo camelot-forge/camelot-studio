@@ -106,7 +106,7 @@ meaningless. A target that cannot yet express a figure records it under
 `unprojected` in its own file rather than failing the build or dropping it
 silently.
 
-**Not yet done**: the DOLSharp projection, the client patch manifest (which
+**Not yet done**: the client patch manifest (which
 needs NIF/MPAK *writing*, Phase 5), and the end-to-end appearance test. A
 stock client can load none of this yet: the GLBs are Studio-authored glTF
 and a DAoC client reads NIF from MPAK. Deploying new *assets* therefore
@@ -310,8 +310,8 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
    tracks the remaining points.
 3. Close only the fidelity gaps confirmed by that audit; keep tests and
    structured visual reproduction cases with each change.
-4. Define and implement the OpenDAoC-first neutral content-pack adapter, then
-   validate the complete client/server path before adding DOLSharp.
+4. Define and implement the OpenDAoC content-pack adapter and its mod
+   loader, then validate the complete client/server path.
 5. Defer Blender integration and broad product features until the server pack
    loop is reproducible.
 

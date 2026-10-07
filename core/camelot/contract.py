@@ -10,7 +10,7 @@ Three rules shape the module:
 
 - **Deterministic.** The same input serialises to the same bytes, so a pack
   can be checksummed, diffed and rebuilt reproducibly.
-- **Server-neutral.** No DOLSharp or OpenDAoC type appears here; the target
+- **Server-neutral.** No server's type appears here; the target
   projections map these logical ids onto their own values.
 - **Honest.** A reference the client tables did not resolve is recorded as
   :class:`Unresolved` and refuses publication rather than being guessed.

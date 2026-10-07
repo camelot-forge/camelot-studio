@@ -23,7 +23,7 @@ Camelot core
 versioned manifests + artifacts + reports
         |
         v
-DOLSharp / OpenDAoC adapters
+OpenDAoC adapter
         |
         v
 real DAoC client verification
@@ -50,16 +50,16 @@ record the result as confirmed, disproved or unresolved.
 
 ## Server neutrality and package boundary
 
-DOLSharp and OpenDAoC are target platforms, not part of the canonical Studio
-schema. Studio should produce a portable content pack and generate target
-projections for each server family:
+**OpenDAoC is the target platform**, and the only one. It is not part of the
+canonical Studio schema -- the contract stays neutral so the pack is portable
+-- but there is one projection, one adapter and one deployment path to build
+and keep working:
 
 - a neutral logical model, appearance, slot, animation and dependency model;
 - a client profile describing the supported DAoC build and asset mappings;
-- a DOLSharp projection using its supported data packages and script/plugin
-  mechanisms;
-- an OpenDAoC projection using its supported data packages and script/plugin
-  mechanisms;
+- an OpenDAoC projection mapping logical ids onto its own tables and wire
+  format;
+- an OpenDAoC plugin implementing the install/update/uninstall lifecycle;
 - target-specific ID maps, range checks and compatibility metadata.
 
 The projections may share most of their structure, but they must not be assumed
@@ -95,7 +95,6 @@ content-pack/
   manifest/appearance.json
   manifest/animations.json
   profiles/client-<build>.json
-  targets/dolsharp/...
   targets/opendaoc/...
   client/patch-manifest.json
   checksums.lock
@@ -104,9 +103,8 @@ content-pack/
 `pack.json` should carry a schema version, pack ID/version, client profile,
 dependencies, entry points, target support and artifact hashes. The canonical
 manifests use namespaced logical IDs; generated target files map those IDs to
-DOLSharp or OpenDAoC values. Optional runtime plugins should be small adapters
-for creation, live appearance changes, validation or restoration, not the
-source of truth for asset metadata.
+OpenDAoC values. The runtime plugin is the mod loader of the section under
+Phase 4, not a collection of small adapters.
 
 Visual regression evidence uses both a structured record and a screenshot when
 available. The record includes race, gender, selected options, expected and
@@ -360,10 +358,9 @@ animation states, 0 unresolved, ~4.5 s, byte-identical on rebuild.
 glTF/JSON artifacts themselves, plus the per-target projections
 (`targets/dolsharp`, `targets/opendaoc`) and the client patch manifest.
 
-## Phase 4 — Validate the OpenDAoC integration first, then DOLSharp
+## Phase 4 — Validate the OpenDAoC integration
 
-Prove the complete path for OpenDAoC first, then repeat the contract tests for
-DOLSharp:
+Prove the complete path against OpenDAoC:
 
 ```text
 Studio pack -> target adapter -> server state -> client appearance
@@ -420,19 +417,19 @@ is Phase 5. Worse, two mods patching the same client files have no precedence
 mechanism at all, so client-side composition needs its own answer before any
 of this can be promised to third-party authors.
 
-**Compatibility with DOLSharp.** The mechanism is the same lineage — the same
-`AutoXMLDatabaseUpdate`, `LoaderUnloaderXML` and `GetUniqueMembers` files,
-carrying the **same boxed `==` defect** (`DOLSharp/GameServerScripts/dbupdater/
-AutoXMLDatabaseUpdate.cs:234`). So a loader must target the shared DOL schema
-(`DataObject`/`DataTable`) rather than OpenDAoC specifics, and any fix belongs
-in both trees.
+**Why OpenDAoC and not DOLSharp.** OpenDAoC is the maintained,
+community-used server; DOLSharp is its older ancestor. The comparative
+measurement behind that choice -- the extension point, its timing and the
+database surface, checked across both trees -- is in
+`workspace/notes`, kept private because it
+is evidence for a decision rather than part of the product.
 
 **Vocabulary, corrected.** What the pack does today is *add with explicit
 uninstall*, not a removable overlay. The gap between the two is exactly
 provenance, and it should not be papered over in the documentation.
 
 **The mod loader is a plugin, and the hook is verified portable** (2026-10-05).
-Measurements, not assumptions, across `OpenDAoC-Core` and `DOLSharp`:
+Measurements against OpenDAoC, not assumptions:
 
 - the extension point is `IDatabaseUpdater` plus a `[DatabaseUpdate]`
   attribute. Both servers discover it the same way -- reflect over
@@ -442,13 +439,10 @@ Measurements, not assumptions, across `OpenDAoC-Core` and `DOLSharp`:
 - it runs from `UpdateDatabase()` once at startup, after the database is
   initialized and the scripts are compiled. That is the right moment for a
   loader and the same moment the DOL XML packages already use;
-- the database surface a loader needs is shared: `IObjectDatabase`,
-  `AddObject(DataObject)`, `AddObject(IEnumerable<DataObject>)`,
-  `SelectAllObjects<T>`. Differences are minor -- OpenDAoC returns `List<T>`
-  where DOLSharp returns `IList<T>`, and only OpenDAoC has the async
-  variants. Writing against the interface compiles on both;
-- OpenDAoC's ECS rewrite touched the *game object* layer, not the database
-  layer, which is why a data loader stays portable.
+- the database surface a loader needs is `IObjectDatabase`,
+  `AddObject(DataObject)`, `AddObject(IEnumerable<DataObject>)` and
+  `SelectAllObjects<T>`, reached through the interface rather than through
+  concrete types.
 
 **One hazard to design around.** `UpdateDatabase()` returning `false` makes
 the server refuse to start (`if (!UpdateDatabase()) return false;`). A mod
@@ -458,9 +452,9 @@ internally and only logs; a loader must do the same, per mod, and report the
 failure in its own provenance table.
 
 **What this settles.** The loader is a plugin, not a core change: multi-server
-reach, no fork to maintain, and independence from the DOL XML defects -- our
-path stops depending on that fix, though the fix is still worth upstreaming
-for everyone else.
+reach, no fork to maintain, and independence from the XML defects -- our path
+stops depending on that fix, though the fix is still worth upstreaming for
+everyone else.
 
 ## Phase 5 — Editing and productization
 
@@ -500,9 +494,11 @@ shorten the Studio-to-server delivery loop.
 - The canonical client corpus is `DAOC CLIENT V2`, resolved through
   `$DAOC_CLIENT`; its exact build version must be recorded in the client
   profile.
-- The pack must support both DOLSharp and OpenDAoC through separate target
-  adapters, without making either server the canonical data model.
-- OpenDAoC is the first adapter and first end-to-end acceptance target.
+- **OpenDAoC is the only target.** The contract stays server-neutral so the
+  pack is portable, but there is one projection, one adapter and one
+  deployment path: OpenDAoC's. DOLSharp is superseded and is not supported;
+  see the decision note under Phase 4.
+- OpenDAoC is the end-to-end acceptance target.
 - Visual observations are stored as structured reproduction cases plus
   screenshots when available; no single storage format needs to be chosen by
   the user.
