@@ -35,7 +35,12 @@ Three things follow, and they are the point of the design:
 
 - **No client files.** A mod that brings a model or a texture needs NIF/MPAK
   writing, which does not exist yet, and two mods patching the same client
-  file have no precedence rule.
+  file have no precedence rule. The manifest **reserves a `client` section
+  for it and the loader ignores it**: a field declared and unused does not
+  break the schema when Phase 5 arrives, whereas adding one later would.
+  Delivering it now would mean an untestable code path (nothing produces
+  those files) offering a copy mechanism without the precedence rule needed
+  to make copies safe.
 - **No script mods.** A mod shipping `.cs` cannot be managed at runtime: the
   server compiles the script folder once, *before* the hook runs. Such a mod
   needs its files placed before boot, by an installer, not by this loader.
@@ -81,6 +86,24 @@ executing arbitrary statements against the server's database.
   data (a client model id, a spell id) are literal and stay literal —
   only the mod's own new rows are allocated.
 
+## A mod is one archive, read in memory, never extracted
+
+A mod is the `.tar.gz` our builder already emits -- one artifact, covered by
+its own `checksums.lock`, with a self-describing `PACK.json`. A directory of
+loose files would be inspectable without `tar tzf`, and that is its only
+advantage: it is not atomic, and an operator editing an installed file makes
+the provenance dishonest about what was actually deployed.
+
+**The loader never extracts.** The manifest and the row descriptions are
+JSON, small, and read straight out of the archive. Nothing the loader
+handles is written to disk, which removes the one real hazard of accepting
+archives from third parties -- path traversal during extraction. It also
+means the pack's client payloads must wait: those are the large binary
+sections, and they would need extraction.
+
+The cost is reading gzip and tar in C#, which .NET 10 provides directly
+(`GZipStream` and `System.Formats.Tar`); no external dependency.
+
 ## What the manager has to know, and where it gets it
 
 The manager needs a schema for each table it writes. It does not hard-code
@@ -121,8 +144,14 @@ CREATE TABLE IF NOT EXISTS `camelot_mod` (
 
 **Allocation is stable across updates.** A mod keeps the ids it was given
 the first time, because in-game data may already point at them: an item a
-player is wearing, a creature in a saved spawn. A mod's block is therefore
-allocated with headroom, and an update that fits reuses it unchanged.
+player is wearing, a creature in a saved spawn. An update that fits the
+block reuses it unchanged.
+
+**Blocks are rounded up.** A mod declaring 906 ids receives a round block
+rather than exactly 906, so an update that adds content still fits and does
+not force a reinstall. The cost is unused ids, which are free; the cost of
+being wrong without headroom is a stable-id violation, which is not. The
+exact rounding is a constant in the loader.
 
 `Result` is `SUCCESS` or the failure text. A mod that fails is recorded and
 retried on the next boot, not swept away, and an operator can see what went
@@ -187,12 +216,22 @@ behaves.
 
 Nothing is ever half-applied: each mod's rows go in one transaction.
 
-## Open questions
+## Decisions
 
-- **the block size** — allocate the declared count, or round up to give
-  headroom for updates? Rounding up costs nothing but space, and prevents a
-  reinstall later.
-- **client payloads** — does the pack carry them now, with the loader copying
-  them, or does that wait for Phase 5 and a precedence rule?
-- **mod folder layout** — one directory per mod, or the `.tar.gz` packs our
-  builder emits, extracted by the loader on first sight?
+- **The manager owns identity.** A mod declares how many ids it needs; the
+  manager allocates, records and writes. Overlap is impossible by
+  construction, conflict policy does not exist, and mods are portable
+  between servers.
+- **Packs carry declarative rows, not SQL.** The manager generates the
+  statements, which is what makes allocation possible and what keeps a
+  third-party mod from executing arbitrary SQL.
+- **Blocks are rounded up**, so an update fits without a reinstall.
+- **A mod is a `.tar.gz`, read in memory and never extracted** -- atomic,
+  checksummed, and free of the path-traversal hazard.
+- **Client payloads are deferred** to Phase 5, with their section reserved
+  in the manifest now.
+- **Uninstall refuses when the mod's content is in use**, and forcing is not
+  offered.
+- **The manager reflects over the server's `DataObject` types** for column
+  names and types, with only the allocatable key column and the reference
+  checks kept as small built-in maps, in the loader rather than in a pack.
