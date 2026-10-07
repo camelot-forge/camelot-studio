@@ -14,6 +14,7 @@ from camelot.mpak import (
     MpakArchive,
     MpakError,
     build_header,
+    decode_header,
     list_mpak,
     write_mpak,
 )
@@ -21,6 +22,19 @@ from camelot.mpak import (
 HEADER_SIZE = 21
 RECORD_SIZE = 0x11C
 NAME_SLOT = 0x110
+
+
+def _stream_lengths(blob: bytes) -> tuple[int, int, bytes]:
+    """(s1, s2, s2 bytes) of a full archive blob, measured from the file."""
+    pos = HEADER_SIZE
+    d = zlib.decompressobj()
+    d.decompress(blob[pos:])
+    s1 = len(blob) - pos - len(d.unused_data)
+    pos += s1
+    d = zlib.decompressobj()
+    d.decompress(blob[pos:])
+    s2 = len(blob) - pos - len(d.unused_data)
+    return s1, s2, blob[pos : pos + s2]
 
 
 def _hand_made_archive() -> bytes:
@@ -44,7 +58,7 @@ def _hand_made_archive() -> bytes:
         dir_bytes += rec
     s2 = zlib.compress(bytes(dir_bytes))
 
-    header = build_header(len(s1), 2)
+    header = build_header(len(s1), len(s2), zlib.crc32(s2) & 0xFFFFFFFF, 2)
     return header + s1 + s2 + data_a + data_b
 
 
@@ -97,20 +111,34 @@ def test_write_roundtrip(tmp_path):
         a.close()
 
 
-def test_written_header_field(tmp_path):
+def test_written_header_and_record_fields(tmp_path):
     out = tmp_path / "hdr.mpk"
     write_mpak(str(out), "hdr.mpk", [("x", b"data")])
     blob = out.read_bytes()
     assert blob[:4] == b"MPAK"
-    assert len(blob[:HEADER_SIZE]) == HEADER_SIZE
     h = blob[4:HEADER_SIZE]
     assert h[0] == 0x02
     assert h[7:9] == b"\x06\x07"
     assert h[10:13] == b"\x09\x0a\x0b"
     assert h[14:17] == b"\x0d\x0e\x0f"
-    # header byte 13 == compressed name-stream length + 8
+
+    # the directory stream bytes, and the record they must describe
     s1 = zlib.compress(b"hdr.mpk")
-    assert h[9] == len(s1) + 8
+    data_comp = zlib.compress(b"data")
+    rec = bytearray(RECORD_SIZE)
+    rec[:1] = b"x"
+    struct.pack_into(
+        "<IIIII", rec, NAME_SLOT - 8,
+        0, 4, 0, len(data_comp), zlib.crc32(data_comp) & 0xFFFFFFFF,
+    )
+    s2 = zlib.compress(bytes(rec))
+    assert blob[HEADER_SIZE + len(s1) : HEADER_SIZE + len(s1) + len(s2)] == s2
+
+    decoded = decode_header(blob[:HEADER_SIZE])
+    assert decoded["name_comp_len"] == len(s1)
+    assert decoded["dir_comp_len"] == len(s2)
+    assert decoded["dir_crc32"] == zlib.crc32(s2) & 0xFFFFFFFF
+    assert decoded["num_entries"] == 1
 
 
 def test_long_name_rejected(tmp_path):
@@ -118,46 +146,55 @@ def test_long_name_rejected(tmp_path):
     with pytest.raises(MpakError):
         write_mpak(str(out), "x.mpk", [("n" * NAME_SLOT, b"d")])
 
-# --- header byte 17: decoded from the retail corpus --------------------------
+# --- header carriers: decoded from the retail corpus ------------------------
 
-def test_header_byte_17_is_the_entry_count_xor_12():
-    """The retail corpus settles it: `byte17 == (entries ^ 12) & 0xFF`,
-    verified on every archive in the client. The writer used a placeholder
-    (`n*7+5`) that never matched."""
+def test_header_count_carrier_round_trips():
+    """The retail corpus settles it: the count carrier is
+    `(entries ^ 12) & 0xFF`; an earlier reading called it "not a plain
+    count" and the writer emitted a placeholder that never matched."""
     for n in (0, 1, 3, 5, 12, 64, 151, 164, 255):
-        header = build_header(10, n)
+        header = build_header(10, 41, 0, n)
         assert header[17] == (n ^ 12) & 0xFF, n
+        assert decode_header(header)["num_entries"] == n
 
 
-def test_header_byte_17_survives_the_reader(client_dir):
-    """Check the formula against the archives themselves rather than a
-    recalled sample, so a client update that changes the convention fails
-    here instead of in-game."""
+def test_header_carriers_describe_the_streams(client_dir):
+    """Check the decoded carriers against the archives themselves rather
+    than a recalled sample: the client reads the stream lengths from the
+    header, so a carrier that disagrees with the streams breaks in-game
+    with no message. A client update that changes the convention fails
+    here instead of at the loading screen."""
     import glob
     import os
 
-    from camelot.mpak import MpakArchive
-
     paths = sorted(glob.glob(os.path.join(client_dir, "**", "*.mpk"), recursive=True))
+    paths += sorted(glob.glob(os.path.join(client_dir, "**", "*.npk"), recursive=True))
     assert paths, "no archives to check"
     # a spread rather than the first N: the sample should not be one directory
     step = max(1, len(paths) // 40)
     checked = 0
     for path in paths[::step]:
+        blob = open(path, "rb").read()
+        s1, s2, s2b = _stream_lengths(blob)
+        decoded = decode_header(blob[:HEADER_SIZE])
+        assert decoded["name_comp_len"] == s1, path
+        assert decoded["dir_comp_len"] == s2, path
+        assert decoded["dir_crc32"] == zlib.crc32(s2b) & 0xFFFFFFFF, path
         archive = MpakArchive(path)
         try:
-            assert archive.header[17] == (len(archive.entries) ^ 12) & 0xFF, path
-            checked += 1
+            assert decoded["num_entries"] == len(archive.entries), path
         finally:
             archive.close()
+        checked += 1
     assert checked >= 20
 
 
-def test_rewriting_preserves_the_undecoded_header_field(client_dir, tmp_path):
-    """Bytes 5..10 are still undecoded. A rewrite must carry the original
-    value rather than a placeholder: editing a table's content does not
-    change *which entries exist*, so the field is exactly as valid as it
-    was in the archive it came from."""
+def test_rewriting_recomputes_the_header_and_carries_the_record_field(client_dir, tmp_path):
+    """Rewriting recompresses the streams, so the carriers must be
+    recomputed — preserving them shipped archives the client refuses (the
+    client trusts the header, measured in test A of the setup guide). The
+    version/constant bytes and the undecoded per-entry record field are
+    carried across: a mod changes a table, not the container."""
     import glob
     import os
 
@@ -167,11 +204,27 @@ def test_rewriting_preserves_the_undecoded_header_field(client_dir, tmp_path):
     archive = MpakArchive(source)
     try:
         entries = [(name, archive.read(name)) for name in archive.entries]
+        unknown = archive.unknown_fields()
         out = tmp_path / "rewritten.mpk"
-        write_mpak(str(out), archive.name, entries, checksum6=archive.header[5:11])
+        write_mpak(
+            str(out), archive.name, entries, template=archive.header, unknown=unknown
+        )
+        source_header = archive.header
     finally:
         archive.close()
-    assert out.read_bytes()[5:11] == archive.header[5:11]
+    blob = out.read_bytes()
+    assert blob[4] == source_header[4]  # version preserved
+    s1, s2, s2b = _stream_lengths(blob)
+    decoded = decode_header(blob[:HEADER_SIZE])
+    assert decoded["name_comp_len"] == s1
+    assert decoded["dir_comp_len"] == s2
+    assert decoded["dir_crc32"] == zlib.crc32(s2b) & 0xFFFFFFFF
+    assert decoded["num_entries"] == len(entries)
+    after = MpakArchive(str(out))
+    try:
+        assert after.unknown_fields() == unknown
+    finally:
+        after.close()
 
 
 def test_a_rewritten_archive_reports_the_right_entry_count_byte(client_dir, tmp_path):
@@ -192,12 +245,13 @@ def test_a_rewritten_archive_reports_the_right_entry_count_byte(client_dir, tmp_
     assert out.read_bytes()[17] == (count ^ 12) & 0xFF
 
 
-def test_repack_preserves_the_header_and_replaces_one_entry(client_dir, tmp_path):
+def test_repack_recomputes_the_header_and_replaces_one_entry(client_dir, tmp_path):
     """The mod path: rewrite an archive, swapping one entry's content.
 
     Used first to prove the container is accepted with content unchanged,
-    then to change a table. It carries the undecoded header field across,
-    because which entries exist does not change."""
+    then to change a table. The carriers describe the rewritten streams;
+    the undecoded record field of every entry is carried across.
+    """
     import glob
     import os
 
@@ -209,14 +263,20 @@ def test_repack_preserves_the_header_and_replaces_one_entry(client_dir, tmp_path
         name = original.entries[0]
         out = tmp_path / "repacked.mpk"
         repack_mpak(source, str(out), {name: b"replaced"})
-        head6 = original.header[5:11]
+        unknown = original.unknown_fields()
     finally:
         original.close()
 
+    blob = out.read_bytes()
+    s1, s2, s2b = _stream_lengths(blob)
+    decoded = decode_header(blob[:HEADER_SIZE])
+    assert decoded["name_comp_len"] == s1
+    assert decoded["dir_comp_len"] == s2
+    assert decoded["dir_crc32"] == zlib.crc32(s2b) & 0xFFFFFFFF
     after = MpakArchive(str(out))
     try:
-        assert after.header[5:11] == head6
-        assert after.header[17] == (len(after.entries) ^ 12) & 0xFF
+        assert decoded["num_entries"] == len(after.entries)
+        assert after.unknown_fields() == unknown
         assert after.read(name) == b"replaced"
     finally:
         after.close()

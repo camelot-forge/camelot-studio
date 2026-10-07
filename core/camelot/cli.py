@@ -231,8 +231,10 @@ def cmd_mpak(args) -> int:
 
     if args.mpak_cmd == "repack":
         # The mod path: rewrite an archive, optionally swapping an entry's
-        # content. The header's undecoded field is carried across, so the
-        # container stays the one the client shipped.
+        # content. The header carriers (directory crc32 and length, name
+        # length, entry count) are recomputed for the streams actually
+        # written; the version/constant bytes and the undecoded per-entry
+        # record field stay those of the source archive.
         replacements = {}
         for spec in args.replace or []:
             name, _, path = spec.partition("=")

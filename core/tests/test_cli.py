@@ -25,28 +25,43 @@ class TestResolvePath:
         assert resolve_path("DAOC CLIENT\\figures\\x.nif".replace("\\", "/")) == (
             "/games/daoc/figures/x.nif")
 
-def test_cli_mpak_repack_preserves_the_header(tmp_path):
-    """Repacking is the mod path, so it must be reachable from the CLI and
-    carry the undecoded header field across."""
+def test_cli_mpak_repack_recomputes_the_header(tmp_path):
+    """Repacking is the mod path: the header carriers must describe the
+    streams actually written. Preserving them (while they were undecoded)
+    shipped archives the client refused — it reads the stream lengths from
+    the header, not from the streams."""
+    import zlib
+
     from camelot.cli import main
-    from camelot.mpak import MpakArchive, write_mpak
+    from camelot.mpak import MpakArchive, decode_header, write_mpak
 
     src = tmp_path / "src.mpk"
     write_mpak(str(src), "gamedata.mpk", [("a.csv", b"A"), ("b.csv", b"B")])
-    original = MpakArchive(str(src))
-    head6 = original.header[5:11]
-    original.close()
 
     replacement = tmp_path / "a.csv"
-    replacement.write_bytes(b"REPLACED")
+    replacement.write_bytes(b"REPLACED" * 100)
     out = tmp_path / "out.mpk"
     assert main(["mpak", "repack", str(src), str(out),
                  "--replace", f"a.csv={replacement}"]) == 0
 
+    blob = out.read_bytes()
+    pos = 21
+    d = zlib.decompressobj()
+    d.decompress(blob[pos:])
+    s1 = len(blob) - pos - len(d.unused_data)
+    pos += s1
+    d = zlib.decompressobj()
+    d.decompress(blob[pos:])
+    s2 = len(blob) - pos - len(d.unused_data)
+    head = decode_header(blob[:21])
+    assert head["name_comp_len"] == s1
+    assert head["dir_comp_len"] == s2
+    assert head["dir_crc32"] == zlib.crc32(blob[pos:pos + s2]) & 0xFFFFFFFF
+    assert head["num_entries"] == 2
+
     after = MpakArchive(str(out))
     try:
-        assert after.header[5:11] == head6
-        assert after.read("a.csv") == b"REPLACED"
+        assert after.read("a.csv") == b"REPLACED" * 100
         assert after.read("b.csv") == b"B"
     finally:
         after.close()

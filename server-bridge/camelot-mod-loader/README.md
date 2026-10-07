@@ -73,13 +73,13 @@ has to write an archive, which is what `camelot mpak repack` is for:
 camelot mpak repack SRC OUT [--replace NAME=FILE]
 ```
 
-It rewrites an archive while carrying across the six header bytes at offsets
-5..10, whose meaning is still undecoded, and recomputing byte 17
-(`(entry_count ^ 12) & 0xFF`, decoded from all 1306 archives in the client).
-Replacing an entry's content does not change *which entries exist*, so the
-container stays the one the client shipped — which is the point, and why
-preserving beats substituting a placeholder.
-
-Whether the client actually accepts such an archive is still unverified; the
-procedure that settles it, and the state of that investigation, are in the
-private workshop.
+It rewrites an archive, recomputing the header carriers (directory crc32 and
+length, name length, entry count) for the streams actually written and
+carrying across the version/constant bytes and each entry's undecoded record
+field. **The carriers must be recomputed**: the client reads the stream
+lengths from the header instead of measuring the streams — measured
+in-client, it reads exactly the declared lengths and exits during the
+loading screen when they disagree (test A of the setup guide). The decoded
+layout is in `docs/formats.md` §5; an earlier version of this note said the
+six bytes at 5..10 were undecoded and that acceptance was unverified — both
+are now settled.

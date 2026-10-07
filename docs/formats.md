@@ -410,47 +410,66 @@ skin/armour is per-character (fig3 + `pskins`), needs a cleaner model;
 ## 5. MPAK archives (`*.mpk` and `*.npk`)
 
 Single format: magic `MPAK`; 21-byte header; zlib stream 1 = archive name;
-zlib stream 2 = directory of 0x11c-byte records (NUL-terminated name + u32
-offset at 0x110); then zlib data streams. Directory offsets are
-**base-relative** (base = end of the directory stream). **Read and write are
-implemented** (`core/camelot/mpak.py`; write validated by re-reading every
-retail entry and by the workspace reference reader). Virtual URLs
-`archive://….mpk:file` in `loading.dat`. Zone archives:
+zlib stream 2 = directory of 0x11c-byte records; then zlib data streams.
+Directory offsets are **base-relative** (base = end of the directory stream).
+**Read and write are implemented** (`core/camelot/mpak.py`; write validated
+by re-reading every retail entry, by the workspace reference reader, and
+in-client — see below). Virtual URLs `archive://….mpk:file` in
+`loading.dat`. Zone archives:
 `zones/zoneNNN/datNNN.mpk, csvNNN.mpk, lodNNN.mpk, terNNN.mpk, texNNN.mpk`;
 dungeons: `zones/Dnifs/*.npk`.
 
-**Header (17 bytes after `MPAK`), reverse-engineered from the retail corpus:**
+**Header (17 bytes after `MPAK`) — decoded on 4 729 corpus archives.**
+Every carrier byte is position-keyed, `byte[i] = key(i) XOR data`:
 
-| field | value | status |
+| offset | field | encoding |
 |---|---|---|
-| byte 4 | `0x02` | constant |
-| bytes 5..10 | 6-byte checksum | *open* — not decoded |
-| bytes 11,12 | `0x06 0x07` | constant |
-| byte 13 | `len(name_stream_compressed) + 8` | decoded |
-| bytes 14..16 | `0x09 0x0a 0x0b` | constant |
-| byte 17 | `(entry_count ^ 12) & 0xFF` | decoded |
-| bytes 18..20 | `0x0d 0x0e 0x0f` | constant |
+| 0 | version | `0x02` |
+| 1..4 | **crc32 of the compressed directory stream** | u32 LE `^ 00 01 02 03` |
+| 5..6 | **compressed directory length (s2)** | u16 LE `^ 0x0504` |
+| 7..8 | constants | `0x06 0x07` |
+| 9 | **compressed name length (s1)** | u8 `^ 0x08` |
+| 10..12 | constants | `0x09 0x0a 0x0b` |
+| 13 | entry count | u8 `^ 0x0C` |
+| 14..16 | constants | `0x0d 0x0e 0x0f` |
 
-`byte 13` verified across 40+ archives (`.mpk` and `.npk`).
+An earlier reading recorded bytes 5..10 as "undecoded" and byte 17 as a
+count function; both are now explained. The 16-bit directory carrier and
+the 8-bit name carrier hold every retail archive (max measured: 21 551 and
+49 bytes — larger streams would need a convention this corpus has no
+sample of, and `build_header` refuses them rather than guessing).
 
-**Byte 17 is decoded**: `(entry_count ^ 12) & 0xFF`, verified against all
-1306 archives in the client, across every archive family. It is a plain
-function of the entry count, which an earlier reading called "not a plain
-count".
+**Directory record (0x11c bytes)** — an earlier reading stopped at the
+0x110 offset; all seven u32 fields are:
 
-**Bytes 5..10 are still open.** The value is uniform across the corpus and
-matches no CRC or hash truncation of the name, the directory, or their
-concatenation; it is not a counter. `write_mpak` emits a deterministic
-placeholder unless the caller passes the value read from the archive being
-rewritten (`checksum6=`), which `write_mpak` callers should always do when
-editing an existing archive: a rewrite does not change *which entries
-exist*, so the original value stays as valid as it was.
+| offset | field |
+|---|---|
+| 0x000..0x100 | entry name, NUL-terminated/padded |
+| 0x100..0x104 | f0: undecoded build-tool artefact (carried across rewrites) |
+| 0x104..0x108 | always zero in the corpus |
+| 0x108..0x10C | uncompressed offset (cumulative over the archive) |
+| 0x10C..0x110 | uncompressed size |
+| 0x110..0x114 | compressed offset (base-relative) |
+| 0x114..0x118 | compressed size |
+| 0x118..0x11C | crc32 of the entry's compressed stream |
 
-Whether the game validates either field is still unconfirmed — the client
-carries no checksum or corruption message for archives, only "could not
-open" — and is the first question the in-client MPAK test answers. Reference
-readers (mharj's dempak.py 2002, our `MpakArchive`) skip the header past the
-magic, so round-trips prove the structural bytes only.
+**The game reads the stream lengths from the header, not from the
+streams.** Traced in the client (test A of `notes`): it
+reads exactly the header-declared s1/s2 bytes and, when the directory
+cannot be parsed from that read, retries the whole archive and exits
+during the loading screen — with no message anywhere (`error.log` /
+`warn.log` never mention archives, matching the "no corruption message"
+observation below). Consequences:
+
+- the carriers **must be recomputed on every rewrite**; preserving them
+  produces an archive the client refuses *even at byte-identical content*;
+- the client accepts both retail level-9 streams (`78 DA`) and
+  deflate-default streams (`78 9C`) once the header matches.
+
+Reference readers (mharj's dempak.py 2002, our `MpakArchive`) skip the
+header past the magic, so round-trips alone never exercised the carriers —
+which is exactly how a writer that preserved them passed every local test
+while failing in-client.
 
 ## 6. The NetImmerse 4.x legacy reader — block-level facts
 
