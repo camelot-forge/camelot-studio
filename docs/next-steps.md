@@ -374,6 +374,63 @@ selection, spawn and reload. Use the emulator and the real client as
 acceptance environments. Add a bridge or daochook integration only after the
 manifest-only path is understood and reproducible.
 
+### The target is a mod ecosystem, not a one-off pack (2026-10-05)
+
+The intended product is not a single pack for one server. It is a format many
+authors publish against, so a server operator can add, update and remove mods
+at will — a restart at most, never a reinstall.
+
+That is a different design from what exists today, and the difference is worth
+naming precisely:
+
+| | today | a mod ecosystem needs |
+|---|---|---|
+| what it does | adds and replaces rows | adds, updates and **removes** |
+| provenance | none: `AutoXMLUpdate` stores only package, hash and result | which rows came from which mod |
+| conflicts | two mods touching one creature: last write wins, silently | detectable, and resolvable by policy |
+| lifecycle | apply once per file hash | install / update / uninstall as first-class verbs |
+
+**The DOL XML package mechanism is not the right foundation for this**, aside
+from its defects. The format requires a mod author to know internal C# class
+names (`DbNpcTemplate`, not the table name `NpcTemplate`); it validates
+nothing, so a misspelled element is silently dropped; and it has no schema
+version, no provenance and no conflict handling. It is a data-seeding tool,
+and it should stay one.
+
+**What is needed is a mod loader**, and the server does not have to change
+much for it:
+
+- the server compiles C# scripts natively, so a loader can be a **plugin**:
+  it reads a pack manifest, applies or removes rows, and keeps provenance in
+  its own table. No core change;
+- if the loader should live in the core instead, the requirement is one
+  **provenance table** plus recording what was written. Moderate, not major.
+
+**Id ranges are what make mods compose.** A mod reserves a span (this pack
+uses `100_000_000`, verified free against the server's own `npctemplate`
+rows); removal then deletes exactly that span, and two mods whose spans
+overlap are detectably in conflict rather than silently overwriting each
+other. The allocation has to be deliberate for this to scale past a handful
+of authors.
+
+**The bottleneck is not the server, it is the client.** A mod that reuses
+existing assets (this pack's creatures) deploys today. A mod that *brings* a
+model or a texture cannot: the client reads NIF from MPAK, and writing those
+is Phase 5. Worse, two mods patching the same client files have no precedence
+mechanism at all, so client-side composition needs its own answer before any
+of this can be promised to third-party authors.
+
+**Compatibility with DOLSharp.** The mechanism is the same lineage — the same
+`AutoXMLDatabaseUpdate`, `LoaderUnloaderXML` and `GetUniqueMembers` files,
+carrying the **same boxed `==` defect** (`DOLSharp/GameServerScripts/dbupdater/
+AutoXMLDatabaseUpdate.cs:234`). So a loader must target the shared DOL schema
+(`DataObject`/`DataTable`) rather than OpenDAoC specifics, and any fix belongs
+in both trees.
+
+**Vocabulary, corrected.** What the pack does today is *add with explicit
+uninstall*, not a removable overlay. The gap between the two is exactly
+provenance, and it should not be papered over in the documentation.
+
 ## Phase 5 — Editing and productization
 
 Only after the server pack works end to end:
@@ -391,7 +448,23 @@ Until Phases 0–4 are complete, defer broad UI expansion, MCP endpoints,
 multi-root workspaces, desktop packaging and speculative features that do not
 shorten the Studio-to-server delivery loop.
 
-## Decisions recorded
+## Decisions recorded (continued)
+
+- **The product is a mod ecosystem, not a single pack.** The pack format is
+  the mod format: a manifest of logical ids, target projections and checksums
+  is what a mod author publishes and an operator installs. See the section
+  under Phase 4.
+- **Mods must be installable, updatable and removable**, with a server
+  restart at most. This makes *provenance* a requirement, not a nicety: the
+  server has to know which rows belong to which mod.
+- **The DOL XML data package is not the mod substrate.** It stays a
+  data-seeding tool. The mod path is a loader — a plugin first, since that
+  needs no core change.
+- **Id ranges are the composition mechanism.** A mod reserves a span; removal
+  is exact and overlapping claims are detectable.
+- **The client side is the real constraint**, not the server: assets a mod
+  *brings* need NIF/MPAK writing (Phase 5), and client-file conflicts between
+  mods have no precedence mechanism today.
 
 - The canonical client corpus is `DAOC CLIENT V2`, resolved through
   `$DAOC_CLIENT`; its exact build version must be recorded in the client

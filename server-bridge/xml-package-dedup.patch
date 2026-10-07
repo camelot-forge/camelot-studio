@@ -2,7 +2,7 @@ diff --git a/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs b/GameServer/
 index d94a115cd..44cc43590 100644
 --- a/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
 +++ b/GameServer/scripts/dbupdater/AutoXMLDatabaseUpdate.cs
-@@ -211,8 +211,25 @@ namespace DOL.GS.DatabaseUpdate
+@@ -211,8 +211,24 @@ namespace DOL.GS.DatabaseUpdate
  					var tableHandler = new DataTableHandler(xmlType);
  					
  					// Find unique Fields
@@ -26,19 +26,10 @@ index d94a115cd..44cc43590 100644
 +						if (comparable.Length > 0)
 +							uniqueMember = new[] { comparable };
 +					}
-+
  					// Get all object "Method" Through Reflection
  					var classMethod = GameServer.Database.GetType().GetMethod("SelectAllObjects", Type.EmptyTypes);
  					var genericMethod = classMethod.MakeGenericMethod(xmlType);
-@@ -222,6 +239,7 @@ namespace DOL.GS.DatabaseUpdate
- 					var toDelete = new ConcurrentBag<DataObject>();
- 					var toAdd = new ConcurrentBag<DataObject>();
- 					
-+
- 					// Check if an Object already exists
- 					xmlTable.AsParallel().ForAll(obj => {
- 					                             	// Check if Exists Compare Unique and Non-Generated Primary Keys
-@@ -230,7 +248,7 @@ namespace DOL.GS.DatabaseUpdate
+@@ -230,7 +247,7 @@ namespace DOL.GS.DatabaseUpdate
  					                             		                .Any(constraint => constraint
  					                             		                     .All(bind => bind.ValueType == typeof(string)
  					                             		                          ? bind.GetValue(entry).ToString().Equals(bind.GetValue(obj).ToString(), StringComparison.OrdinalIgnoreCase)
