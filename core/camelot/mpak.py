@@ -73,9 +73,9 @@ class MpakArchive:
         # keep the handle open for lazy per-entry reads (not a context manager)
         self._fh = open(path, "rb")  # noqa: SIM115
         try:
-            if self._fh.read(4) != MAGIC:
+            self.header = self._fh.read(HEADER_SIZE)
+            if self.header[:4] != MAGIC:
                 raise MpakError(f"{os.path.basename(path)}: not an MPAK archive")
-            self._fh.seek(HEADER_SIZE)
             self.name = _read_stream(self._fh).decode("latin1")
             dirdata = _read_stream(self._fh)
         except MpakError:
@@ -124,30 +124,50 @@ def _placeholder_checksum6(num_entries: int) -> bytes:
     return (v & 0xFFFFFFFF).to_bytes(4, "little") + num_entries.to_bytes(2, "little")
 
 
-def _placeholder_checksum1(num_entries: int) -> int:
-    """*open* 1-byte header checksum — deterministic placeholder."""
-    return (num_entries * 7 + 5) & 0xFF
+def header_entry_checksum(num_entries: int) -> int:
+    """Header byte 17: `(num_entries ^ 12) & 0xFF`.
+
+    Decoded from the retail corpus: the formula holds for all 1306 archives
+    in the client, across every archive family (figures, skins, zones,
+    terrain). `formats.md` recorded this field as undecoded "not a plain
+    count"; it is a plain function of the entry count.
+    """
+    return (num_entries ^ 12) & 0xFF
 
 
-def build_header(name_comp_len: int, num_entries: int) -> bytes:
+def build_header(
+    name_comp_len: int, num_entries: int, *, checksum6: bytes | None = None
+) -> bytes:
     """The 21-byte MPAK header for a name stream of *name_comp_len* bytes.
 
-    Encodes the decoded fields (``byte 13 = name_comp_len + 8``) and writes
-    the two *open* checksum fields as deterministic placeholders.
+    Byte 13 encodes the decoded name-stream length (``+ 8``) and byte 17 the
+    entry count (see :func:`header_entry_checksum`). Bytes 5..10 remain
+    undecoded: a 48-bit value, uniform across the corpus, matching no CRC or
+    hash truncation of the name or the directory.
+
+    Pass *checksum6* -- the field read from the archive being rewritten --
+    to preserve it. Nothing about *which entries exist* changes when a
+    table's content is edited, so a preserved field stays as valid as it
+    ever was; emitting a placeholder instead throws away the only value we
+    know the retail archive carried.
     """
+    if checksum6 is None:
+        checksum6 = _placeholder_checksum6(num_entries)
+    if len(checksum6) != 6:
+        raise MpakError(f"checksum6 must be 6 bytes, got {len(checksum6)}")
     return (
         MAGIC
         + b"\x02"
-        + _placeholder_checksum6(num_entries)
+        + bytes(checksum6)
         + b"\x06\x07"
-        + bytes([name_comp_len + 8])
+        + bytes([(name_comp_len + 8) & 0xFF])
         + b"\x09\x0a\x0b"
-        + bytes([_placeholder_checksum1(num_entries)])
+        + bytes([header_entry_checksum(num_entries)])
         + b"\x0d\x0e\x0f"
     )
 
 
-def write_mpak(path: str, name: str, entries) -> None:
+def write_mpak(path: str, name: str, entries, *, checksum6: bytes | None = None) -> None:
     """Write an MPAK archive with *entries* (iterable of (entry_name, bytes)).
 
     Offsets are computed base-relative (relative to the start of the data
@@ -173,7 +193,7 @@ def write_mpak(path: str, name: str, entries) -> None:
         struct.pack_into("<I", rec, NAME_SLOT, rel)
         dir_bytes += rec
     s2 = zlib.compress(bytes(dir_bytes))
-    header = build_header(len(s1), len(pairs))
+    header = build_header(len(s1), len(pairs), checksum6=checksum6)
     with open(path, "wb") as fh:
         fh.write(header)
         fh.write(s1)

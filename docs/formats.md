@@ -428,16 +428,29 @@ dungeons: `zones/Dnifs/*.npk`.
 | bytes 11,12 | `0x06 0x07` | constant |
 | byte 13 | `len(name_stream_compressed) + 8` | decoded |
 | bytes 14..16 | `0x09 0x0a 0x0b` | constant |
-| byte 17 | checksum byte (deterministic fn of entry count, not a plain count) | *open* |
+| byte 17 | `(entry_count ^ 12) & 0xFF` | decoded |
 | bytes 18..20 | `0x0d 0x0e 0x0f` | constant |
 
-`byte 13` verified across 40+ archives (`.mpk` and `.npk`); `byte 17` and the
-6-byte checksum are deterministic per file but not a simple adler32/crc32 of
-the file or directory — *open research*. Reference readers (mharj's
-dempak.py 2002, our `MpakArchive`) skip the header past the magic, so
-round-trips prove the structural bytes; whether the game validates the
-checksums needs in-game confirmation. `write_mpak` emits deterministic
-placeholders for the two *open* fields.
+`byte 13` verified across 40+ archives (`.mpk` and `.npk`).
+
+**Byte 17 is decoded**: `(entry_count ^ 12) & 0xFF`, verified against all
+1306 archives in the client, across every archive family. It is a plain
+function of the entry count, which an earlier reading called "not a plain
+count".
+
+**Bytes 5..10 are still open.** The value is uniform across the corpus and
+matches no CRC or hash truncation of the name, the directory, or their
+concatenation; it is not a counter. `write_mpak` emits a deterministic
+placeholder unless the caller passes the value read from the archive being
+rewritten (`checksum6=`), which `write_mpak` callers should always do when
+editing an existing archive: a rewrite does not change *which entries
+exist*, so the original value stays as valid as it was.
+
+Whether the game validates either field is still unconfirmed — the client
+carries no checksum or corruption message for archives, only "could not
+open" — and is the first question the in-client MPAK test answers. Reference
+readers (mharj's dempak.py 2002, our `MpakArchive`) skip the header past the
+magic, so round-trips prove the structural bytes only.
 
 ## 6. The NetImmerse 4.x legacy reader — block-level facts
 

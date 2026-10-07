@@ -117,3 +117,76 @@ def test_long_name_rejected(tmp_path):
     out = tmp_path / "long.mpk"
     with pytest.raises(MpakError):
         write_mpak(str(out), "x.mpk", [("n" * NAME_SLOT, b"d")])
+
+# --- header byte 17: decoded from the retail corpus --------------------------
+
+def test_header_byte_17_is_the_entry_count_xor_12():
+    """The retail corpus settles it: `byte17 == (entries ^ 12) & 0xFF`,
+    verified on every archive in the client. The writer used a placeholder
+    (`n*7+5`) that never matched."""
+    for n in (0, 1, 3, 5, 12, 64, 151, 164, 255):
+        header = build_header(10, n)
+        assert header[17] == (n ^ 12) & 0xFF, n
+
+
+def test_header_byte_17_survives_the_reader(client_dir):
+    """Check the formula against the archives themselves rather than a
+    recalled sample, so a client update that changes the convention fails
+    here instead of in-game."""
+    import glob
+    import os
+
+    from camelot.mpak import MpakArchive
+
+    paths = sorted(glob.glob(os.path.join(client_dir, "**", "*.mpk"), recursive=True))
+    assert paths, "no archives to check"
+    # a spread rather than the first N: the sample should not be one directory
+    step = max(1, len(paths) // 40)
+    checked = 0
+    for path in paths[::step]:
+        archive = MpakArchive(path)
+        try:
+            assert archive.header[17] == (len(archive.entries) ^ 12) & 0xFF, path
+            checked += 1
+        finally:
+            archive.close()
+    assert checked >= 20
+
+
+def test_rewriting_preserves_the_undecoded_header_field(client_dir, tmp_path):
+    """Bytes 5..10 are still undecoded. A rewrite must carry the original
+    value rather than a placeholder: editing a table's content does not
+    change *which entries exist*, so the field is exactly as valid as it
+    was in the archive it came from."""
+    import glob
+    import os
+
+    from camelot.mpak import MpakArchive
+
+    source = min(glob.glob(os.path.join(client_dir, "figures", "fig3", "*.mpk")))
+    archive = MpakArchive(source)
+    try:
+        entries = [(name, archive.read(name)) for name in archive.entries]
+        out = tmp_path / "rewritten.mpk"
+        write_mpak(str(out), archive.name, entries, checksum6=archive.header[5:11])
+    finally:
+        archive.close()
+    assert out.read_bytes()[5:11] == archive.header[5:11]
+
+
+def test_a_rewritten_archive_reports_the_right_entry_count_byte(client_dir, tmp_path):
+    import glob
+    import os
+
+    from camelot.mpak import MpakArchive
+
+    source = min(glob.glob(os.path.join(client_dir, "figures", "fig3", "*.mpk")))
+    archive = MpakArchive(source)
+    try:
+        entries = [(name, archive.read(name)) for name in archive.entries]
+        count = len(entries)
+        out = tmp_path / "rewritten.mpk"
+        write_mpak(str(out), archive.name, entries)
+    finally:
+        archive.close()
+    assert out.read_bytes()[17] == (count ^ 12) & 0xFF
