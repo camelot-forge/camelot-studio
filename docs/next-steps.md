@@ -431,6 +431,37 @@ in both trees.
 uninstall*, not a removable overlay. The gap between the two is exactly
 provenance, and it should not be papered over in the documentation.
 
+**The mod loader is a plugin, and the hook is verified portable** (2026-10-05).
+Measurements, not assumptions, across `OpenDAoC-Core` and `DOLSharp`:
+
+- the extension point is `IDatabaseUpdater` plus a `[DatabaseUpdate]`
+  attribute. Both servers discover it the same way -- reflect over
+  `ScriptMgr.GameServerScripts`, keep the classes implementing the interface,
+  instantiate and call `Update()`. The attribute file is identical in the two
+  trees, down to the line numbers;
+- it runs from `UpdateDatabase()` once at startup, after the database is
+  initialized and the scripts are compiled. That is the right moment for a
+  loader and the same moment the DOL XML packages already use;
+- the database surface a loader needs is shared: `IObjectDatabase`,
+  `AddObject(DataObject)`, `AddObject(IEnumerable<DataObject>)`,
+  `SelectAllObjects<T>`. Differences are minor -- OpenDAoC returns `List<T>`
+  where DOLSharp returns `IList<T>`, and only OpenDAoC has the async
+  variants. Writing against the interface compiles on both;
+- OpenDAoC's ECS rewrite touched the *game object* layer, not the database
+  layer, which is why a data loader stays portable.
+
+**One hazard to design around.** `UpdateDatabase()` returning `false` makes
+the server refuse to start (`if (!UpdateDatabase()) return false;`). A mod
+loader that lets an exception escape can therefore stop a server from
+booting because of one bad mod. `AutoXMLDatabaseUpdate` catches everything
+internally and only logs; a loader must do the same, per mod, and report the
+failure in its own provenance table.
+
+**What this settles.** The loader is a plugin, not a core change: multi-server
+reach, no fork to maintain, and independence from the DOL XML defects -- our
+path stops depending on that fix, though the fix is still worth upstreaming
+for everyone else.
+
 ## Phase 5 — Editing and productization
 
 Only after the server pack works end to end:
