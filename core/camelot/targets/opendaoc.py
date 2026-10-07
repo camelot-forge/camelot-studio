@@ -296,9 +296,10 @@ def creature_row(
 ) -> dict:
     """One creature as a declarative row, with no id of its own.
 
-    `Model` is a client model id from `monnifs`, existing game data rather
-    than something the mod introduces, so it stays literal. The row's own
-    key column is deliberately absent: the manager fills it.
+    `Model` is a client model id from `monsters` (the table the server's
+    ids index; its `NIF` field resolves through `monnifs`), existing game
+    data rather than something the mod introduces, so it stays literal. The
+    row's own key column is deliberately absent: the manager fills it.
     """
     if model_id <= 0:
         raise ValueError(f"model id {model_id} must be positive")
