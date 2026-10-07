@@ -63,28 +63,23 @@ own behaviour only show up in a real run — the checksum verification and the
 `[DatabaseUpdate]` attribute were both wrong in ways only a boot revealed.
 
 
-## The client-side MPAK test (does the client accept a container we wrote?)
+## Writing client archives
 
-Not a server matter, but it lives here because it gates the same ecosystem.
-The client's textures and its `gamedata` tables are MPAK archives; models and
-animations are loose files. Writing archives is therefore the prerequisite
-for any mod that brings a texture or a new id.
-
-Three tests, cheapest first. Stop at the first failure.
+Client textures and the `gamedata` tables live in MPAK archives; models and
+animations are loose files. A mod that brings a texture or a new id therefore
+has to write an archive, which is what `camelot mpak repack` is for:
 
 ```sh
-# A: content unchanged, container ours. Any observable difference is the
-#    container being rejected.
-.venv/bin/camelot mpak repack "$CLIENT/gamedata.mpk" /tmp/testA/gamedata.mpk
-# B: one entry's content changed -- does the client read modified data?
-.venv/bin/camelot mpak repack "$CLIENT/gamedata.mpk" /tmp/testB/gamedata.mpk \
-    --replace "monnifs.csv=/tmp/testB/monnifs.csv"
-# C: a new monnifs row -- a new id pointing at an existing NIF, no writer needed
+camelot mpak repack SRC OUT [--replace NAME=FILE]
 ```
 
-Back the archive up first; the client should be tested on a copy.
+It rewrites an archive while carrying across the six header bytes at offsets
+5..10, whose meaning is still undecoded, and recomputing byte 17
+(`(entry_count ^ 12) & 0xFF`, decoded from all 1306 archives in the client).
+Replacing an entry's content does not change *which entries exist*, so the
+container stays the one the client shipped — which is the point, and why
+preserving beats substituting a placeholder.
 
-The header's undecoded six bytes (offsets 5..10) are carried across and byte
-17 is recomputed (`(entries ^ 12) & 0xFF`, decoded from all 1306 archives in
-the client). If test A fails, the six bytes are validated by the client and
-must be reversed before anything else.
+Whether the client actually accepts such an archive is still unverified; the
+procedure that settles it, and the state of that investigation, are in the
+private workshop.

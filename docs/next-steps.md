@@ -290,7 +290,7 @@ decal bake, the positional `Bald` slots, the per-piece Double Sided flag, the
 tests; the 36 rows are covered by a corpus test and a Playwright pass
 (`web/scripts/armour_check.mjs`). Remaining items are the item-level
 **extension** and **dye**, which are server notions and moved to Phase 2.
-The backlog detail is `workspace/notes/builder-fidelity-gaps.md`.
+The backlog detail is in the private workshop's `builder-fidelity-gaps.md`.
 
 ## Phase 2 — Define the server-facing content contract (first cut done)
 

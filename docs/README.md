@@ -12,3 +12,12 @@
 The root `README.md` is the front page (what/why/quick start); `AGENTS.md`
 holds repo rules for humans and agents (language, testing, comments,
 format ownership, legal).
+
+## A note on `workspace/` paths
+
+Some documents here cite paths under `workspace/` — the private
+research workshop that holds the reverse-engineering proof corpus, the
+audit reports and the working notes. **It is a separate repository and is
+not distributed with this one**, so those paths are evidence pointers
+rather than links: they name where a claim was established, and the claim
+itself is stated in the text. Nothing here requires access to them.

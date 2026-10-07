@@ -288,7 +288,7 @@ translations sit 1.8-3.6 units off `tro_m_skeleton.nif` and sheared the face.
 The native path gates such clips (`gltf.FOREIGN_RIG_MEAN_TOL`): the
 translations are dropped and the idle plays rotations-only. Which clip the
 live client plays for the male Troll player is still to confirm
-(`workspace/notes/character-rules.md` §8.18).
+(the private workshop's `character-rules.md` §8.18).
 
 ## Environment gotchas
 
@@ -318,7 +318,7 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
 2. Verify the native builder against `DAOC_CLIENT V2`, prioritizing skin-tone
    scope, eye fidelity, armour materials and real browser rendering. The
    18-race list, positional hair styles (`Bald`) and the hair `S/T/M` decal
-   bake shipped 2026-09-23; `workspace/notes/builder-fidelity-gaps.md`
+   bake shipped 2026-09-23; the private workshop's builder-fidelity backlog
    tracks the remaining points.
 3. Close only the fidelity gaps confirmed by that audit; keep tests and
    structured visual reproduction cases with each change.
@@ -332,8 +332,10 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
 ```sh
 # Run from the camelot-studio repository root.
 export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
-# Corpus validation (read-only; long-running).
-.venv/bin/camelot batch ../workspace/notes \
+# Corpus validation (read-only; long-running). The manifest is a list of
+# client paths; `core/tests/manifest.example.txt` shows the format and the
+# one the workshop uses is not shipped here.
+.venv/bin/camelot batch /path/to/manifest.txt \
   --read-only --out /tmp/camelot-corpus-report.txt
 # Inspect and export a client asset.
 .venv/bin/camelot info "$DAOC_CLIENT/figures/Ettin.NIF"
