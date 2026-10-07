@@ -1,157 +1,198 @@
 # Mod loader — design
 
-> Status: proposal, 2026-10-05. Nothing here is built yet. Decisions marked
-> **[?]** need settling before coding; the rest is grounded in measurements
-> recorded in `workspace/notes`.
+> Status: proposal, 2026-10-05. Nothing here is built yet. Grounded in
+> measurements recorded in
+> `workspace/notes`.
 
 ## What this is
 
 The piece that turns a pack from *data a human applies* into *a mod an
 operator installs, updates and removes*. It is an OpenDAoC plugin: a C#
-script in the server's script folder, discovered through the `IDatabaseUpdater`
-extension point.
+script in the server's script folder, discovered through the
+`IDatabaseUpdater` extension point, running once at boot.
 
-It does **not** replace the server's own configuration, and it is not a
-package manager with dependencies and a repository. It runs one folder of
-mods, deterministically, at boot.
+It is not a package manager with dependencies and a repository. It runs one
+folder of mods, deterministically, at boot.
+
+## The shape: the manager owns identity
+
+**A mod never chooses where its rows live.** It declares *how many* ids it
+needs per table, and the manager allocates them, records them, and writes
+every row itself.
+
+Three things follow, and they are the point of the design:
+
+- **overlap is impossible by construction.** Not detected — impossible. Two
+  mods cannot claim the same ids because neither of them picks ids at all.
+  There is no conflict-resolution policy to design, and no range to entrust
+  to a third party;
+- **mods are portable between servers.** The same mod installed on two
+  servers receives different ids, and neither server cares;
+- **a mod author needs to know nothing about id spaces**, which is what an
+  ecosystem of third-party authors requires.
 
 ## What it does not do
 
 - **No client files.** A mod that brings a model or a texture needs NIF/MPAK
-  writing, which does not exist yet. The loader can copy client payloads
-  into place if a pack ships them, but nothing produces them today, and
-  two mods patching the same client file have no precedence rule.
-- **No script mods.** A mod that ships `.cs` (new NPC behaviour, a command)
-  cannot be managed at runtime: the server compiles the script folder once,
-  *before* `UpdateDatabase()` runs. Such a mod needs its files placed before
-  boot, by an installer, not by this loader.
-- **No dependency resolution.** A mod that requires another declares it; the
-  loader reports a missing requirement as a failure and applies neither.
-  Ordering is by explicit priority, not by graph.
+  writing, which does not exist yet, and two mods patching the same client
+  file have no precedence rule.
+- **No script mods.** A mod shipping `.cs` cannot be managed at runtime: the
+  server compiles the script folder once, *before* the hook runs. Such a mod
+  needs its files placed before boot, by an installer, not by this loader.
+- **No dependency resolution.** A mod declares what it requires; a missing
+  requirement skips that mod and records why. Ordering is by explicit
+  priority, not by graph.
 
-## Lifecycle
+## The pack describes rows; it does not ship SQL
 
-One boot, three verbs, decided by what is on disk versus what the provenance
-table says:
-
-| on disk | provenance | action |
-|---|---|---|
-| absent | absent | nothing |
-| present, same version | present | nothing |
-| present, new version | present | **update** |
-| present | absent | **install** |
-| absent | present | **uninstall** |
-
-Uninstall is the case the server has no mechanism for today, and the reason
-provenance exists at all.
-
-## The pack gains a deployment section
-
-The loader must not understand fig3, `npctemplate` or any other table's
-semantics. The pack declares its own scope; the loader executes it.
+A pack carries declarative rows. The manager generates the SQL, which is
+what makes allocation possible and what keeps a third-party mod from
+executing arbitrary statements against the server's database.
 
 ```json
 {
   "mod": {"id": "daoc.studio.spawns", "version": "0.2.1", "priority": 100},
   "requires": [],
-  "scope": [
-    {"table": "npctemplate", "id_range": [100000000, 100000905]}
+  "allocations": [
+    {"table": "npctemplate", "count": 906}
   ],
-  "data": ["sql/npctemplate.sql"]
+  "rows": [
+    {
+      "table": "npctemplate",
+      "id": "spawn:albion_stone_minotaur",
+      "values": {
+        "Name": "Albion Stone Minotaur",
+        "ClassType": "DOL.GS.GameNPC",
+        "Model": 88,
+        "Size": "50-58",
+        "Level": "1-5"
+      }
+    }
+  ]
 }
 ```
 
-- **`table` + `id_range`** — the only thing the loader needs to know to
-  remove this mod later. Removal is `DELETE FROM <table> WHERE <key> BETWEEN
-  <lo> AND <hi>`; the key column is the table's primary-key column, declared
-  in a small built-in map for the tables we support.
-- **`data`** — SQL files, applied in order. SQL rather than the DOL XML
-  package format, for three reasons: the XML format requires the mod author
-  to know internal C# class names, it validates nothing, and it carries no
-  scope. SQL is also what `OpenDAoC-Database` itself ships, so it is the
-  project's own idiom.
-- **`priority`** — load order between mods. Two mods conflicting is a
-  **range overlap**, detected before anything is applied.
+- **`id`** is an optional logical name, local to the mod. A row that other
+  rows reference needs one; a row nothing points at does not.
+- **`values`** are column names and values. **No ids**: the row's key column
+  is filled by the manager from the allocation.
+- **references** to another row of the same mod use the logical name, and
+  the manager substitutes the allocated id. References to *existing* game
+  data (a client model id, a spell id) are literal and stay literal —
+  only the mod's own new rows are allocated.
 
-**[?] The key-column map.** Removal needs the column to delete on. Options:
-put it in the pack (a mod could lie), or keep a small built-in map in the
-loader for supported tables (safer, but the loader must know tables). The
-second is preferable: the loader stays small if the map is small, and a mod
-cannot remove rows outside what it declared.
+## What the manager has to know, and where it gets it
 
-## Provenance
+The manager needs a schema for each table it writes. It does not hard-code
+one: it **reflects over the server's own `DataObject` types**, exactly as
+`AutoXMLDatabaseUpdate` already does to guess a package's type. That yields
+the column names and their types, so values can be written as parameters
+rather than interpolated strings.
+
+Two things reflection does **not** give, and which stay as small built-in
+maps in the manager:
+
+1. **the allocatable key column per table** — `npctemplate`'s `TemplateId`
+   is not declared as a key (`DbNpcTemplate` declares none; see the issue on
+   `AutoXMLDatabaseUpdate`), so reflection cannot find it;
+2. **the reference checks used before uninstall** (below), which are
+   per-table knowledge about what points at what.
+
+Both maps grow only when support for a new table is added, and both live in
+the loader rather than in a pack, so a mod cannot claim an id column or
+assert that nothing references it.
+
+## Provenance and allocation
 
 One table, created by the loader if absent:
 
 ```sql
 CREATE TABLE IF NOT EXISTS `camelot_mod` (
-  `ModId`      VARCHAR(255) NOT NULL,
-  `Version`    VARCHAR(64)  NOT NULL,
-  `TableName`  VARCHAR(255) NOT NULL,
-  `IdLow`      BIGINT       NOT NULL,
-  `IdHigh`     BIGINT       NOT NULL,
-  `AppliedAt`  DATETIME     NOT NULL,
-  `Result`     VARCHAR(255) NOT NULL,
+  `ModId`       VARCHAR(255) NOT NULL,
+  `Version`     VARCHAR(64)  NOT NULL,
+  `TableName`   VARCHAR(255) NOT NULL,
+  `IdLow`       BIGINT       NOT NULL,
+  `IdHigh`      BIGINT       NOT NULL,
+  `AppliedAt`   DATETIME     NOT NULL,
+  `Result`      VARCHAR(255) NOT NULL,
   PRIMARY KEY (`ModId`, `TableName`)
 );
 ```
 
-`Result` is `SUCCESS` or the failure text. A mod that fails to apply is
-recorded, not swept away — the next boot retries it, and an operator can see
-what went wrong without reading the server log.
+**Allocation is stable across updates.** A mod keeps the ids it was given
+the first time, because in-game data may already point at them: an item a
+player is wearing, a creature in a saved spawn. A mod's block is therefore
+allocated with headroom, and an update that fits reuses it unchanged.
 
-**No row-level provenance.** Recording every inserted row would make the
-table as large as the content and would still not survive an operator
-editing the rows by hand. The id range is the contract: a mod owns a span,
-and removal deletes exactly that span. It is coarser, and it is honest about
-what it can guarantee.
+`Result` is `SUCCESS` or the failure text. A mod that fails is recorded and
+retried on the next boot, not swept away, and an operator can see what went
+wrong without reading the server log.
 
-## Conflict detection
+**No row-level provenance.** Recording every row would make the table as
+large as the content and would still not survive an operator editing rows by
+hand. The allocated block is the contract: the manager owns it, and removal
+deletes exactly it.
 
-Before applying anything:
+## Uninstall refuses to destroy data in use
 
-1. every installed mod's ranges, plus every pending mod's ranges, are
-   collected per table;
-2. any two ranges on one table that overlap are a **hard failure** — nothing
-   is applied, and the conflict is named in the log and in the provenance
-   table.
+Removing a mod whose content is already referenced in game would leave
+players pointing at rows that no longer exist — an item slot, a saved spawn,
+a character. Before deleting anything, the manager runs the table's
+reference checks and **refuses** if any of them finds a hit:
 
-This is the reason to reserve ranges rather than let mods write wherever.
-An overlap is not always wrong (two mods might intentionally extend one
-another), so **[?] should an overlap be a hard failure or a warning resolved
-by `priority`?** Hard failure is safer and simpler; priority-based merging is
-more flexible and much more work.
+| table | check before uninstall |
+|---|---|
+| `npctemplate` | is any row of `mob` using a `TemplateId` in the block? |
+
+A refusal is reported with the count and the referring table, and nothing is
+deleted. Forcing the removal is deliberately **not** offered: an operator who
+truly wants it can delete the rows with SQL and accept the consequences,
+which is a decision made outside the tool rather than a flag that makes
+destruction convenient.
+
+## Lifecycle
+
+One boot, decided by what is on disk versus what the provenance table says:
+
+| on disk | provenance | action |
+|---|---|---|
+| absent | absent | nothing |
+| present, same version | present | nothing |
+| present, new version | present | **update** — rows regenerated, block reused |
+| present | absent | **install** — allocate, generate, record |
+| absent | present | **uninstall** — reference checks, then delete |
 
 ## Where it hooks, and the hazard
 
-`UpdateDatabase()`, reached once at boot, after `CompileScripts()` and
+`UpdateDatabase()`, reached once at boot after `CompileScripts()` and
 `Properties.InitProperties` and before the world managers. The mod folder is
 a server property, defaulting to `scripts/mods`, read through
 `ServerProperties` like every other path in the server.
 
 **The hazard:** `if (!UpdateDatabase()) return false;` — an exception
-escaping the loader makes the server **refuse to boot**. The loader therefore
-catches everything per mod, records the failure, and continues. One bad mod
-must never stop a server from starting, which is also how
-`AutoXMLDatabaseUpdate` behaves.
+escaping the loader makes the server **refuse to boot**. The loader catches
+everything per mod, records the failure, and continues. One bad mod must
+never stop a server from starting, which is also how `AutoXMLDatabaseUpdate`
+behaves.
 
 ## Failure policy
 
 | situation | behaviour |
 |---|---|
 | unreadable manifest | that mod is skipped and recorded; the boot continues |
-| scope overlaps another mod | nothing is applied; the conflict is recorded |
 | a required mod is absent | that mod is skipped and recorded |
-| SQL fails partway | the mod's transaction is rolled back; recorded as failed |
-| a data file is missing | the mod is skipped and recorded |
+| a row fails to write | the mod's transaction is rolled back; recorded as failed |
+| an update would exceed the allocated block | refused, and recorded: the mod must be reinstalled |
+| a reference check fails on uninstall | refused, and recorded |
 
-Nothing is ever half-applied: each mod's data goes in one transaction.
+Nothing is ever half-applied: each mod's rows go in one transaction.
 
 ## Open questions
 
-- **[?] key-column map** — built into the loader, or declared by the pack?
-- **[?] overlap policy** — hard failure, or resolved by priority?
-- **[?] client payloads** — does the pack carry them now, with the loader
-  copying them, or does that wait for Phase 5 and a precedence rule?
-- **[?] mod folder layout** — one directory per mod, or the `.tar.gz` packs
-  our builder emits, extracted by the loader on first sight?
+- **the block size** — allocate the declared count, or round up to give
+  headroom for updates? Rounding up costs nothing but space, and prevents a
+  reinstall later.
+- **client payloads** — does the pack carry them now, with the loader copying
+  them, or does that wait for Phase 5 and a precedence rule?
+- **mod folder layout** — one directory per mod, or the `.tar.gz` packs our
+  builder emits, extracted by the loader on first sight?
