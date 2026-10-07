@@ -396,9 +396,12 @@ def cmd_pack(args) -> int:
 
     reports = os.path.join(args.out, "reports")
     os.makedirs(reports, exist_ok=True)
-    # `elapsed_seconds` lives only in the report: the manifest is hashed
-    # into checksums.lock, so a wall-clock field there would make every
-    # build differ from the last.
+    # The report is hashed into checksums.lock, so it must contain nothing
+    # that varies between two builds of one corpus. The build's wall-clock
+    # time is printed instead of written: an earlier version hashed a copy
+    # without it and wrote a copy with it, so the lock described a file that
+    # did not exist and every verification failed.
+    elapsed = time.time() - started
     payload = {
         "ok": report.ok,
         "figures": len(manifest.figures),
@@ -408,9 +411,7 @@ def cmd_pack(args) -> int:
         "errors": report.errors,
         "client_build": manifest.client_build,
         "client_profile": manifest.client_profile,
-        "elapsed_seconds": round(time.time() - started, 2),
     }
-    stable = {k: v for k, v in payload.items() if k != "elapsed_seconds"}
     with open(os.path.join(reports, "validation.json"), "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, sort_keys=True)
         fh.write("\n")
@@ -463,7 +464,7 @@ def cmd_pack(args) -> int:
     # report while the manifest claims to pin the GLBs.
     manifest.artifacts.update(contract_mod.artifact_hashes({
         os.path.join("reports", "validation.json"): (
-            json.dumps(stable, indent=2, sort_keys=True) + "\n"
+            json.dumps(payload, indent=2, sort_keys=True) + "\n"
         ).encode("utf-8"),
     }))
     # The manifest hashes the report, so the lock covers the whole build in
@@ -473,7 +474,7 @@ def cmd_pack(args) -> int:
     lock_lines = [f"{d}  {n}" for n, d in sorted(manifest.artifacts.items())]
     with open(os.path.join(args.out, "checksums.lock"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lock_lines) + "\n")
-    print(f"wrote {args.out}/manifest/content.json")
+    print(f"wrote {args.out}/manifest/content.json ({elapsed:.1f}s)")
 
     if args.package:
         try:
