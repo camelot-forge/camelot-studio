@@ -83,12 +83,185 @@ def test_a_row_must_have_a_logical_id():
         mod.deployment("p", "1", [{"table": "npctemplate", "values": {}}])
 
 
-def test_the_client_section_is_reserved_and_empty():
-    """Phase 5 will fill it. Declaring it now costs nothing; adding it later
-    would break the schema."""
+def test_the_client_section_is_empty_when_the_mod_has_no_client_half():
+    """The section travels in every pack; a server-only mod leaves it empty."""
     doc = mod.deployment("p", "1", [])
     assert doc["client"] == []
     assert doc["requires"] == []
+
+
+# --- the client half ---------------------------------------------------------
+
+
+class FakeTables:
+    """The duck `client_patch_items` talks to, without a client directory."""
+
+    def __init__(self, columns: dict, rows: dict | None = None,
+                 names: dict | None = None):
+        self._columns = columns
+        self._rows = rows or {}
+        #: table -> the header row, when a test needs sparse indices
+        self._names = names or {}
+
+    def column_index(self, table, name):
+        try:
+            return self._columns[table][name]
+        except KeyError:
+            raise ValueError(f"{table}: no column named {name!r}") from None
+
+    def column_name(self, table, index):
+        header = self._names.get(table) or list(self._columns[table])
+        if not 0 <= index < len(header):
+            raise ValueError(f"{table}: no column at index {index}")
+        return header[index]
+
+    def has_row(self, table, id_):
+        return id_ in self._rows.get(table, {})
+
+    def row_values(self, table, id_, names):
+        row = self._rows.get(table, {}).get(id_)
+        if row is None:
+            raise ValueError(f"{table}: no row with id {id_}")
+        return {name: row[name] for name in names}
+
+
+def test_a_loose_item_names_its_member_by_convention():
+    item = mod.client_loose("figures/Boar.NIF")
+    assert item == {
+        "kind": "loose",
+        "path": "figures/Boar.NIF",
+        "member": "client/figures/Boar.NIF",
+    }
+
+
+def test_an_archive_entry_names_its_place_in_the_pack():
+    item = mod.client_archive_entry("figures/skins/skin003.mpk", "boar.dds")
+    assert item["member"] == "client/entries/figures/skins/skin003.mpk/boar.dds"
+
+
+def test_a_member_must_live_under_client():
+    with pytest.raises(ValueError, match="client/"):
+        mod.client_loose("figures/Boar.NIF", member="targets/opendaoc/mod.json")
+
+
+def test_paths_may_not_escape_the_client():
+    with pytest.raises(ValueError, match="inside the client"):
+        mod.client_loose("../evil.nif")
+    with pytest.raises(ValueError, match="inside the client"):
+        mod.client_archive_entry("figures/skins/skin003.mpk", "../../evil.dds")
+
+
+def test_a_row_op_needs_the_column_indices_it_resolved_to():
+    with pytest.raises(ValueError, match="column index"):
+        mod.client_gamedata_set(
+            "monnifs.csv", 286, {"Name": "ettin"}, expect={"Name": "crab"},
+            columns={"NIF": 2},
+        )
+
+
+def test_a_row_op_may_not_write_the_id():
+    with pytest.raises(ValueError, match="id column"):
+        mod.client_gamedata_set(
+            "monnifs.csv", 286, {"ID": "999"}, expect={}, columns={"ID": 0},
+        )
+
+
+def test_an_added_id_lives_in_the_reserved_band():
+    ok = mod.client_gamedata_add(
+        "monsters.csv", 60000, {"name": "Thing"}, columns={"name": 1},
+    )
+    assert ok["id"] == 60000
+    for outside in (59999, 65536):
+        with pytest.raises(ValueError, match="reserved band"):
+            mod.client_gamedata_add(
+                "monsters.csv", outside, {"name": "Thing"}, columns={"name": 1},
+            )
+    # a pack carrying one is refused on load, not on install
+    with pytest.raises(ValueError, match="reserved band"):
+        mod.check_client_item(dict(ok, id=40000))
+
+
+def test_claims_group_by_destination_not_spelling():
+    items = [
+        mod.client_archive_entry("figures/Skins/skin003.mpk", "BOAR.dds"),
+        mod.client_gamedata_set(
+            "monnifs.csv", 286, {"Name": "ettin"}, expect={"Name": "crab"},
+            columns={"Name": 2},
+        ),
+        mod.client_gamedata_add(
+            "monsters.csv", 60000, {"name": "Thing"}, columns={"name": 1},
+        ),
+    ]
+    assert mod.claims(items) == [
+        "entry:figures/skins/skin003.mpk#boar.dds",
+        "row:monnifs.csv#286#2",
+        "row:monsters.csv#60000",
+    ]
+
+
+def test_one_mod_may_not_claim_a_destination_twice():
+    items = [mod.client_loose("figures/Boar.NIF"), mod.client_loose("figures/boar.nif")]
+    with pytest.raises(ValueError, match="same destination"):
+        mod.deployment("p", "1", [], client=items)
+
+
+def test_the_deployment_carries_the_client_items():
+    items = [mod.client_loose("figures/Boar.NIF")]
+    doc = mod.deployment("p", "1", [], client=items)
+    assert doc["client"] == items
+
+
+def test_a_patch_resolves_columns_and_captures_expect():
+    tables = FakeTables(
+        columns={"monnifs.csv": {"Name": 2, "Anim Set": 3}},
+        rows={"monnifs.csv": {286: {"Name": "crab", "Anim Set": "3"}}},
+    )
+    items = mod.client_patch_items(
+        {
+            "gamedata": [
+                {"table": "monnifs.csv", "set": {"286": {"Name": "ettin"}}},
+                {"table": "monnifs.csv",
+                 "add": [{"id": 60001, "values": {"Name": "Thing"}}]},
+            ],
+        },
+        tables,
+    )
+    assert items[0]["columns"] == {"Name": 2}
+    assert items[0]["expect"] == {"Name": "crab"}
+    assert items[1]["action"] == "add"
+    assert items[1]["columns"] == {"Name": 2}
+
+
+def test_an_ambiguous_column_is_written_name_at_index():
+    tables = FakeTables(
+        columns={"monsters.csv": {"name": 1}},
+        names={"monsters.csv": [""] * 68 + ["Body"]},
+    )
+    items = mod.client_patch_items(
+        {"gamedata": [{"table": "monsters.csv",
+                       "add": [{"id": 60000, "values": {"Body@68": "5"}}]}]},
+        tables,
+    )
+    assert items[0]["columns"] == {"Body@68": 68}
+    with pytest.raises(ValueError, match="@"):
+        mod.client_patch_items(
+            {"gamedata": [{"table": "monsters.csv",
+                           "add": [{"id": 60001, "values": {"Body@nope": "5"}}]}]},
+            tables,
+        )
+
+
+def test_a_patch_refuses_an_add_on_an_existing_id():
+    tables = FakeTables(
+        columns={"monnifs.csv": {"Name": 2}},
+        rows={"monnifs.csv": {60000: {"Name": "crab"}}},
+    )
+    with pytest.raises(ValueError, match="already exists"):
+        mod.client_patch_items(
+            {"gamedata": [{"table": "monnifs.csv",
+                           "add": [{"id": 60000, "values": {"Name": "Thing"}}]}]},
+            tables,
+        )
 
 
 # --- corpus tier ----------------------------------------------------------

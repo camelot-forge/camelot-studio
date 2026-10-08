@@ -174,7 +174,8 @@ def test_header_carriers_describe_the_streams(client_dir):
     step = max(1, len(paths) // 40)
     checked = 0
     for path in paths[::step]:
-        blob = open(path, "rb").read()
+        with open(path, "rb") as fh:
+            blob = fh.read()
         s1, s2, s2b = _stream_lengths(blob)
         decoded = decode_header(blob[:HEADER_SIZE])
         assert decoded["name_comp_len"] == s1, path

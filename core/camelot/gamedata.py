@@ -27,6 +27,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+from dataclasses import dataclass
 from typing import NamedTuple
 
 from .mpak import MpakArchive
@@ -330,3 +331,233 @@ def _resolve_from_nif_names(client_dir: str, nif_path: str) -> list[SlotTexture]
             finally:
                 a.close()
     return out
+
+
+# --- editing: the row ops a client payload applies ---------------------------
+#
+# A payload edits tables inside ``gamedata.mpk`` a row at a time rather than
+# shipping a whole file, so two mods editing different fields of one row (or
+# adding different rows) compose. Fidelity is the whole game: the client reads
+# latin-1 files with CRLF endings and stops reading a table at a blank line
+# (measured -- a split/join round-trip inserted one, and the server then had a
+# mob no client could see, `notes`). Every edit therefore
+# keeps the untouched lines byte-identical and re-encodes only what it touched.
+
+#: The archive that carries the tables; a payload's row ops land in it.
+GAMEDATA_ARCHIVE = _GAMEDATA
+
+#: Every table opens with two header rows: a group row, then the names.
+HEADER_ROWS = 2
+
+#: Row ids live in the first column of every table the row ops can edit.
+ID_COLUMN = 0
+
+
+class TableError(ValueError):
+    """Raised when a table cannot be parsed, resolved or edited."""
+
+
+def _find_row(rows: list[list[str]], id_) -> int | None:
+    wanted = str(id_).strip()
+    for index, row in enumerate(rows[HEADER_ROWS:], start=HEADER_ROWS):
+        if row and row[ID_COLUMN].strip() == wanted:
+            return index
+    return None
+
+
+def _encode_line(fields) -> bytes:
+    buffer = io.StringIO()
+    csv.writer(buffer, lineterminator="").writerow(fields)
+    try:
+        return buffer.getvalue().encode("latin-1")
+    except UnicodeEncodeError as error:
+        raise TableError(
+            f"a value cannot be written in the table's latin-1 encoding: {error}"
+        ) from error
+
+
+@dataclass
+class Table:
+    """One gamedata CSV, kept beside the bytes it was parsed from.
+
+    ``lines`` holds each line without its terminator; editing replaces the
+    touched entries in ``lines`` and :func:`encode_table` joins them back, so
+    an untouched line can never drift, however the original was spelled.
+    """
+
+    name: str
+    raw: bytes
+    lines: list[bytes]
+    rows: list[list[str]]
+    newline: bytes
+    trailing: bool
+
+    @property
+    def names(self) -> list[str]:
+        """The header row that carries the field names."""
+        return self.rows[HEADER_ROWS - 1] if len(self.rows) >= HEADER_ROWS else []
+
+    def column_index(self, name: str) -> int:
+        """The index of *name* in the header, or raise.
+
+        Matching is case-insensitive on the exact spelling: the tables carry
+        names like ``#``, ``Expansion `` (trailing space), and ``Only``
+        twice, so an ambiguous name must be given by index instead.
+        """
+        wanted = str(name).strip().casefold()
+        matches = [i for i, n in enumerate(self.names) if n.strip().casefold() == wanted]
+        if not matches:
+            raise TableError(f"{self.name}: no column named {name!r}")
+        if len(matches) > 1:
+            raise TableError(
+                f"{self.name}: column {name!r} is ambiguous (indices {matches}); "
+                "give the index"
+            )
+        return matches[0]
+
+    def row_index(self, id_) -> int | None:
+        """The first row carrying *id* in the id column, or None."""
+        return _find_row(self.rows, id_)
+
+    def row_values(self, index: int, columns: dict) -> dict:
+        row = self.rows[index]
+        return {name: (row[idx] if len(row) > idx else "") for name, idx in columns.items()}
+
+
+def parse_table(name: str, raw: bytes) -> Table:
+    """Parse a table, remembering how to write it back byte-faithfully."""
+    newline = b"\r\n" if b"\r\n" in raw else b"\n"
+    remainder = raw.replace(b"\r\n", b"") if newline == b"\r\n" else raw.replace(b"\n", b"")
+    if b"\n" in remainder or b"\r" in remainder:
+        raise TableError(f"{name}: mixed line endings")
+    trailing = raw.endswith(newline)
+    body = raw[: -len(newline)] if trailing else raw
+    lines = body.split(newline) if body else []
+    rows: list[list[str]] = []
+    for line in lines:
+        try:
+            row = next(csv.reader([line.decode("latin-1")]), [])
+        except csv.Error as error:
+            raise TableError(f"{name}: unreadable row: {error}") from error
+        rows.append([str(field) for field in row])
+    return Table(name=name, raw=raw, lines=lines, rows=rows, newline=newline, trailing=trailing)
+
+
+def encode_table(table: Table) -> bytes:
+    """The table's bytes: untouched lines exactly as parsed."""
+    if not table.lines:
+        return table.newline if table.trailing else b""
+    out = table.newline.join(table.lines)
+    if table.trailing:
+        out += table.newline
+    return out
+
+
+def apply_row_ops(table: Table, ops) -> Table:
+    """Apply pack row ops in order, checking each `expect` against the image.
+
+    Each op is a resolved payload item (:mod:`camelot.mod`): ``set`` replaces
+    named columns of an existing row; ``add`` appends one row, writing the id
+    into the id column. ``expect`` is compared before the op lands, so a pack
+    built against a different client (or reading an earlier mod's edit) is
+    refused with both values named rather than applied blind.
+    """
+    lines = list(table.lines)
+    rows = [list(row) for row in table.rows]
+    trailing = table.trailing
+    for op in ops:
+        action = op.get("action")
+        id_ = int(op["id"])
+        columns = {name: int(index) for name, index in (op.get("columns") or {}).items()}
+        values = {name: str(value) for name, value in (op.get("values") or {}).items()}
+        expect = {name: str(value) for name, value in (op.get("expect") or {}).items()}
+        for name in list(values) + list(expect):
+            if name not in columns:
+                raise TableError(f"{table.name}#{id_}: no column index for {name!r}")
+        if any(index == ID_COLUMN for index in columns.values()):
+            raise TableError(f"{table.name}#{id_}: {action} may not touch the id column")
+        if action == "set":
+            index = _find_row(rows, id_)
+            if index is None:
+                raise TableError(f"{table.name}: no row with id {id_}")
+            row = rows[index]
+            for name, wanted in expect.items():
+                current = row[columns[name]] if len(row) > columns[name] else ""
+                if current != wanted:
+                    raise TableError(
+                        f"{table.name}#{id_}.{name}: expected {wanted!r}, found {current!r}"
+                    )
+            width = max([len(row)] + [columns[name] + 1 for name in values])
+            row.extend([""] * (width - len(row)))
+            for name, value in values.items():
+                row[columns[name]] = value
+            lines[index] = _encode_line(row)
+        elif action == "add":
+            if _find_row(rows, id_) is not None:
+                raise TableError(f"{table.name}: row {id_} already exists")
+            width = max([1] + [index + 1 for index in columns.values()])
+            row = [""] * width
+            row[ID_COLUMN] = str(id_)
+            for name, value in values.items():
+                row[columns[name]] = value
+            rows.append(row)
+            lines.append(_encode_line(row))
+            trailing = True
+        else:
+            raise TableError(f"{table.name}#{id_}: unknown row action {action!r}")
+    return Table(name=table.name, raw=table.raw, lines=lines, rows=rows,
+                 newline=table.newline, trailing=trailing)
+
+
+def edit_table(raw: bytes, name: str, ops) -> bytes:
+    """Apply row ops to one table's bytes, byte-faithful outside the edits."""
+    return encode_table(apply_row_ops(parse_table(name, raw), ops))
+
+
+def read_table_bytes(client_dir: str, name: str) -> bytes:
+    """The exact bytes of one table inside the client's gamedata.mpk."""
+    archive = MpakArchive(os.path.join(client_dir, GAMEDATA_ARCHIVE))
+    try:
+        if name.lower() not in archive.entries:
+            raise TableError(f"{GAMEDATA_ARCHIVE}: no table named {name!r}")
+        return archive.read(name)
+    finally:
+        archive.close()
+
+
+class ClientTables:
+    """A client's tables, read for the build side (:mod:`camelot.mod`).
+
+    The builder resolves column names, checks ids and captures the values a
+    payload expects; this is the object it talks to, kept thin so tests can
+    put a fake in its place.
+    """
+
+    def __init__(self, client_dir: str):
+        self.client_dir = client_dir
+        self._tables: dict[str, Table] = {}
+
+    def table(self, name: str) -> Table:
+        key = name.lower()
+        if key not in self._tables:
+            self._tables[key] = parse_table(name, read_table_bytes(self.client_dir, name))
+        return self._tables[key]
+
+    def column_index(self, table_name: str, column: str) -> int:
+        return self.table(table_name).column_index(column)
+
+    def column_name(self, table_name: str, index: int) -> str:
+        table = self.table(table_name)
+        if not 0 <= index < len(table.names):
+            raise TableError(f"{table_name}: no column at index {index}")
+        return table.names[index]
+
+    def has_row(self, table_name: str, id_) -> bool:
+        return self.table(table_name).row_index(id_) is not None
+
+    def row_values(self, table_name: str, id_, columns) -> dict:
+        table = self.table(table_name)
+        index = table.row_index(id_)
+        if index is None:
+            raise TableError(f"{table_name}: no row with id {id_}")
+        return table.row_values(index, {name: table.column_index(name) for name in columns})
