@@ -471,6 +471,15 @@ header past the magic, so round-trips alone never exercised the carriers —
 which is exactly how a writer that preserved them passed every local test
 while failing in-client.
 
+**The client installer uses this writer** (`core/camelot/clientinstall.py`,
+2026-10-08): a mod's payload is applied by rebuilding the archive from a
+pristine copy with `write_mpak` — same header template, same carried
+per-entry bytes — and the result is read back and compared before it
+replaces the file in the client directory. A payload cannot *add* an entry
+yet (replacement only): a record the corpus has no sample of would need the
+0x100..0x104 artefact invented, which is why both `repack_mpak` and the
+installer refuse an unknown name rather than guessing one.
+
 ## 6. The NetImmerse 4.x legacy reader — block-level facts
 
 `core/camelot/legacy.py` reads 4.1.0.12 / 4.2.x meshed NIFs that pyffi
