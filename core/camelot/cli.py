@@ -15,6 +15,11 @@ Commands:
                                   build an MPAK archive from files
   camelot contract --out DIR      build the server content contract (manifest
                                   + reports + checksums) from $DAOC_CLIENT
+  camelot mod build --dir DIR --out PACK.tar.gz
+                                  build a mod pack from an authoring directory
+                                  (mod.json, client/, client.patch.json)
+  camelot client install PACK     apply a mod's client half to a client
+                                  directory (also: uninstall, status, verify)
   camelot serve [--root DIR]      local daemon: asset library + viewer
 
 Paths in the manifest starting with ``DAOC CLIENT/`` are resolved against the
@@ -599,6 +604,93 @@ def package_pack(manifest, out_dir: str, path: str) -> dict:
     return lock
 
 
+def cmd_mod(args) -> int:
+    """Build a mod pack from an authoring directory.
+
+    The directory holds the identity (`mod.json`), optional server rows
+    (`rows.json`), loose replacements (`client/`, paths mirroring the game)
+    and archive or table edits (`client.patch.json`). Everything is resolved
+    against the client corpus, so a pack that does not hold together is
+    refused here rather than on a player's machine.
+    """
+    from . import modbuild
+
+    client = args.client or os.environ.get("DAOC_CLIENT")
+    if not client or not os.path.isdir(client):
+        print("mod build: no client corpus (pass --client or set $DAOC_CLIENT)",
+              file=sys.stderr)
+        return 2
+    try:
+        report = modbuild.build_mod_pack(args.dir, client, args.out,
+                                         creatures=args.creatures)
+    except (OSError, TypeError, ValueError, KeyError) as error:
+        print(f"mod build: {error}", file=sys.stderr)
+        return 1
+    print(f"built {report['out']}")
+    print(f"  mod {report['mod']} {report['version']}: "
+          f"{report['items']} client item(s), {report['rows']} server row(s), "
+          f"{report['members']} payload member(s)")
+    return 0
+
+
+def cmd_client(args) -> int:
+    """Apply a mod's client half, and read the client back."""
+    from . import clientinstall
+
+    client = args.client or os.environ.get("DAOC_CLIENT")
+    if not client or not os.path.isdir(client):
+        print("client: no client directory (pass --client or set $DAOC_CLIENT)",
+              file=sys.stderr)
+        return 2
+    try:
+        if args.client_cmd == "install":
+            report = clientinstall.install_pack(
+                client, args.pack,
+                priority=args.priority,
+                allow_build_mismatch=args.allow_build_mismatch,
+                adopt=args.adopt,
+            )
+            print(f"installed {report['mod']} {report['version']}")
+            for warning in report["warnings"]:
+                print(f"  warn: {warning}")
+            for rel in report["changed"]:
+                print(f"  wrote {rel}")
+            if not report["changed"]:
+                print("  (nothing changed)")
+            return 0
+        if args.client_cmd == "uninstall":
+            report = clientinstall.uninstall(client, args.mod)
+            print(f"removed {report['mod']}")
+            for rel in report["changed"]:
+                print(f"  restored {rel}")
+            if not report["changed"]:
+                print("  (nothing changed)")
+            return 0
+        if args.client_cmd == "status":
+            report = clientinstall.status(client)
+            if not report["installs"]:
+                print("no mods installed on this client")
+            for install in report["installs"]:
+                print(f"{install['mod']} {install['version']} "
+                      f"(priority {install['priority']}, "
+                      f"{len(install['claims'])} claim(s))")
+            for claim, owner in report["owners"].items():
+                print(f"  {claim} -> {owner}")
+            return 0
+        if args.client_cmd == "verify":
+            report = clientinstall.verify(client)
+            for warning in report["warnings"]:
+                print(f"  warn: {warning}")
+            for problem in report["problems"]:
+                print(f"  problem: {problem}", file=sys.stderr)
+            print("ok" if report["ok"] else "NOT ok")
+            return 0 if report["ok"] else 1
+    except (clientinstall.InstallError, OSError) as error:
+        print(f"client: {error}", file=sys.stderr)
+        return 1
+    return 2
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="camelot",
@@ -692,6 +784,35 @@ def main(argv=None) -> int:
 
     p.add_argument("--dry-run", action="store_true", help="report only, write no manifest")
     p.set_defaults(func=cmd_pack)
+
+    p = sub.add_parser("mod", help="mod packs: build one from an authoring directory")
+    mp = p.add_subparsers(dest="mod_cmd", required=True)
+    bp = mp.add_parser("build", help="build a pack from a mod directory")
+    bp.add_argument("--dir", required=True, help="the authoring directory")
+    bp.add_argument("--client", help="client corpus (default: $DAOC_CLIENT)")
+    bp.add_argument("--out", required=True, help="output pack (.tar.gz)")
+    bp.add_argument("--creatures", type=int, metavar="N", nargs="?", const=0,
+                    help="also add spawn rows (all, or the first N creature models)")
+    p.set_defaults(func=cmd_mod)
+
+    p = sub.add_parser("client", help="apply a mod's client half to a client directory")
+    cp = p.add_subparsers(dest="client_cmd", required=True)
+    ip = cp.add_parser("install", help="install (or update) a pack's client half")
+    ip.add_argument("pack")
+    ip.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
+    ip.add_argument("--priority", type=int, help="override the pack's priority")
+    ip.add_argument("--allow-build-mismatch", action="store_true",
+                    help="install a pack built against another client build")
+    ip.add_argument("--adopt", action="store_true",
+                    help="make files changed outside the tool the new baseline")
+    rp = cp.add_parser("uninstall", help="remove a mod's client half")
+    rp.add_argument("mod")
+    rp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
+    tp = cp.add_parser("status", help="what is installed, and who owns what")
+    tp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
+    vp = cp.add_parser("verify", help="read the client back against the state")
+    vp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
+    p.set_defaults(func=cmd_client)
 
     p = sub.add_parser("serve", help="local daemon: asset library + viewer")
     p.add_argument("--root", help="client directory (default: $DAOC_CLIENT)")

@@ -5,15 +5,13 @@ writer, so no game file is needed. The in-client ladder validates the real
 thing separately (`notes`, phase 5).
 """
 import gzip
-import hashlib
 import io
 import os
 import tarfile
 
 import pytest
 
-from camelot import clientinstall, gamedata, mod
-from camelot.assemble import archive as assemble_archive
+from camelot import assemble, clientinstall, gamedata, mod
 from camelot.contract import Manifest
 from camelot.mpak import MpakArchive, write_mpak
 
@@ -81,14 +79,10 @@ def build_pack(tmp_path, name, *, mod_id, items=(), members=None, version="0.1.0
     files.update(members or {})
     # The lock travels inside the pack and covers every member but itself;
     # the loader (and ModPack.load) verifies each line against the member.
-    lines = "".join(
-        f"{hashlib.sha256(data).hexdigest()}  {name}\n"
-        for name, data in sorted(files.items())
-    )
-    files["checksums.lock"] = lines.encode()
+    files["checksums.lock"] = assemble.lock_bytes(files)
     manifest = Manifest(pack_id=mod_id, version=version, client_build=build)
     path = tmp_path / name
-    assemble_archive(manifest, str(path), files=files)
+    assemble.archive(manifest, str(path), files=files)
     return str(path)
 
 

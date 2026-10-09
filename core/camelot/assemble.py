@@ -27,7 +27,7 @@ import tarfile
 
 from .contract import SCHEMA_VERSION, Manifest
 
-__all__ = ["archive", "pack_metadata", "pack_name"]
+__all__ = ["archive", "lock_bytes", "pack_metadata", "pack_name"]
 
 #: Fixed ownership/timestamps: a pack is content, not a filesystem snapshot.
 _MEMBER_ATTRS = {"mtime": 0, "uid": 0, "gid": 0, "uname": "", "gname": "", "mode": 0o644}
@@ -66,6 +66,20 @@ def pack_metadata(manifest: Manifest) -> bytes:
         "artifact_count": len(manifest.artifacts),
     }
     return (json.dumps(doc, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def lock_bytes(files: dict[str, bytes]) -> bytes:
+    """The `checksums.lock` a pack carries: one `<sha256>  <path>` line each.
+
+    Written inside the archive over every member but itself -- which is what
+    the loader verifies: each line it finds must match a member, and a member
+    the lock does not list (like `PACK.json`, generated after this point) is
+    still allowed.
+    """
+    return "".join(
+        f"{hashlib.sha256(data).hexdigest()}  {name}\n"
+        for name, data in sorted(files.items())
+    ).encode("utf-8")
 
 
 def _add(tar: tarfile.TarFile, name: str, data: bytes) -> None:
