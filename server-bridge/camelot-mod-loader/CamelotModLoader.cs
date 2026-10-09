@@ -136,6 +136,7 @@ namespace DOL.GS.CamelotMods
                 {
                     if (log.IsDebugEnabled)
                         log.Debug($"{doc.ModId} {doc.Version} already applied");
+                    NoteClientPayloads(doc);
                     return;
                 }
 
@@ -166,11 +167,24 @@ namespace DOL.GS.CamelotMods
 
                 if (log.IsInfoEnabled)
                     log.Info($"{doc.ModId} {doc.Version}: {doc.Rows.Count} rows in {rowsByTable.Count()} table(s)");
+                NoteClientPayloads(doc);
             }
             catch (Exception e)
             {
                 Fail(doc.ModId, doc.Version, e.Message);
             }
+        }
+
+        /// <summary>
+        /// One line when a pack carries a client half. The loader cannot apply
+        /// it -- client files live on players' machines -- and saying so keeps
+        /// "installed" from meaning "finished" without anyone being told.
+        /// </summary>
+        private static void NoteClientPayloads(ModDocument doc)
+        {
+            if (doc.DeclaresClientPayloads && log.IsInfoEnabled)
+                log.Info($"{doc.ModId}: {doc.ClientPayloads} client payload item(s); "
+                    + "apply them on each client with `camelot client install`");
         }
 
         /// <summary>

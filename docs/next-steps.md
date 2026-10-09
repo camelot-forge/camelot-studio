@@ -369,10 +369,13 @@ server — allocation, row writes and the provenance table verified in real
 boots, including an end-to-end probe whose pack row spawns a client model id
 that ships in no archive.
 
-**Still open in Phase 3**: the client patch manifest and the client payloads
-it would carry (`client` is already reserved in the deployment document and
-declared empty) — delivering a rewritten archive to the client, and the
-precedence rule when two mods patch one archive.
+**Now delivered** (2026-10-08): the client half. A pack's `client` items
+(loose file, archive entry, gamedata row edit) travel inside the pack, and
+`camelot client install` applies them to a client directory with claims
+resolved by priority, every touched file rebuilt from the client's own
+originals; `camelot mod build` assembles the pack from an authoring
+directory. The design, and the in-client ladder that still closes it, are
+`notes/phase5-client-assets.md` in the workspace.
 
 ## Phase 4 — Validate the OpenDAoC integration
 
@@ -477,14 +480,16 @@ everyone else.
 
 ## Phase 5 — Editing and productization
 
-The server pack now works end to end, and the MPAK output *is* validated
-against the real client (2026-10-07). Remaining:
+The server pack works end to end, the MPAK output *is* validated against the
+real client (2026-10-07), and the client delivery half is built (2026-10-08):
+`camelot mod build` assembles a pack from an authoring directory,
+`camelot client install/uninstall/status/verify` applies it with claims and
+priority, and the loader notes each pack's payload count. Remaining:
 
+- run the in-client ladder that closes the phase (P5-A…P5-F, workspace
+  `notes/phase5-client-assets.md`);
 - add the writer still needed for in-place content replacement (NIF);
 - provide safe KFA/mesh editing and re-rig workflows;
-- carry a mod's client payload to the client, and give two mods patching one
-  archive a precedence rule — the delivery and arbitration half of the client
-  side;
 - add useful search, collections and annotations to the workbench;
 - package the tools for repeatable server-developer use;
 - separate public implementation documentation from private research.

@@ -41,8 +41,11 @@ removes. One C# plugin, discovered by the server at boot through
 
 ## What it does not do
 
-- no client files, and no client payloads: two mods patching the same client
-  file have no precedence rule yet (Phase 5);
+- no client files: a pack's client half is applied on each client by
+  `camelot client install` (claims resolved by priority, every touched file
+  rebuilt from the client's own originals; the design is
+  `notes/phase5-client-assets.md` in the workspace). The loader only notes
+  how many payload items a pack declares;
 - no script mods: the server compiles the script folder once, before this
   runs, so a mod shipping `.cs` needs an installer, not this;
 - no dependency resolution: a missing requirement skips that mod.

@@ -103,7 +103,9 @@ its rows as columns and values; it ships no SQL and never chooses an id.
 The manager allocates, records and writes, so overlap between mods is
 impossible by construction rather than detected, and a third-party mod
 cannot execute arbitrary statements against a database. The `client`
-section is declared empty for Phase 5.
+section carries the mod's client half: the destinations it replaces on
+players' machines (a loose file, an archive entry, a gamedata row edit),
+applied by `camelot client install` with claims resolved by priority.
 
 Against V2 that produces 906 declarative rows and one allocation
 (`npctemplate`, 906), with no `TemplateId` anywhere in the output.
@@ -118,13 +120,18 @@ meaningless. A target that cannot yet express a figure records it under
 `unprojected` in its own file rather than failing the build or dropping it
 silently.
 
-**Not yet done**: the client patch manifest and the payloads it would carry
-(Phase 5), and NIF *writing*. A stock client cannot load the Studio-authored
-GLBs — it reads NIF from MPAK — so deploying new *assets* still waits on a NIF
-writer. Deploying new *server data* does not, and that path is now
-end-to-end: the loader consumes the deployment document on a booted server,
-and a rewritten `gamedata.mpk` is accepted by the 1.127 client (`formats.md`
-§5 documents the decoded header carriers).
+**Not yet done**: NIF *writing*, and the in-client run of the Phase 5
+ladder (`notes/phase5-client-assets.md` in the workspace, P5-A…P5-F). A
+stock client cannot load the Studio-authored GLBs — it reads NIF from MPAK —
+so deploying new *assets* still waits on a NIF writer. Deploying new *server
+data* does not: the loader consumes the deployment document on a booted
+server, and a rewritten `gamedata.mpk` is accepted by the 1.127 client
+(`formats.md` §5 documents the decoded header carriers). The client
+*delivery* half is built (2026-10-08): `camelot mod build` assembles a pack
+from an authoring directory, `camelot client install/uninstall/status/verify`
+applies its payload with claims and priority — every touched file rebuilt
+from the client's own originals and read back — and the loader notes each
+pack's payload count at apply time.
 
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the
 1.127 client under Wine: a rewritten container, modified table data and a new

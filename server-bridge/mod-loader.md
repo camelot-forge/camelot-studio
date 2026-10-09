@@ -33,14 +33,14 @@ Three things follow, and they are the point of the design:
 
 ## What it does not do
 
-- **No client files.** A mod that brings a model or a texture needs NIF/MPAK
-  writing, which does not exist yet, and two mods patching the same client
-  file have no precedence rule. The manifest **reserves a `client` section
-  for it and the loader ignores it**: a field declared and unused does not
-  break the schema when Phase 5 arrives, whereas adding one later would.
-  Delivering it now would mean an untestable code path (nothing produces
-  those files) offering a copy mechanism without the precedence rule needed
-  to make copies safe.
+- **No client files.** A mod that brings a model or a texture needs client
+  formats written (MPAK is done and validated in-client; NIF writing is not).
+  The pack carries its `client` section and its payload members; the loader
+  **notes** how many items a pack declares and applies none of them — client
+  files live on players' machines. Applying them is `camelot client install`
+  (claims resolved by priority, every touched file rebuilt from the client's
+  own originals, removals exact); the design is
+  `notes/phase5-client-assets.md` in the workspace.
 - **No script mods.** A mod shipping `.cs` cannot be managed at runtime: the
   server compiles the script folder once, *before* the hook runs. Such a mod
   needs its files placed before boot, by an installer, not by this loader.
@@ -97,9 +97,9 @@ the provenance dishonest about what was actually deployed.
 **The loader never extracts.** The manifest and the row descriptions are
 JSON, small, and read straight out of the archive. Nothing the loader
 handles is written to disk, which removes the one real hazard of accepting
-archives from third parties -- path traversal during extraction. It also
-means the pack's client payloads must wait: those are the large binary
-sections, and they would need extraction.
+archives from third parties -- path traversal during extraction. The pack's
+client payloads are applied elsewhere: extraction happens on the operator's
+machine, in `camelot client install`, never in the server process.
 
 The cost is reading gzip and tar in C#, which .NET 10 provides directly
 (`GZipStream` and `System.Formats.Tar`); no external dependency.
@@ -228,8 +228,10 @@ Nothing is ever half-applied: each mod's rows go in one transaction.
 - **Blocks are rounded up**, so an update fits without a reinstall.
 - **A mod is a `.tar.gz`, read in memory and never extracted** -- atomic,
   checksummed, and free of the path-traversal hazard.
-- **Client payloads are deferred** to Phase 5, with their section reserved
-  in the manifest now.
+- **Client payloads are applied outside the server** (2026-10-08): the pack
+  carries them, the loader notes their count at apply time, and
+  `camelot client install` applies them on each client. The earlier decision
+  deferred them with their section reserved; the section is now filled.
 - **Uninstall refuses when the mod's content is in use**, and forcing is not
   offered.
 - **The manager reflects over the server's `DataObject` types** for column

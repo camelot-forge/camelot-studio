@@ -39,7 +39,14 @@ namespace DOL.GS.CamelotMods
         public List<string> Requires = new List<string>();
         public List<ModAllocation> Allocations = new List<ModAllocation>();
         public List<ModRow> Rows = new List<ModRow>();
-        public bool DeclaresClientPayloads;
+
+        /// <summary>How many client payload items the pack declares. The
+        /// loader never applies them (client files live on players'
+        /// machines); it notes them so an operator knows the server half
+        /// alone is not a finished deployment.</summary>
+        public int ClientPayloads;
+
+        public bool DeclaresClientPayloads => ClientPayloads > 0;
 
         public static ModDocument Parse(byte[] json)
         {
@@ -78,7 +85,7 @@ namespace DOL.GS.CamelotMods
                 });
             }
 
-            doc.DeclaresClientPayloads = (root["client"] as JArray)?.Count > 0;
+            doc.ClientPayloads = (root["client"] as JArray)?.Count ?? 0;
             return doc;
         }
     }
