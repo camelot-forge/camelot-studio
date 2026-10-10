@@ -163,13 +163,13 @@ def test_a_table_add_appends_in_the_reserved_band(client, tmp_path):
     pack = build_pack(
         tmp_path, "d.tar.gz", mod_id="probe.d",
         items=[mod.client_gamedata_add(
-            "monsters.csv", 60000, {"name": "Probe Crab", "#": "231", "Body": "110"},
+            "monsters.csv", 2495, {"name": "Probe Crab", "#": "231", "Body": "110"},
             columns={"name": 1, "#": 2, "Body": 3},
         )],
     )
     clientinstall.install_pack(client, pack)
     raw = gamedata.read_table_bytes(client, "monsters.csv")
-    assert raw == MONSTERS + b"60000,Probe Crab,231,110\r\n"
+    assert raw == MONSTERS + b"2495,Probe Crab,231,110,\r\n"
 
 
 def test_uninstall_restores_the_exact_original_bytes(client, tmp_path):
@@ -257,10 +257,10 @@ def test_an_equal_priority_conflict_refuses_before_writing(client, tmp_path):
 
 def test_two_adds_of_one_id_at_one_priority_are_refused(client, tmp_path):
     a = build_pack(tmp_path, "i1.tar.gz", mod_id="probe.i1",
-                   items=[mod.client_gamedata_add("monsters.csv", 60000,
+                   items=[mod.client_gamedata_add("monsters.csv", 2495,
                                                   {"name": "A"}, columns={"name": 1})])
     b = build_pack(tmp_path, "i2.tar.gz", mod_id="probe.i2",
-                   items=[mod.client_gamedata_add("monsters.csv", 60000,
+                   items=[mod.client_gamedata_add("monsters.csv", 2495,
                                                   {"name": "B"}, columns={"name": 1})])
     clientinstall.install_pack(client, a)
     with pytest.raises(clientinstall.ConflictError):
@@ -269,17 +269,17 @@ def test_two_adds_of_one_id_at_one_priority_are_refused(client, tmp_path):
 
 def test_a_resolved_row_collision_is_warned_about(client, tmp_path):
     a = build_pack(tmp_path, "j1.tar.gz", mod_id="probe.j1", priority=100,
-                   items=[mod.client_gamedata_add("monsters.csv", 60000,
+                   items=[mod.client_gamedata_add("monsters.csv", 2495,
                                                   {"name": "A"}, columns={"name": 1})])
     b = build_pack(tmp_path, "j2.tar.gz", mod_id="probe.j2", priority=200,
-                   items=[mod.client_gamedata_add("monsters.csv", 60000,
+                   items=[mod.client_gamedata_add("monsters.csv", 2495,
                                                   {"name": "B"}, columns={"name": 1})])
     clientinstall.install_pack(client, a)
     report = clientinstall.install_pack(client, b)
     assert any("also added by probe.j1" in warning for warning in report["warnings"])
     raw = gamedata.read_table_bytes(client, "monsters.csv")
-    assert b"60000,B\r\n" in raw
-    assert b"60000,A\r\n" not in raw
+    assert b"2495,B,,,\r\n" in raw
+    assert b"2495,A,,,\r\n" not in raw
 
 
 def test_a_file_changed_outside_the_tool_is_drift_and_adopt_is_an_escape(client, tmp_path):
@@ -432,6 +432,43 @@ def test_update_replaces_the_version_and_prunes_the_store(client, tmp_path):
     assert os.listdir(members_root) == ["0.2.0"]
     clientinstall.uninstall(client, "probe.s")
     assert _read(client, "figures/Boar.NIF") == BOAR_NIF
+
+
+def test_the_installer_refuses_while_the_game_runs(client, tmp_path, monkeypatch):
+    """The client reads its files once, at startup: installing under a
+    running one changes nothing on screen, so the tool says so instead of
+    pretending. (The check is Linux-only and best-effort; the test drives it
+    directly.)"""
+    pack = build_pack(tmp_path, "u1.tar.gz", mod_id="probe.u",
+                      items=[mod.client_loose("figures/Boar.NIF")],
+                      members={"client/figures/Boar.NIF": b"x"})
+    monkeypatch.setattr(clientinstall, "_client_running", lambda: "camelot.exe")
+    with pytest.raises(clientinstall.InstallError, match="the game is running"):
+        clientinstall.install_pack(client, pack)
+    monkeypatch.setattr(clientinstall, "_client_running", lambda: None)
+    clientinstall.install_pack(client, pack)          # the check passes once it is gone
+    monkeypatch.setattr(clientinstall, "_client_running", lambda: "camelot.exe")
+    with pytest.raises(clientinstall.InstallError, match="the game is running"):
+        clientinstall.uninstall(client, "probe.u")
+
+
+def test_a_band_change_does_not_brick_an_installed_mod(client, tmp_path, monkeypatch):
+    """The reserved band is a build-time rule: a mod installed while it was
+    wider must still verify and uninstall after the constants move (measured
+    by the ceiling probe, 2026-10-09, which installs out-of-band ids on
+    purpose)."""
+    monkeypatch.setattr(mod, "CLIENT_ID_MIN", 1)
+    monkeypatch.setattr(mod, "CLIENT_ID_MAX", 0xFFFF)
+    pack = build_pack(tmp_path, "w1.tar.gz", mod_id="probe.w",
+                      items=[mod.client_gamedata_add(
+                          "monsters.csv", 4096, {"name": "Probe"},
+                          columns={"name": 1})])
+    clientinstall.install_pack(client, pack)
+    monkeypatch.setattr(mod, "CLIENT_ID_MIN", 2494)
+    monkeypatch.setattr(mod, "CLIENT_ID_MAX", 2499)
+    assert clientinstall.verify(client)["ok"] is True
+    clientinstall.uninstall(client, "probe.w")
+    assert gamedata.read_table_bytes(client, "monsters.csv") == MONSTERS
 
 
 def test_the_build_binding_is_checked(client, tmp_path):

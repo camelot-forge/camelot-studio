@@ -96,12 +96,22 @@ def deployment_bytes(doc: dict) -> bytes:
 # table editor would have to (see `camelot.clientinstall` and the design in
 # the workspace, `notes/phase5-client-assets.md`).
 
-#: The band a mod-added client id must live in. Above every id the measured
-#: tables ship (the highest is a `skins` row at 7126) and inside the 16-bit
-#: model field the server sends for a spawn (`GameNPC.Model` is a `ushort`),
-#: so every id in the band is expressible on the wire.
-CLIENT_ID_MIN = 60000
-CLIENT_ID_MAX = 65535
+#: The band a mod-added client id must live in: **2494..2499**, the six ids
+#: just above everything `monsters.csv` ships (its highest is 2493). Below
+#: 2500 because the client's model table is 2500 entries wide — measured
+#: 2026-10-10 by reading the running client's memory
+#: (`notes/client-memwatch.py`): rows at 2495..2499 are read and
+#: render, while a row at 2500 makes the client **stop parsing the table**,
+#: dropping every later row (which is why ids above the ceiling never
+#: rendered). The earlier readings — a signed 16-bit ceiling, then a 12-bit
+#: one — were both wrong.
+#:
+#: The table's 247 *gaps* (free ids inside 1..2493) are read by the client
+#: too — a row added at 2069 was measured readable, out of id order even —
+#: but a gap id may already be referenced by shipped data, so the band stays
+#: above the retail range until that is measured.
+CLIENT_ID_MIN = 2494
+CLIENT_ID_MAX = 2499
 
 #: A row's id is its identity; row ops may not write it (kept in step with
 #: `gamedata.ID_COLUMN`, the column an `add` puts its id in).
@@ -232,8 +242,14 @@ def client_gamedata_add(table: str, id_: int, values, *, columns) -> dict:
     return item
 
 
-def check_client_item(item) -> None:
-    """Validate one resolved payload item, as a pack would carry it."""
+def check_client_item(item, *, band: bool = True) -> None:
+    """Validate one resolved payload item, as a pack would carry it.
+
+    ``band=False`` skips the reserved-band rule. The band is a build-time
+    concern: reading back what an installed mod already carries must survive
+    a later band change (the ceiling probe that measured it relies on this,
+    and so would any pack built before the constants moved).
+    """
     if not isinstance(item, dict):
         raise TypeError(f"a client item must be an object, got {item!r}")
     kind = item.get("kind")
@@ -255,7 +271,7 @@ def check_client_item(item) -> None:
         if action == "set":
             if item.get("expect"):
                 _values_map(item["expect"])
-        elif not CLIENT_ID_MIN <= _row_id(item["id"]) <= CLIENT_ID_MAX:
+        elif band and not CLIENT_ID_MIN <= _row_id(item["id"]) <= CLIENT_ID_MAX:
             raise ValueError(
                 f"added id {item['id']} is outside the reserved band "
                 f"{CLIENT_ID_MIN}..{CLIENT_ID_MAX}"
@@ -265,16 +281,17 @@ def check_client_item(item) -> None:
         raise ValueError(f"unknown client item kind {kind!r}")
 
 
-def claims(items) -> list[str]:
+def claims(items, *, band: bool = True) -> list[str]:
     """The destinations a set of payload items claims, lower-cased to group.
 
     Validates every item on the way, so an untrusted pack cannot be planned
     without its items holding together. Two items of one mod claiming one
     destination is refused: a pack must be unambiguous about its own content.
+    ``band=False`` is for items already installed (see `check_client_item`).
     """
     out: list[str] = []
     for item in items:
-        check_client_item(item)
+        check_client_item(item, band=band)
         kind = item["kind"]
         if kind == "loose":
             out.append(f"loose:{item['path'].lower()}")

@@ -197,6 +197,30 @@ def _client_build(client_dir: str) -> str | None:
     return client_build(client_dir)
 
 
+def _client_running() -> str | None:
+    """The name of a running game client, when one is visible (Linux).
+
+    The client reads its files once, at startup, so installing under a
+    running one changes nothing on screen — and on Windows the open files
+    refuse the write anyway. Refusing early is the honest version of both.
+    """
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/comm", encoding="utf-8", errors="replace") as fh:
+                comm = fh.read().strip()
+        except OSError:
+            continue
+        if comm in ("camelot.exe", "camtest.exe"):
+            return comm
+    return None
+
+
 # --- the pack ----------------------------------------------------------------
 
 def _check_mod_id(mod_id, path: str) -> None:
@@ -397,7 +421,9 @@ def _claim_owners(installs) -> tuple[dict[str, str], list[str], list[str]]:
     """
     groups: dict[str, list[Install]] = {}
     for install in installs:
-        for claim in mod.claims(install.items):
+        # band=False: the reserved band is a build-time rule, and a mod
+        # installed under a wider band must stay readable after it moves.
+        for claim in mod.claims(install.items, band=False):
             groups.setdefault(claim, []).append(install)
     owners: dict[str, str] = {}
     conflicts: list[str] = []
@@ -786,6 +812,9 @@ def _prune_members(client_dir: str, installs) -> None:
 def install_pack(client_dir: str, pack_path: str, *, priority: int | None = None,
                  allow_build_mismatch: bool = False, adopt: bool = False) -> dict:
     """Install (or update) a pack's client half; returns a report."""
+    running = _client_running()
+    if running:
+        raise InstallError(f"the game is running ({running}); close it and retry")
     pack = ModPack.load(pack_path)
     state = _load_state(client_dir)
     warnings: list[str] = []
@@ -843,6 +872,9 @@ def install_pack(client_dir: str, pack_path: str, *, priority: int | None = None
 
 def uninstall(client_dir: str, mod_id: str) -> dict:
     """Remove a mod's client half; exact, from the stored originals."""
+    running = _client_running()
+    if running:
+        raise InstallError(f"the game is running ({running}); close it and retry")
     state = _load_state(client_dir)
     if not any(install.mod_id == mod_id for install in state.installs):
         raise InstallError(f"{mod_id} is not installed on this client")

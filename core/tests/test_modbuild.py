@@ -100,7 +100,7 @@ def test_a_patch_resolves_against_the_client(client, tmp_path):
 
 def test_rows_and_creatures_land_in_the_deployment_document(client, tmp_path):
     rows = [{"table": "npctemplate", "id": "spawn:probe",
-             "values": {"Name": "Crab Thing", "Model": 60000}}]
+             "values": {"Name": "Crab Thing", "Model": 2495}}]
     mod_dir = make_mod_dir(tmp_path, rows=rows)
     out = tmp_path / "mymod.tar.gz"
     modbuild.build_mod_pack(mod_dir, client, str(out), creatures=1)

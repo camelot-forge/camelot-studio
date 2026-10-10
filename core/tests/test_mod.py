@@ -168,10 +168,10 @@ def test_a_row_op_may_not_write_the_id():
 
 def test_an_added_id_lives_in_the_reserved_band():
     ok = mod.client_gamedata_add(
-        "monsters.csv", 60000, {"name": "Thing"}, columns={"name": 1},
+        "monsters.csv", 2495, {"name": "Thing"}, columns={"name": 1},
     )
-    assert ok["id"] == 60000
-    for outside in (59999, 65536):
+    assert ok["id"] == 2495
+    for outside in (2493, 2500):
         with pytest.raises(ValueError, match="reserved band"):
             mod.client_gamedata_add(
                 "monsters.csv", outside, {"name": "Thing"}, columns={"name": 1},
@@ -189,13 +189,13 @@ def test_claims_group_by_destination_not_spelling():
             columns={"Name": 2},
         ),
         mod.client_gamedata_add(
-            "monsters.csv", 60000, {"name": "Thing"}, columns={"name": 1},
+            "monsters.csv", 2495, {"name": "Thing"}, columns={"name": 1},
         ),
     ]
     assert mod.claims(items) == [
         "entry:figures/skins/skin003.mpk#boar.dds",
         "row:monnifs.csv#286#2",
-        "row:monsters.csv#60000",
+        "row:monsters.csv#2495",
     ]
 
 
@@ -221,7 +221,7 @@ def test_a_patch_resolves_columns_and_captures_expect():
             "gamedata": [
                 {"table": "monnifs.csv", "set": {"286": {"Name": "ettin"}}},
                 {"table": "monnifs.csv",
-                 "add": [{"id": 60001, "values": {"Name": "Thing"}}]},
+                 "add": [{"id": 2496, "values": {"Name": "Thing"}}]},
             ],
         },
         tables,
@@ -239,14 +239,14 @@ def test_an_ambiguous_column_is_written_name_at_index():
     )
     items = mod.client_patch_items(
         {"gamedata": [{"table": "monsters.csv",
-                       "add": [{"id": 60000, "values": {"Body@68": "5"}}]}]},
+                       "add": [{"id": 2495, "values": {"Body@68": "5"}}]}]},
         tables,
     )
     assert items[0]["columns"] == {"Body@68": 68}
     with pytest.raises(ValueError, match="@"):
         mod.client_patch_items(
             {"gamedata": [{"table": "monsters.csv",
-                           "add": [{"id": 60001, "values": {"Body@nope": "5"}}]}]},
+                           "add": [{"id": 2496, "values": {"Body@nope": "5"}}]}]},
             tables,
         )
 
@@ -254,12 +254,12 @@ def test_an_ambiguous_column_is_written_name_at_index():
 def test_a_patch_refuses_an_add_on_an_existing_id():
     tables = FakeTables(
         columns={"monnifs.csv": {"Name": 2}},
-        rows={"monnifs.csv": {60000: {"Name": "crab"}}},
+        rows={"monnifs.csv": {2495: {"Name": "crab"}}},
     )
     with pytest.raises(ValueError, match="already exists"):
         mod.client_patch_items(
             {"gamedata": [{"table": "monnifs.csv",
-                           "add": [{"id": 60000, "values": {"Name": "Thing"}}]}]},
+                           "add": [{"id": 2495, "values": {"Name": "Thing"}}]}]},
             tables,
         )
 

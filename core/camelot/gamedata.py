@@ -397,6 +397,16 @@ class Table:
         """The header row that carries the field names."""
         return self.rows[HEADER_ROWS - 1] if len(self.rows) >= HEADER_ROWS else []
 
+    @property
+    def width(self) -> int:
+        """The field count of the table's own rows.
+
+        An added row must be exactly this wide: the client stops reading a
+        table at a line shorter than its neighbours, the same way it stops at
+        a blank one (measured, `notes` Part 4 P5-F).
+        """
+        return max([0] + [len(row) for row in self.rows])
+
     def column_index(self, name: str) -> int:
         """The index of *name* in the header, or raise.
 
@@ -495,7 +505,7 @@ def apply_row_ops(table: Table, ops) -> Table:
         elif action == "add":
             if _find_row(rows, id_) is not None:
                 raise TableError(f"{table.name}: row {id_} already exists")
-            width = max([1] + [index + 1 for index in columns.values()])
+            width = max([table.width, 1] + [index + 1 for index in columns.values()])
             row = [""] * width
             row[ID_COLUMN] = str(id_)
             for name, value in values.items():

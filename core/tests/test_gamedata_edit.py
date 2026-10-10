@@ -117,9 +117,22 @@ def test_an_add_appends_one_line_with_the_id_in_column_zero():
         "columns": {"name": 1, "#": 2, "Body": 3},
         "values": {"name": "Probe Crab", "#": "231", "Body": "110"},
     }])
-    assert added == MONSTERS + b"60000,Probe Crab,231,110\r\n"
+    assert added == MONSTERS + b"60000,Probe Crab,231,110,\r\n"
     # no blank line sneaked in before the new row -- the client stops there
     assert b"\r\n\r\n" not in added
+
+
+def test_an_add_is_padded_to_the_width_of_the_table_s_rows():
+    """The client stops reading a table at a short line.
+
+    Measured in P5-F: rows added with only their non-empty fields (61 of the
+    100 `monsters.csv` carries) never rendered, while a full-width copy did.
+    """
+    added = gamedata.edit_table(MONSTERS, "monsters.csv", [{
+        "action": "add", "id": 60000,
+        "columns": {"name": 1}, "values": {"name": "Probe Crab"},
+    }])
+    assert added == MONSTERS + b"60000,Probe Crab,,,\r\n"
 
 
 def test_an_add_to_a_file_without_a_trailing_newline_does_not_merge_rows():
@@ -128,7 +141,7 @@ def test_an_add_to_a_file_without_a_trailing_newline_does_not_merge_rows():
         "action": "add", "id": 60000,
         "columns": {"name": 1}, "values": {"name": "Probe Crab"},
     }])
-    assert added == raw + b"\r\n" + b"60000,Probe Crab\r\n"
+    assert added == raw + b"\r\n" + b"60000,Probe Crab,,,\r\n"
 
 
 def test_an_add_on_an_existing_id_is_refused():
@@ -208,3 +221,21 @@ def test_a_real_table_round_trips_and_an_edit_moves_one_line(client_dir):
     differing = {i for i, (a, b) in enumerate(zip(before, after)) if a != b}
     assert differing <= {index}, f"lines moved: {sorted(differing)}"
     assert gamedata.parse_table("monsters.csv", edited).rows == table.rows
+
+
+def test_a_row_added_to_the_real_monsters_table_is_full_width(client_dir):
+    """P5-F: a short added row is a row no client renders.
+
+    Every shipped row carries the same field count; the added one must too.
+    """
+    raw = gamedata.read_table_bytes(client_dir, "monsters.csv")
+    table = gamedata.parse_table("monsters.csv", raw)
+    edited = gamedata.edit_table(raw, "monsters.csv", [{
+        "action": "add", "id": 4095,
+        "columns": {"name": 1, "#": 2, "Body": 3},
+        "values": {"name": "Probe 4095", "#": "286", "Body": "1172"},
+    }])
+    parsed = gamedata.parse_table("monsters.csv", edited)
+    assert len(parsed.rows[-1]) == table.width
+    assert parsed.rows[-1][1] == "Probe 4095"
+    assert b"\r\n\r\n" not in edited

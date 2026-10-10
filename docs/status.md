@@ -120,8 +120,10 @@ meaningless. A target that cannot yet express a figure records it under
 `unprojected` in its own file rather than failing the build or dropping it
 silently.
 
-**Not yet done**: NIF *writing*, and the in-client run of the Phase 5
-ladder (`notes/phase5-client-assets.md` in the workspace, P5-A…P5-F). A
+**Not yet done**: NIF *writing*; the Phase 5 in-client ladder has run
+(P5-A…P5-F pass — see the workspace report
+`notes/test-p5-report.md`), with P5-F's server half still to be
+replayed through the loader with an in-band `Model`. A
 stock client cannot load the Studio-authored GLBs — it reads NIF from MPAK —
 so deploying new *assets* still waits on a NIF writer. Deploying new *server
 data* does not: the loader consumes the deployment document on a booted
@@ -132,6 +134,14 @@ from an authoring directory, `camelot client install/uninstall/status/verify`
 applies its payload with claims and priority — every touched file rebuilt
 from the client's own originals and read back — and the loader notes each
 pack's payload count at apply time.
+
+**New model ids have a measured ceiling** (2026-10-10): the client's model
+table is 2500 entries wide (ids 0..2499; the shipped table tops out at 2493),
+and a row at 2500 makes the client **stop parsing the whole table** — every
+later row is dropped, so an out-of-band row takes other mods' rows down with
+it. `mod.py`'s reserved band (2494..2499) is that measurement; the table's
+247 free gaps are readable too but stay out of band until the cross-reference
+risk is measured.
 
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the
 1.127 client under Wine: a rewritten container, modified table data and a new

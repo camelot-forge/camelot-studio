@@ -374,8 +374,10 @@ that ships in no archive.
 `camelot client install` applies them to a client directory with claims
 resolved by priority, every touched file rebuilt from the client's own
 originals; `camelot mod build` assembles the pack from an authoring
-directory. The design, and the in-client ladder that still closes it, are
-`notes/phase5-client-assets.md` in the workspace.
+directory. The design is `notes/phase5-client-assets.md` in the workspace,
+and the in-client ladder has run (P5-A…P5-F pass, 2026-10-10 — the model-id
+ceiling is 2500: rows must stay at or below 2499 or the client truncates the
+table).
 
 ## Phase 4 — Validate the OpenDAoC integration
 
@@ -484,10 +486,13 @@ The server pack works end to end, the MPAK output *is* validated against the
 real client (2026-10-07), and the client delivery half is built (2026-10-08):
 `camelot mod build` assembles a pack from an authoring directory,
 `camelot client install/uninstall/status/verify` applies it with claims and
-priority, and the loader notes each pack's payload count. Remaining:
+priority, and the loader notes each pack's payload count. The in-client
+ladder has run (P5-A…P5-F pass, 2026-10-10); the model-id ceiling is
+measured at 2500 (ids must stay ≤ 2499 — a row at 2500 truncates the client's
+parse of the whole table). Remaining:
 
-- run the in-client ladder that closes the phase (P5-A…P5-F, workspace
-  `notes/phase5-client-assets.md`);
+- replay P5-F's server half through the loader with an in-band `Model`
+  (2495), and decide whether the table's 247 free gaps widen the band;
 - add the writer still needed for in-place content replacement (NIF);
 - provide safe KFA/mesh editing and re-rig workflows;
 - add useful search, collections and annotations to the workbench;

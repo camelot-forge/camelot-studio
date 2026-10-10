@@ -620,6 +620,13 @@ def cmd_mod(args) -> int:
         print("mod build: no client corpus (pass --client or set $DAOC_CLIENT)",
               file=sys.stderr)
         return 2
+    if os.path.exists(os.path.join(client, ".camelot", "state.json")):
+        # The builder resolves ids and columns against this directory; with
+        # mods installed it is no longer the pristine reference, and an `add`
+        # of a row an installed mod already carries is refused for the wrong
+        # reason. Point at a clean copy of the client instead.
+        print("mod build: warning: this client has mods installed; it is not a "
+              "pristine reference (use a clean copy)", file=sys.stderr)
     try:
         report = modbuild.build_mod_pack(args.dir, client, args.out,
                                          creatures=args.creatures)
