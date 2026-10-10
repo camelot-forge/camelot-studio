@@ -96,21 +96,23 @@ def deployment_bytes(doc: dict) -> bytes:
 # table editor would have to (see `camelot.clientinstall` and the design in
 # the workspace, `notes/phase5-client-assets.md`).
 
-#: The band a mod-added client id must live in: **2494..2499**, the six ids
-#: just above everything `monsters.csv` ships (its highest is 2493). Below
-#: 2500 because the client's model table is 2500 entries wide — measured
-#: 2026-10-10 by reading the running client's memory
-#: (`notes/client-memwatch.py`): rows at 2495..2499 are read and
-#: render, while a row at 2500 makes the client **stop parsing the table**,
-#: dropping every later row (which is why ids above the ceiling never
-#: rendered). The earlier readings — a signed 16-bit ceiling, then a 12-bit
-#: one — were both wrong.
+#: The band a mod-added client id must live in: **1..2499** — every id the
+#: client can still resolve. The ceiling is 2500 because the client's model
+#: table is 2500 entries wide (measured 2026-10-10 by reading the running
+#: client's memory, `notes/client-memwatch.py`): a row at 2500
+#: makes the client **stop parsing the table**, dropping every later row —
+#: which is why ids above the ceiling never rendered. The earlier readings (a
+#: signed 16-bit ceiling, then a 12-bit one) were both wrong.
 #:
-#: The table's 247 *gaps* (free ids inside 1..2493) are read by the client
-#: too — a row added at 2069 was measured readable, out of id order even —
-#: but a gap id may already be referenced by shipped data, so the band stays
-#: above the retail range until that is measured.
-CLIENT_ID_MIN = 2494
+#: The floor is 1, not the retail maximum: the free ids *inside* the shipped
+#: range (the table's gaps — 2069 measured readable, appended out of id order
+#: even) are usable too, and the real rule is "the id must be free".
+#: `modbuild` enforces that against the reference client and refuses an id
+#: the shipped server content references (`camelot.modelusage`) — such an id
+#: would change live content instead of adding to it. `camelot client
+#: free-ids` lists the pool: ~253 gap ids plus ~674 shipped rows nothing
+#: references.
+CLIENT_ID_MIN = 1
 CLIENT_ID_MAX = 2499
 
 #: A row's id is its identity; row ops may not write it (kept in step with

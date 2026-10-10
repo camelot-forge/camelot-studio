@@ -497,8 +497,9 @@ parse of the whole table). Remaining:
   `requires: client.modelids.N` capability the installer checks (measured
   2026-10-10: 2 cap compares + 4 array references + one PE section -> 32768
   ids, model 10000 renders; P5-H in the workspace);
-- fold the measured no-patch pool (927 ids: 253 gaps + 674 unreferenced
-  shipped rows) into the loader, and decide whether it widens the band;
+- export the server's own referenced-id list from the loader (the studio
+  side is done: `camelot client free-ids` reports 253 add ids and 674
+  take-over rows, and `mod build --used-models` accepts an export);
 - add the writer still needed for in-place content replacement (NIF);
 - provide safe KFA/mesh editing and re-rig workflows;
 - add useful search, collections and annotations to the workbench;

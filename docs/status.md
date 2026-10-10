@@ -150,7 +150,10 @@ model 10000 renders in game. The patch is a recipe (offsets, bytes,
 preconditions), not a redistributed DLL, so the installer can apply it with a
 backup and byte-exact removal; a pack declares it needs it via `requires`.
 Without the patch, a measured pool of **927 ids** is available (253 gaps plus
-674 shipped rows nothing references).
+674 shipped rows nothing references); `camelot client free-ids` lists it from
+the client itself, and `mod build` refuses a `monsters.csv` add at an id the
+measured server content references (`--used-models` replaces the list with a
+server's own export).
 
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the
 1.127 client under Wine: a rewritten container, modified table data and a new

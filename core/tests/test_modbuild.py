@@ -113,6 +113,34 @@ def test_rows_and_creatures_land_in_the_deployment_document(client, tmp_path):
     assert doc["client"] == []
 
 
+def test_an_add_at_a_referenced_id_is_refused(client, tmp_path):
+    """A monsters.csv add may not take an id the shipped server uses."""
+    patch = {"gamedata": [{"table": "monsters.csv",
+                           "add": [{"id": 592, "values": {"name": "Probe"}}]}]}
+    mod_dir = make_mod_dir(tmp_path, patch=patch)
+    with pytest.raises(ValueError, match="referenced by the shipped server"):
+        modbuild.build_mod_pack(mod_dir, client, str(tmp_path / "x.tar.gz"))
+
+
+def test_an_add_at_a_free_id_is_accepted(client, tmp_path):
+    patch = {"gamedata": [{"table": "monsters.csv",
+                           "add": [{"id": 2069, "values": {"name": "Probe"}}]}]}
+    mod_dir = make_mod_dir(tmp_path, patch=patch)
+    out = tmp_path / "y.tar.gz"
+    modbuild.build_mod_pack(mod_dir, client, str(out))
+    assert out.exists()
+
+
+def test_a_server_can_replace_the_used_models_list(client, tmp_path):
+    """The shipped list is one server's measurement; a file replaces it."""
+    patch = {"gamedata": [{"table": "monsters.csv",
+                           "add": [{"id": 592, "values": {"name": "Probe"}}]}]}
+    mod_dir = make_mod_dir(tmp_path, patch=patch)
+    out = tmp_path / "z.tar.gz"
+    modbuild.build_mod_pack(mod_dir, client, str(out), used_models="1\n")
+    assert out.exists()
+
+
 def test_priority_and_requires_travel_from_mod_json(client, tmp_path):
     mod_dir = make_mod_dir(tmp_path, meta={"priority": 250, "requires": ["probe.base"]})
     out = tmp_path / "mymod.tar.gz"

@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import assemble, gamedata, mod
+from . import assemble, gamedata, mod, modelusage
 from .contract import Manifest, client_build, client_profile
 
 __all__ = ["build_mod_pack"]
@@ -102,8 +102,30 @@ def _rows(mod_dir: str, client_dir: str, creatures) -> list[dict]:
     return rows
 
 
+def _check_added_ids(mod_id, items, used_models: str | None) -> None:
+    """Refuse a `monsters.csv` add at an id the server content references.
+
+    The client-side rule ("the id must be free") is checked against the
+    reference client elsewhere; this is the *server* half: taking an id the
+    shipped content already uses would change live creatures instead of
+    adding new ones. The measured list is `camelot.modelusage`; a server can
+    replace it with its own export (`--used-models`).
+    """
+    used = modelusage.used_model_ids(used_models)
+    for item in items:
+        if (item.get("kind") == "gamedata_row" and item.get("action") == "add"
+                and item.get("table") == "monsters.csv"
+                and int(item["id"]) in used):
+            raise ValueError(
+                f"{mod_id}: monsters.csv id {item['id']} is referenced by the "
+                "shipped server content; pick a free one (`camelot client "
+                "free-ids` lists the pool) or pass --used-models for this server"
+            )
+
+
 def build_mod_pack(mod_dir: str, client_dir: str, out_path: str, *,
-                   creatures: int | None = None) -> dict:
+                   creatures: int | None = None,
+                   used_models: str | None = None) -> dict:
     """Write the pack for *mod_dir* and report what went in."""
     if not os.path.isdir(mod_dir):
         raise ValueError(f"{mod_dir}: no such directory")
@@ -124,6 +146,7 @@ def build_mod_pack(mod_dir: str, client_dir: str, out_path: str, *,
 
     loose, loose_members = _loose_members(mod_dir)
     patched, patch_members = _patch_items(mod_dir, patch, client_dir)
+    _check_added_ids(mod_id, patched, used_models)
     rows = _rows(mod_dir, client_dir, creatures)
 
     doc = mod.deployment(

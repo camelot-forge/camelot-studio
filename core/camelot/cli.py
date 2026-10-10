@@ -628,8 +628,13 @@ def cmd_mod(args) -> int:
         print("mod build: warning: this client has mods installed; it is not a "
               "pristine reference (use a clean copy)", file=sys.stderr)
     try:
+        used_text = None
+        if args.used_models:
+            with open(args.used_models, encoding="utf-8") as fh:
+                used_text = fh.read()
         report = modbuild.build_mod_pack(args.dir, client, args.out,
-                                         creatures=args.creatures)
+                                         creatures=args.creatures,
+                                         used_models=used_text)
     except (OSError, TypeError, ValueError, KeyError) as error:
         print(f"mod build: {error}", file=sys.stderr)
         return 1
@@ -683,6 +688,27 @@ def cmd_client(args) -> int:
                       f"{len(install['claims'])} claim(s))")
             for claim, owner in report["owners"].items():
                 print(f"  {claim} -> {owner}")
+            return 0
+        if args.client_cmd == "free-ids":
+            from . import mod, modelusage
+
+            used_text = None
+            if args.used_models:
+                with open(args.used_models, encoding="utf-8") as fh:
+                    used_text = fh.read()
+            max_id = args.max_id or mod.CLIENT_ID_MAX
+            ids = modelusage.client_row_ids(client, args.table)
+            used = modelusage.used_model_ids(used_text)
+            free, reclaimable = modelusage.pool(ids, used, max_id)
+            print(f"{args.table}: {len(ids)} rows, ceiling {max_id}")
+            head = ", ".join(str(i) for i in free[:12])
+            print(f"  free to add:       {len(free):4d} ids"
+                  + (f"  (first: {head})" if free else ""))
+            head = ", ".join(str(i) for i in reclaimable[:12])
+            print(f"  safe to take over: {len(reclaimable):4d} shipped rows"
+                  + (f"  (first: {head})" if reclaimable else ""))
+            print("  take-over is a `set` on that row (point it at your figure")
+            print("  and textures); `add` needs an id from the free list.")
             return 0
         if args.client_cmd == "verify":
             report = clientinstall.verify(client)
@@ -800,6 +826,9 @@ def main(argv=None) -> int:
     bp.add_argument("--out", required=True, help="output pack (.tar.gz)")
     bp.add_argument("--creatures", type=int, metavar="N", nargs="?", const=0,
                     help="also add spawn rows (all, or the first N creature models)")
+    bp.add_argument("--used-models",
+                    help="file of server-referenced model ids (default: the "
+                         "measured shipped list)")
     p.set_defaults(func=cmd_mod)
 
     p = sub.add_parser("client", help="apply a mod's client half to a client directory")
@@ -817,6 +846,16 @@ def main(argv=None) -> int:
     rp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
     tp = cp.add_parser("status", help="what is installed, and who owns what")
     tp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
+    fp = cp.add_parser("free-ids",
+                       help="model ids a mod may use without a client patch")
+    fp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
+    fp.add_argument("--table", default="monsters.csv",
+                    help="table to inspect (default: monsters.csv)")
+    fp.add_argument("--used-models",
+                    help="file of server-referenced model ids (default: the "
+                         "measured shipped list)")
+    fp.add_argument("--max-id", type=int,
+                    help="client ceiling to respect (default: the measured one)")
     vp = cp.add_parser("verify", help="read the client back against the state")
     vp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
     p.set_defaults(func=cmd_client)

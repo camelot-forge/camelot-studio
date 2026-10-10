@@ -168,10 +168,10 @@ def test_a_row_op_may_not_write_the_id():
 
 def test_an_added_id_lives_in_the_reserved_band():
     ok = mod.client_gamedata_add(
-        "monsters.csv", 2495, {"name": "Thing"}, columns={"name": 1},
+        "monsters.csv", 2069, {"name": "Thing"}, columns={"name": 1},
     )
-    assert ok["id"] == 2495
-    for outside in (2493, 2500):
+    assert ok["id"] == 2069
+    for outside in (0, 2500):
         with pytest.raises(ValueError, match="reserved band"):
             mod.client_gamedata_add(
                 "monsters.csv", outside, {"name": "Thing"}, columns={"name": 1},
