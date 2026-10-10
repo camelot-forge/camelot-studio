@@ -491,8 +491,14 @@ ladder has run (P5-A…P5-F pass, 2026-10-10); the model-id ceiling is
 measured at 2500 (ids must stay ≤ 2499 — a row at 2500 truncates the client's
 parse of the whole table). Remaining:
 
-- replay P5-F's server half through the loader with an in-band `Model`
-  (2495), and decide whether the table's 247 free gaps widen the band;
+- fold the measured model-id ceiling patch into the studio: a `patch`
+  payload kind (offsets + bytes + preconditions), applied by
+  `camelot client install` with backup and byte-exact removal, plus a
+  `requires: client.modelids.N` capability the installer checks (measured
+  2026-10-10: 2 cap compares + 4 array references + one PE section -> 32768
+  ids, model 10000 renders; P5-H in the workspace);
+- fold the measured no-patch pool (927 ids: 253 gaps + 674 unreferenced
+  shipped rows) into the loader, and decide whether it widens the band;
 - add the writer still needed for in-place content replacement (NIF);
 - provide safe KFA/mesh editing and re-rig workflows;
 - add useful search, collections and annotations to the workbench;

@@ -143,6 +143,15 @@ it. `mod.py`'s reserved band (2494..2499) is that measurement; the table's
 247 free gaps are readable too but stay out of band until the cross-reference
 risk is measured.
 
+**The ceiling is liftable by a small client patch** (measured 2026-10-10):
+two cap compares and four array references in the loaded `game1127.dll`, plus
+one zero-filled PE section, raise the table to **32768 entries** — a spawn at
+model 10000 renders in game. The patch is a recipe (offsets, bytes,
+preconditions), not a redistributed DLL, so the installer can apply it with a
+backup and byte-exact removal; a pack declares it needs it via `requires`.
+Without the patch, a measured pool of **927 ids** is available (253 gaps plus
+674 shipped rows nothing references).
+
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the
 1.127 client under Wine: a rewritten container, modified table data and a new
 model id all reach the world, and the loader's server half deploys the
