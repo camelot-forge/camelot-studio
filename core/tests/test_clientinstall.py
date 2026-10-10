@@ -10,8 +10,9 @@ import os
 import tarfile
 
 import pytest
+from _pe import client_dll
 
-from camelot import assemble, clientinstall, gamedata, mod
+from camelot import assemble, clientinstall, clientpatch, gamedata, mod
 from camelot.contract import Manifest
 from camelot.mpak import MpakArchive, write_mpak
 
@@ -73,8 +74,8 @@ def _entry(client_dir, archive_rel, entry):
 def build_pack(tmp_path, name, *, mod_id, items=(), members=None, version="0.1.0",
                priority=100, requires=(), build=None, doc=None):
     if doc is None:
-        doc = mod.deployment(mod_id, version, [], priority=priority, client=list(items))
-        doc["requires"] = list(requires)
+        doc = mod.deployment(mod_id, version, [], priority=priority,
+                             client=list(items), requires=list(requires))
     files = {"targets/opendaoc/mod.json": mod.deployment_bytes(doc)}
     files.update(members or {})
     # The lock travels inside the pack and covers every member but itself;
@@ -442,30 +443,26 @@ def test_the_installer_refuses_while_the_game_runs(client, tmp_path, monkeypatch
     pack = build_pack(tmp_path, "u1.tar.gz", mod_id="probe.u",
                       items=[mod.client_loose("figures/Boar.NIF")],
                       members={"client/figures/Boar.NIF": b"x"})
-    monkeypatch.setattr(clientinstall, "_client_running", lambda: "camelot.exe")
+    monkeypatch.setattr(clientinstall, "client_running", lambda: "camelot.exe")
     with pytest.raises(clientinstall.InstallError, match="the game is running"):
         clientinstall.install_pack(client, pack)
-    monkeypatch.setattr(clientinstall, "_client_running", lambda: None)
+    monkeypatch.setattr(clientinstall, "client_running", lambda: None)
     clientinstall.install_pack(client, pack)          # the check passes once it is gone
-    monkeypatch.setattr(clientinstall, "_client_running", lambda: "camelot.exe")
+    monkeypatch.setattr(clientinstall, "client_running", lambda: "camelot.exe")
     with pytest.raises(clientinstall.InstallError, match="the game is running"):
         clientinstall.uninstall(client, "probe.u")
 
 
 def test_a_band_change_does_not_brick_an_installed_mod(client, tmp_path, monkeypatch):
-    """The reserved band is a build-time rule: a mod installed while it was
-    wider must still verify and uninstall after the constants move (measured
-    by the ceiling probe, 2026-10-09, which installs out-of-band ids on
-    purpose)."""
-    monkeypatch.setattr(mod, "CLIENT_ID_MIN", 1)
-    monkeypatch.setattr(mod, "CLIENT_ID_MAX", 0xFFFF)
+    """The band is a build-time rule: a mod installed under one band must
+    still verify and uninstall after the constants move (measured by the
+    ceiling probe, 2026-10-09, which installed out-of-band ids on purpose)."""
     pack = build_pack(tmp_path, "w1.tar.gz", mod_id="probe.w",
                       items=[mod.client_gamedata_add(
-                          "monsters.csv", 4096, {"name": "Probe"},
+                          "monsters.csv", 2495, {"name": "Probe"},
                           columns={"name": 1})])
     clientinstall.install_pack(client, pack)
-    monkeypatch.setattr(mod, "CLIENT_ID_MIN", 2494)
-    monkeypatch.setattr(mod, "CLIENT_ID_MAX", 2499)
+    monkeypatch.setattr(mod, "CLIENT_ID_MAX", 100)    # the band narrows under it
     assert clientinstall.verify(client)["ok"] is True
     clientinstall.uninstall(client, "probe.w")
     assert gamedata.read_table_bytes(client, "monsters.csv") == MONSTERS
@@ -484,3 +481,108 @@ def test_the_build_binding_is_checked(client, tmp_path):
     with pytest.raises(clientinstall.InstallError, match="built against client 1.130"):
         clientinstall.install_pack(client, foreign)
     clientinstall.install_pack(client, foreign, allow_build_mismatch=True)
+
+
+# --- binary patches (the model-id ceiling) -----------------------------------
+
+#: 3072 is a multiple of 256, which keeps the section size file-aligned.
+CAP = 3072
+CEILING = CAP - 1
+
+
+def _patch_recipe(client_dir, *, cap=CAP):
+    """A recipe generated from the synthetic binary already in *client_dir*."""
+    return clientpatch.model_id_recipe(_path(client_dir, "game1127.dll"), cap=cap)
+
+
+def test_a_patch_item_patches_verifies_and_uninstalls_byte_exactly(client, tmp_path):
+    original = client_dll()
+    _write(client, "game1127.dll", original)
+    recipe = _patch_recipe(client)
+    pack = build_pack(tmp_path, "patch1.tar.gz", mod_id="probe.patch", items=[recipe])
+    clientinstall.install_pack(client, pack)
+
+    assert _read(client, "game1127.dll") == clientpatch.apply(original, recipe)
+    assert clientpatch.carried_cap(_read(client, "game1127.dll")) == CAP
+    pristine = os.path.join(client, ".camelot", "pristine", "game1127.dll")
+    assert _read_abs(pristine) == original
+    assert clientinstall.verify(client)["ok"] is True
+    assert clientinstall.status(client)["owners"] == {"file:game1127.dll": "probe.patch"}
+
+    clientinstall.uninstall(client, "probe.patch")
+    assert _read(client, "game1127.dll") == original
+    assert not os.path.exists(pristine)
+
+
+def test_a_patch_refuses_a_client_it_was_not_built_for(client, tmp_path):
+    built_against = tmp_path / "built-against"
+    built_against.mkdir()
+    (built_against / "game1127.dll").write_bytes(client_dll())
+    recipe = clientpatch.model_id_recipe(str(built_against / "game1127.dll"), cap=CAP)
+
+    _write(client, "game1127.dll", client_dll(cap=1234))   # a different build
+    pack = build_pack(tmp_path, "patch2.tar.gz", mod_id="probe.wrong", items=[recipe])
+    with pytest.raises(clientinstall.InstallError, match="wrong client build"):
+        clientinstall.install_pack(client, pack)
+    assert _read(client, "game1127.dll") == client_dll(cap=1234)   # untouched
+
+
+def test_a_capability_must_be_carried_by_the_client(client, tmp_path):
+    _write(client, "game1127.dll", client_dll())      # pristine: no .cmod
+    doc = mod.deployment("probe.need", "1", [], client=[
+        mod.client_gamedata_add("monsters.csv", CEILING, {"name": "Probe"},
+                                columns={"name": 1}, ceiling=CEILING)],
+        requires=[f"client.modelids.{CAP}"])
+    pack = build_pack(tmp_path, "patch3.tar.gz", mod_id="probe.need", doc=doc)
+    with pytest.raises(clientinstall.InstallError, match="carries no .cmod section"):
+        clientinstall.install_pack(client, pack)
+    assert gamedata.read_table_bytes(client, "monsters.csv") == MONSTERS
+
+
+def test_a_patch_can_provide_the_capability_it_uses(client, tmp_path):
+    """The client the set *produces* is what the check reads: a pack may
+    carry the patch and the high-id row, and require its own capability."""
+    _write(client, "game1127.dll", client_dll())
+    doc = mod.deployment("probe.high", "1", [], client=[
+        _patch_recipe(client),
+        mod.client_gamedata_add("monsters.csv", CEILING, {"name": "High"},
+                                columns={"name": 1}, ceiling=CEILING)],
+        requires=[f"client.modelids.{CAP}"])
+    pack = build_pack(tmp_path, "patch4.tar.gz", mod_id="probe.high", doc=doc)
+    clientinstall.install_pack(client, pack)
+
+    assert clientpatch.carried_cap(_read(client, "game1127.dll")) == CAP
+    assert b"High" in gamedata.read_table_bytes(client, "monsters.csv")
+    assert clientinstall.verify(client)["ok"] is True
+
+
+def test_uninstalling_a_provider_is_refused_while_a_dependent_needs_it(client, tmp_path):
+    _write(client, "game1127.dll", client_dll())
+    provider = build_pack(
+        tmp_path, "patch5.tar.gz", mod_id="probe.provider",
+        items=[_patch_recipe(client)], requires=[f"client.modelids.{CAP}"])
+    dependent = build_pack(
+        tmp_path, "patch6.tar.gz", mod_id="probe.dependent",
+        items=[mod.client_loose("figures/Boar.NIF")],
+        members={"client/figures/Boar.NIF": b"new-boar"},
+        requires=[f"client.modelids.{CAP}"])
+    clientinstall.install_pack(client, provider)
+    clientinstall.install_pack(client, dependent)
+
+    with pytest.raises(clientinstall.InstallError, match="required by probe.dependent"):
+        clientinstall.uninstall(client, "probe.provider")
+    clientinstall.uninstall(client, "probe.dependent")
+    clientinstall.uninstall(client, "probe.provider")
+    assert _read(client, "game1127.dll") == client_dll()
+
+
+def test_a_patched_binary_changed_outside_the_tool_is_drift(client, tmp_path):
+    _write(client, "game1127.dll", client_dll())
+    pack = build_pack(tmp_path, "patch7.tar.gz", mod_id="probe.drift",
+                      items=[_patch_recipe(client)])
+    clientinstall.install_pack(client, pack)
+    with open(_path(client, "game1127.dll"), "ab") as fh:
+        fh.write(b"hand-edited")
+    assert clientinstall.verify(client)["ok"] is False
+    with pytest.raises(clientinstall.DriftError):
+        clientinstall.uninstall(client, "probe.drift")

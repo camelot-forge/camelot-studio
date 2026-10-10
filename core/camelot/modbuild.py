@@ -6,7 +6,9 @@ An authoring directory is a file-manager-friendly description of a mod:
       mod.json            identity: id, version, priority, requires
       rows.json           optional server rows (the loader allocates their ids)
       client/…            loose replacements, paths mirroring the client
-      client.patch.json   archive entries and gamedata row ops
+      client.patch.json   archive entries, gamedata row ops, and `binary`
+                          patch specs (a semantic `model_ids` spec, or an
+                          explicit recipe)
 
 `build_mod_pack` resolves the payload against a client corpus -- column
 names, the id band, that the replacements exist -- assembles the deployment
@@ -19,7 +21,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import assemble, gamedata, mod, modelusage
+from . import assemble, clientpatch, gamedata, mod, modelusage
 from .contract import Manifest, client_build, client_profile
 
 __all__ = ["build_mod_pack"]
@@ -63,10 +65,55 @@ def _payload_file(mod_dir: str, name) -> str:
     return os.path.join(mod_dir, *normalised.split("/"))
 
 
-def _patch_items(mod_dir: str, patch: dict, client_dir: str):
+def _binary_items(mod_dir: str, patch: dict, client_dir: str) -> list[dict]:
+    """The `binary` payloads of `client.patch.json`, resolved against the client.
+
+    A spec is either semantic — `{"model_ids": 32768}`: the studio knows the
+    recipe and generates it from the pristine binary, so no offset is ever
+    written by hand — or an explicit recipe (`file`/`expect`/`write`/
+    `append_section`), which is validated but applied as given. Explicit
+    offsets are deliberately not checked against the client here: the
+    installer's preconditions are that check, and a recipe may legitimately
+    build on another patch.
+    """
+    specs = patch.get("binary") or []
+    if not isinstance(specs, list):
+        raise TypeError(f"{mod_dir}/client.patch.json: 'binary' must be a list")
+    items: list[dict] = []
+    for spec in specs:
+        if not isinstance(spec, dict):
+            raise TypeError(f"{mod_dir}/client.patch.json: a binary spec must be an object")
+        if "model_ids" in spec:
+            dll = os.path.join(client_dir, clientpatch.CLIENT_BINARY)
+            if not os.path.isfile(dll):
+                raise ValueError(
+                    f"{client_dir}: no {clientpatch.CLIENT_BINARY} to generate the "
+                    "model-id recipe from (point --client at a pristine client)"
+                )
+            try:
+                items.append(clientpatch.model_id_recipe(dll, cap=int(spec["model_ids"])))
+            except clientpatch.PatchError as error:
+                raise ValueError(f"{mod_dir}: {error}") from error
+        else:
+            try:
+                items.append(mod.client_patch(
+                    file=spec.get("file"),
+                    provides=spec.get("provides"),
+                    expect=spec.get("expect"),
+                    write=spec.get("write"),
+                    append_section=spec.get("append_section"),
+                ))
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"{mod_dir}/client.patch.json: {error}") from error
+    return items
+
+
+def _patch_items(mod_dir: str, patch: dict, client_dir: str, *, requires=()):
     """(items, members) for `client.patch.json`; the bytes come from `file`."""
+    binary = _binary_items(mod_dir, patch, client_dir)
     tables = gamedata.ClientTables(client_dir)
-    items = mod.client_patch_items(patch, tables)
+    items = binary + mod.client_patch_items(
+        patch, tables, ceiling=mod.effective_ceiling(requires, binary))
     members: dict[str, bytes] = {}
     specs = list(patch.get("archive") or [])
     entries = [item for item in items if item["kind"] == "archive_entry"]
@@ -138,6 +185,11 @@ def build_mod_pack(mod_dir: str, client_dir: str, out_path: str, *,
     version = meta.get("version")
     if not mod_id or not version:
         raise ValueError(f"{mod_dir}/mod.json: 'id' and 'version' are required")
+    mod.check_mod_id(mod_id, f"{mod_dir}/mod.json")
+    requires = [str(name) for name in (meta.get("requires") or [])]
+    for name in requires:
+        if not mod.is_capability(name):
+            mod.check_mod_id(name, f"{mod_dir}/mod.json requires")
     patch = _read_json(os.path.join(mod_dir, "client.patch.json"))
     if patch is None:
         patch = {}
@@ -145,7 +197,7 @@ def build_mod_pack(mod_dir: str, client_dir: str, out_path: str, *,
         raise TypeError(f"{mod_dir}/client.patch.json: expected an object")
 
     loose, loose_members = _loose_members(mod_dir)
-    patched, patch_members = _patch_items(mod_dir, patch, client_dir)
+    patched, patch_members = _patch_items(mod_dir, patch, client_dir, requires=requires)
     _check_added_ids(mod_id, patched, used_models)
     rows = _rows(mod_dir, client_dir, creatures)
 
@@ -153,8 +205,8 @@ def build_mod_pack(mod_dir: str, client_dir: str, out_path: str, *,
         str(mod_id), str(version), rows,
         priority=int(meta.get("priority", 100)),
         client=loose + patched,
+        requires=requires,
     )
-    doc["requires"] = [str(name) for name in (meta.get("requires") or [])]
 
     files: dict[str, bytes] = {"targets/opendaoc/mod.json": mod.deployment_bytes(doc)}
     files.update(loose_members)

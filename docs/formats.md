@@ -565,6 +565,17 @@ housing files failing inside **pyffi** (not the legacy reader):
 3. A `.kfa` can be reused only when the target bone names, structure and bind
    remain compatible. Re-rigging requires rewriting or revalidating the
    animation; do not assume byte reuse is safe.
+4. **The model table is a fixed array in the client binary** (measured
+   2026-10-10): `game1127.dll` — the image the launcher loads, not the
+   `game.dll` beside it (58% of the bytes differ) — keeps the `monsters.csv`
+   rows in a static array (base `0xb77b98`, 464 bytes an entry, 2500 entries),
+   and a row at or above 2500 makes the client stop parsing the whole table.
+   The array can be **moved**: `camelot.clientpatch` appends a zero-filled PE
+   section and repoints the two cap compares (`0x457d7e`, `0x43454a`) and the
+   four array references (`0x421f7e`, `0x434557`, `0x457d94`, `0x473af4`),
+   raising the ceiling to 32768. The recipe (offsets and bytes) travels in mod
+   packs; no client byte is redistributed. Other tables have their own
+   arrays and caps (`objects` caps at 5000, 196 bytes an entry).
 
 ## 10. Prototype 1 (cold asset swap) — protocol
 

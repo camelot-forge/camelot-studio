@@ -27,7 +27,7 @@ import shutil
 import tarfile
 from dataclasses import dataclass, field
 
-from . import gamedata, mod
+from . import clientpatch, gamedata, mod
 from .mpak import MpakArchive, write_mpak
 
 __all__ = [
@@ -36,7 +36,9 @@ __all__ = [
     "InstallError",
     "ModPack",
     "PackError",
+    "client_running",
     "install_pack",
+    "resolve_existing",
     "status",
     "uninstall",
     "verify",
@@ -52,9 +54,6 @@ TMP_DIR = "tmp"
 #: Mirrors the C# loader's cap: a pack larger than this is refused rather
 #: than buffered, so a hostile archive cannot exhaust memory.
 MAX_PACK_BYTES = 512 * 1024 * 1024
-
-#: What a mod id may look like; it becomes a directory name in the store.
-_MOD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
 class InstallError(ValueError):
@@ -164,7 +163,7 @@ def _temp_file(client_dir: str, tag: str, data: bytes) -> str:
     return path
 
 
-def _resolve_existing(client_dir: str, rel: str) -> str | None:
+def resolve_existing(client_dir: str, rel: str) -> str | None:
     """The on-disk file *rel* names, matched case-insensitively, or None.
 
     The extraction case mismatch is real (four corpus tests trip on it), so a
@@ -188,7 +187,7 @@ def _resolve_existing(client_dir: str, rel: str) -> str | None:
 
 
 def _resolve_for_write(client_dir: str, rel: str) -> str:
-    return _resolve_existing(client_dir, rel) or os.path.join(client_dir, rel)
+    return resolve_existing(client_dir, rel) or os.path.join(client_dir, rel)
 
 
 def _client_build(client_dir: str) -> str | None:
@@ -197,12 +196,13 @@ def _client_build(client_dir: str) -> str | None:
     return client_build(client_dir)
 
 
-def _client_running() -> str | None:
+def client_running() -> str | None:
     """The name of a running game client, when one is visible (Linux).
 
     The client reads its files once, at startup, so installing under a
     running one changes nothing on screen — and on Windows the open files
     refuse the write anyway. Refusing early is the honest version of both.
+    The process carries the name of the binary it loads (`game1127.dll`).
     """
     try:
         entries = os.listdir("/proc")
@@ -216,7 +216,7 @@ def _client_running() -> str | None:
                 comm = fh.read().strip()
         except OSError:
             continue
-        if comm in ("camelot.exe", "camtest.exe"):
+        if comm in ("camelot.exe", "camtest.exe", "game1127.dll"):
             return comm
     return None
 
@@ -224,8 +224,11 @@ def _client_running() -> str | None:
 # --- the pack ----------------------------------------------------------------
 
 def _check_mod_id(mod_id, path: str) -> None:
-    if not isinstance(mod_id, str) or not _MOD_ID.match(mod_id):
-        raise PackError(f"{path}: invalid mod id {mod_id!r}")
+    """A pack's id and its mod requirements share `camelot.mod`'s rules."""
+    try:
+        mod.check_mod_id(mod_id, path)
+    except ValueError as error:
+        raise PackError(str(error)) from None
 
 
 def _item_members(item: dict) -> list[str]:
@@ -287,6 +290,8 @@ class ModPack:
     requires: list[str]
     members: dict[str, bytes]
     build: str | None = None
+    #: The highest id this pack's own declarations allow (`mod.effective_ceiling`).
+    ceiling: int = mod.CLIENT_ID_MAX
 
     @classmethod
     def load(cls, path: str) -> ModPack:
@@ -305,8 +310,13 @@ class ModPack:
         if not version:
             raise PackError(f"{path}: mod.json has no version")
         items = list(doc.get("client") or [])
+        requires = [str(name) for name in (doc.get("requires") or [])]
+        for name in requires:
+            if not mod.is_capability(name):
+                _check_mod_id(name, f"{path} requires")
+        ceiling = mod.effective_ceiling(requires, items)
         try:
-            mod.claims(items)
+            mod.claims(items, ceiling=ceiling)
         except (TypeError, ValueError) as error:
             raise PackError(f"{path}: {error}") from error
         for item in items:
@@ -325,9 +335,10 @@ class ModPack:
             version=str(version),
             priority=int(section.get("priority", 100)),
             items=items,
-            requires=[str(name) for name in (doc.get("requires") or [])],
+            requires=requires,
             members=members,
             build=build,
+            ceiling=ceiling,
         )
 
 
@@ -421,9 +432,9 @@ def _claim_owners(installs) -> tuple[dict[str, str], list[str], list[str]]:
     """
     groups: dict[str, list[Install]] = {}
     for install in installs:
-        # band=False: the reserved band is a build-time rule, and a mod
-        # installed under a wider band must stay readable after it moves.
-        for claim in mod.claims(install.items, band=False):
+        # ceiling=None: the band is a build-time rule, and a mod installed
+        # under a wider band must stay readable after it moves.
+        for claim in mod.claims(install.items, ceiling=None):
             groups.setdefault(claim, []).append(install)
     owners: dict[str, str] = {}
     conflicts: list[str] = []
@@ -448,9 +459,9 @@ def _claim_owners(installs) -> tuple[dict[str, str], list[str], list[str]]:
 def _effective_item(item: dict, owners: dict[str, str], mod_id: str) -> dict | None:
     """The item as it applies under the ownership map, or None."""
     kind = item["kind"]
-    if kind == "loose":
-        claim = f"loose:{item['path'].lower()}"
-        return item if owners.get(claim) == mod_id else None
+    if kind in ("loose", "patch"):
+        rel = item["path"] if kind == "loose" else item["file"]
+        return item if owners.get(f"file:{rel.lower()}") == mod_id else None
     if kind == "archive_entry":
         claim = f"entry:{item['archive'].lower()}#{item['entry'].lower()}"
         return item if owners.get(claim) == mod_id else None
@@ -478,6 +489,8 @@ def _touched(installs) -> set[str]:
         for item in install.items:
             if item["kind"] == "loose":
                 rels.add(item["path"])
+            elif item["kind"] == "patch":
+                rels.add(item["file"])
             elif item["kind"] == "archive_entry":
                 rels.add(item["archive"])
             else:
@@ -497,7 +510,7 @@ def _pristine_bytes_for(client_dir: str, rel: str, *, capture: bool) -> bytes | 
     store = _pristine_path(client_dir, rel)
     if os.path.isfile(store):
         return _read_file(store)
-    existing = _resolve_existing(client_dir, rel)
+    existing = resolve_existing(client_dir, rel)
     if existing is None:
         return None
     data = _read_file(existing)
@@ -613,6 +626,7 @@ def _compute(client_dir: str, installs, *, capture: bool) -> tuple[dict, dict, l
     loose: dict[str, bytes] = {}
     archives: dict[str, dict[str, bytes]] = {}
     tables: list[tuple[int, str, dict]] = []
+    patches: dict[str, bytes] = {}
     for install in installs:
         for item in install.items:
             effective = _effective_item(item, owners, install.mod_id)
@@ -629,6 +643,19 @@ def _compute(client_dir: str, installs, *, capture: bool) -> tuple[dict, dict, l
                 loose[effective["path"]] = _stored_member(
                     client_dir, install, effective["member"]
                 )
+            elif kind == "patch":
+                pristine = _pristine_bytes_for(
+                    client_dir, effective["file"], capture=capture
+                )
+                if pristine is None:
+                    raise InstallError(
+                        f"{effective['file']}: the pack patches it, but the client "
+                        "has no such file"
+                    )
+                try:
+                    patches[effective["file"]] = clientpatch.apply(pristine, effective)
+                except clientpatch.PatchError as error:
+                    raise InstallError(f"{install.mod_id}: {error}") from error
             elif kind == "archive_entry":
                 if effective["archive"].lower() == gamedata.GAMEDATA_ARCHIVE.lower():
                     raise InstallError(
@@ -654,6 +681,10 @@ def _compute(client_dir: str, installs, *, capture: bool) -> tuple[dict, dict, l
         tables.sort(key=lambda item: (item[0], item[1]))
         replacements = _table_edits(client_dir, pristine, tables)
         content[rel] = _rebuild_archive(client_dir, rel, pristine, replacements)
+    for rel, data in patches.items():
+        if rel in content:
+            raise InstallError(f"{rel}: two payload items produce the same file")
+        content[rel] = data
     return content, owners, warnings
 
 
@@ -663,7 +694,7 @@ def _drifted(client_dir: str, state: State, content: dict) -> list[str]:
         recorded = record.get("materialized")
         if recorded is None:
             continue
-        path = _resolve_existing(client_dir, rel)
+        path = resolve_existing(client_dir, rel)
         on_disk = _sha_file(path) if path else None
         if on_disk == recorded:
             continue
@@ -693,7 +724,7 @@ def _write_content(client_dir: str, content: dict) -> list[str]:
 def _verify_content(client_dir: str, content: dict, installs, owners) -> None:
     """Read every write back, through the same readers the game uses."""
     for rel, data in sorted(content.items()):
-        path = _resolve_existing(client_dir, rel)
+        path = resolve_existing(client_dir, rel)
         if data is None:
             if path is not None:
                 raise InstallError(f"{rel}: could not be removed")
@@ -703,10 +734,12 @@ def _verify_content(client_dir: str, content: dict, installs, owners) -> None:
     for install in installs:
         for item in install.items:
             effective = _effective_item(item, owners, install.mod_id)
-            if effective is None or effective["kind"] == "loose":
+            # A patch is verified by the whole-file comparison above: its
+            # result is the file's bytes, not an entry to decode.
+            if effective is None or effective["kind"] in ("loose", "patch"):
                 continue
             if effective["kind"] == "archive_entry":
-                path = _resolve_existing(client_dir, effective["archive"])
+                path = resolve_existing(client_dir, effective["archive"])
                 archive = MpakArchive(path)
                 try:
                     if archive.read(effective["entry"]) != _stored_member(
@@ -719,7 +752,7 @@ def _verify_content(client_dir: str, content: dict, installs, owners) -> None:
                 finally:
                     archive.close()
             else:
-                path = _resolve_existing(client_dir, gamedata.GAMEDATA_ARCHIVE)
+                path = resolve_existing(client_dir, gamedata.GAMEDATA_ARCHIVE)
                 archive = MpakArchive(path)
                 try:
                     table = gamedata.parse_table(
@@ -741,6 +774,29 @@ def _verify_content(client_dir: str, content: dict, installs, owners) -> None:
                         )
 
 
+def _check_capabilities(client_dir: str, installs, content: dict) -> None:
+    """Every required capability must be carried by the client this set produces.
+
+    Read from the bytes the plan produces — a patch in the same set counts, so
+    a pack may carry the patch and use it — never from bookkeeping: a pack's
+    `provides` is a promise, this is the check. An unknown capability is
+    refused here for the same reason: it cannot be verified.
+    """
+    for install in installs:
+        for name in install.requires:
+            if not mod.is_capability(name):
+                continue
+            rel = clientpatch.CLIENT_BINARY
+            if rel in content:
+                data = content[rel]
+            else:
+                path = resolve_existing(client_dir, rel)
+                data = _read_file(path) if path else None
+            reason = clientpatch.check_capability(name, data)
+            if reason:
+                raise InstallError(f"{install.mod_id}: requires {name}, but {reason}")
+
+
 def _recompute(client_dir: str, state: State, installs, *, adopt: bool = False) -> dict:
     _clean_tmp(client_dir)
     content, owners, warnings = _compute(client_dir, installs, capture=True)
@@ -751,7 +807,7 @@ def _recompute(client_dir: str, state: State, installs, *, adopt: bool = False) 
         if not adopt:
             raise DriftError(drifted)
         for rel in drifted:
-            path = _resolve_existing(client_dir, rel)
+            path = resolve_existing(client_dir, rel)
             if path is not None:
                 _write_bytes(_pristine_path(client_dir, rel), _read_file(path))
                 state.destinations.setdefault(rel, {})["pristine"] = _sha_file(path)
@@ -763,6 +819,7 @@ def _recompute(client_dir: str, state: State, installs, *, adopt: bool = False) 
         warnings += extra
         for rel in sorted(set(state.destinations) - set(content)):
             content[rel] = _pristine_bytes_for(client_dir, rel, capture=False)
+    _check_capabilities(client_dir, installs, content)
     changed = _write_content(client_dir, content)
     _verify_content(client_dir, content, installs, owners)
     touched = _touched(installs)
@@ -812,7 +869,7 @@ def _prune_members(client_dir: str, installs) -> None:
 def install_pack(client_dir: str, pack_path: str, *, priority: int | None = None,
                  allow_build_mismatch: bool = False, adopt: bool = False) -> dict:
     """Install (or update) a pack's client half; returns a report."""
-    running = _client_running()
+    running = client_running()
     if running:
         raise InstallError(f"the game is running ({running}); close it and retry")
     pack = ModPack.load(pack_path)
@@ -829,7 +886,8 @@ def install_pack(client_dir: str, pack_path: str, *, priority: int | None = None
             f"(the pack was built against {pack.build})"
         )
     installed = {install.mod_id: install for install in state.installs}
-    missing = [name for name in pack.requires if name not in installed]
+    missing = [name for name in pack.requires
+               if not mod.is_capability(name) and name not in installed]
     if missing:
         raise InstallError(
             f"{pack.mod_id}: requires {', '.join(missing)}, which is not installed"
@@ -840,7 +898,7 @@ def install_pack(client_dir: str, pack_path: str, *, priority: int | None = None
         priority=int(priority if priority is not None else pack.priority),
         items=pack.items,
         requires=list(pack.requires),
-        claims=mod.claims(pack.items),
+        claims=mod.claims(pack.items, ceiling=pack.ceiling),
         members={
             member: _sha(pack.members[member])
             for item in pack.items
@@ -872,16 +930,24 @@ def install_pack(client_dir: str, pack_path: str, *, priority: int | None = None
 
 def uninstall(client_dir: str, mod_id: str) -> dict:
     """Remove a mod's client half; exact, from the stored originals."""
-    running = _client_running()
+    running = client_running()
     if running:
         raise InstallError(f"the game is running ({running}); close it and retry")
     state = _load_state(client_dir)
     if not any(install.mod_id == mod_id for install in state.installs):
         raise InstallError(f"{mod_id} is not installed on this client")
+    removed = next(install for install in state.installs if install.mod_id == mod_id)
+    provided = {
+        str(capability)
+        for item in removed.items
+        if item.get("kind") == "patch"
+        for capability in item.get("provides") or []
+    }
     dependents = sorted(
         install.mod_id
         for install in state.installs
-        if install.mod_id != mod_id and mod_id in install.requires
+        if install.mod_id != mod_id
+        and (mod_id in install.requires or provided & set(install.requires))
     )
     if dependents:
         raise InstallError(
@@ -946,7 +1012,7 @@ def verify(client_dir: str) -> dict:
         for rel in sorted(set(state.destinations) - set(content)):
             content[rel] = _pristine_bytes_for(client_dir, rel, capture=False)
         for rel, data in sorted(content.items()):
-            path = _resolve_existing(client_dir, rel)
+            path = resolve_existing(client_dir, rel)
             if data is None:
                 if path is not None:
                     problems.append(f"{rel} should be absent")
@@ -956,6 +1022,7 @@ def verify(client_dir: str) -> dict:
             elif _read_file(path) != data:
                 problems.append(f"{rel} was modified outside the tool")
         _verify_content(client_dir, content, state.installs, owners)
+        _check_capabilities(client_dir, state.installs, content)
     except InstallError as error:
         problems.append(str(error))
     return {

@@ -17,6 +17,9 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot batch <manifest> --out <report> [--read-only] [--limit N]` | bulk validation, live progress; `$DAOC_CLIENT` rewrites `DAOC CLIENT/...` manifest paths |
 | `camelot mpak list <archive>` / `get <archive> <entry>` / `pack <out> <name> <files…>` | MPAK reader/writer (`.mpk`/`.npk`) |
 | `camelot contract --out DIR [--id ID] [--version V] [--material M] [--figures ID…] [--add-figure ID:KIND:RIG[:ROW]] [--target NAME] [--package P.tar.gz] [--no-states] [--no-artifacts] [--no-targets] [--dry-run]` | build the server content **pack**: contract, glTF artifacts, target projections, validation report, checksums lock, deployable archive |
+| `camelot mod build --dir DIR --client DIR --out P.tar.gz [--creatures N] [--used-models F]` | assemble a **mod pack** from an authoring directory (loose files, archive entries, table row ops, binary patch specs) |
+| `camelot client install P.tar.gz` / `uninstall MOD` / `status` / `verify` / `free-ids` | apply, remove, inspect and read back a pack's client half; list the model ids a mod may use |
+| `camelot client patch [--max-id N] [--restore]` | raise the client's model-id ceiling in place (unmanaged clients; `.orig` backup, byte-exact restore) |
 | `camelot serve [--root DIR] [--port N] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn) |
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
@@ -143,17 +146,30 @@ it. `mod.py`'s reserved band (2494..2499) is that measurement; the table's
 247 free gaps are readable too but stay out of band until the cross-reference
 risk is measured.
 
-**The ceiling is liftable by a small client patch** (measured 2026-10-10):
-two cap compares and four array references in the loaded `game1127.dll`, plus
-one zero-filled PE section, raise the table to **32768 entries** — a spawn at
-model 10000 renders in game. The patch is a recipe (offsets, bytes,
-preconditions), not a redistributed DLL, so the installer can apply it with a
-backup and byte-exact removal; a pack declares it needs it via `requires`.
+**The ceiling is liftable by a small client patch, and the patch is a payload
+kind** (measured 2026-10-10; folded into the studio the same day): two cap
+compares and four array references in the loaded `game1127.dll`, plus one
+zero-filled PE section, raise the table to **32768 entries** — a spawn at
+model 10000 renders in game. The patch travels as a **recipe** (expected
+bytes, bytes to write, the section to append — never a redistributed DLL),
+`"kind": "patch"` beside the other payload kinds; the author asks for it with
+`client.patch.json`'s `"binary": [{"model_ids": 32768}]`, and `mod build`
+generates the recipe against a pristine client (refusing an already-patched
+one, or a cap outside 2501..32768). A pack **declares the capability** it
+grants and needs (`requires: ["client.modelids.32768"]`), and the installer
+verifies it by reading the bytes the client will load (the two compares, the
+four references, the section's size) — so a client patched by any means
+satisfies it, an unknown capability is refused, and a high-id mod is refused
+**before anything is written** when the patch is missing. `camelot client
+patch [--restore]` does the same for unmanaged clients, with a `.orig`
+backup. Field test: the built pack reproduces the validated DLL byte for byte
+(sha256), and uninstall restores the original exactly.
 Without the patch, a measured pool of **927 ids** is available (253 gaps plus
 674 shipped rows nothing references); `camelot client free-ids` lists it from
-the client itself, and `mod build` refuses a `monsters.csv` add at an id the
-measured server content references (`--used-models` replaces the list with a
-server's own export).
+the client itself — reading the patched ceiling out of the binary when one is
+carried — and `mod build` refuses a `monsters.csv` add at an id the measured
+server content references (`--used-models` replaces the list with a server's
+own export).
 
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the
 1.127 client under Wine: a rewritten container, modified table data and a new
@@ -376,4 +392,11 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 # Inspect and export a client asset.
 .venv/bin/camelot info "$DAOC_CLIENT/figures/Ettin.NIF"
 .venv/bin/camelot gltf "$DAOC_CLIENT/figures/Boar.NIF" --out /tmp/boar
+# Build a mod pack and apply its client half (build against a *pristine*
+# copy of the client; `client patch` is the unmanaged ceiling lift).
+.venv/bin/camelot mod build --dir mymod --client /path/to/clean-client \
+  --out mymod.tar.gz
+.venv/bin/camelot client install mymod.tar.gz --client "$DAOC_CLIENT"
+.venv/bin/camelot client verify --client "$DAOC_CLIENT"
+.venv/bin/camelot client free-ids --client "$DAOC_CLIENT"
 ```

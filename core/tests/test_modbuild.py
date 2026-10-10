@@ -9,8 +9,9 @@ import os
 import shutil
 
 import pytest
+from _pe import client_dll
 
-from camelot import clientinstall, modbuild
+from camelot import clientinstall, clientpatch, modbuild
 from camelot.cli import main
 from camelot.mpak import write_mpak
 
@@ -215,3 +216,114 @@ def test_the_cli_needs_a_client_directory(tmp_path, client):
                            loose={"figures/Boar.NIF": b"x"})
     assert main(["mod", "build", "--dir", mod_dir, "--out", str(tmp_path / "x.tar.gz"),
                  "--client", str(tmp_path / "nowhere")]) == 2
+
+
+# --- binary patches (the model-id ceiling) -----------------------------------
+
+#: 3072 is a multiple of 256, which keeps the section size file-aligned.
+CAP = 3072
+CEILING = CAP - 1
+CAPABILITY = f"client.modelids.{CAP}"
+
+
+def test_a_model_ids_spec_becomes_the_recipe(client, tmp_path):
+    with open(os.path.join(client, "game1127.dll"), "wb") as fh:
+        fh.write(client_dll())
+    mod_dir = make_mod_dir(tmp_path, name="ceiling", meta={"requires": [CAPABILITY]},
+                           patch={"binary": [{"model_ids": CAP}]})
+    out = tmp_path / "ceiling.tar.gz"
+    report = modbuild.build_mod_pack(mod_dir, client, str(out))
+    assert report["items"] == 1
+
+    pack = clientinstall.ModPack.load(str(out))
+    assert [item["kind"] for item in pack.items] == ["patch"]
+    item = pack.items[0]
+    assert item["file"] == "game1127.dll"
+    assert item["provides"] == [CAPABILITY]
+    assert item["append_section"]["name"] == ".cmod"
+    assert pack.requires == [CAPABILITY]
+    assert pack.ceiling == CEILING
+
+
+def test_a_built_patch_pack_installs_and_uninstalls(client, tmp_path):
+    with open(os.path.join(client, "game1127.dll"), "wb") as fh:
+        fh.write(client_dll())
+    mod_dir = make_mod_dir(tmp_path, name="ceiling", meta={"requires": [CAPABILITY]},
+                           patch={"binary": [{"model_ids": CAP}]})
+    out = tmp_path / "ceiling.tar.gz"
+    modbuild.build_mod_pack(mod_dir, client, str(out))
+    clientinstall.install_pack(client, str(out))
+    with open(os.path.join(client, "game1127.dll"), "rb") as fh:
+        assert clientpatch.carried_cap(fh.read()) == CAP
+    assert clientinstall.verify(client)["ok"] is True
+
+    clientinstall.uninstall(client, "probe.x")
+    with open(os.path.join(client, "game1127.dll"), "rb") as fh:
+        assert fh.read() == client_dll()
+
+
+def test_a_high_id_add_needs_the_capability(client, tmp_path):
+    """The build refuses the add first, and names the declaration that lifts
+    the band; with it, the same add builds."""
+    with open(os.path.join(client, "game1127.dll"), "wb") as fh:
+        fh.write(client_dll())
+    patch = {"gamedata": [{"table": "monsters.csv",
+                           "add": [{"id": 3000, "values": {"name": "High"}}]}]}
+    without = make_mod_dir(tmp_path, name="nohigh", patch=patch)
+    with pytest.raises(ValueError, match="client.modelids"):
+        modbuild.build_mod_pack(without, client, str(tmp_path / "x.tar.gz"))
+
+    with_cap = make_mod_dir(tmp_path, name="high",
+                            meta={"requires": [CAPABILITY]}, patch=patch)
+    out = tmp_path / "y.tar.gz"
+    modbuild.build_mod_pack(with_cap, client, str(out))
+    pack = clientinstall.ModPack.load(str(out))
+    assert pack.items[0]["id"] == 3000
+
+
+def test_a_model_ids_spec_needs_a_pristine_binary(client, tmp_path):
+    mod_dir = make_mod_dir(tmp_path, name="nodll",
+                           patch={"binary": [{"model_ids": CAP}]})
+    with pytest.raises(ValueError, match="no game1127.dll"):
+        modbuild.build_mod_pack(mod_dir, client, str(tmp_path / "x.tar.gz"))
+
+
+def test_an_already_patched_client_is_refused(client, tmp_path):
+    with open(os.path.join(client, "game1127.dll"), "wb") as fh:
+        pristine = client_dll()
+        fh.write(pristine)
+    patched = clientpatch.apply(pristine, clientpatch.model_id_recipe(
+        os.path.join(client, "game1127.dll"), cap=CAP))
+    with open(os.path.join(client, "game1127.dll"), "wb") as fh:
+        fh.write(patched)
+    mod_dir = make_mod_dir(tmp_path, name="patched",
+                           patch={"binary": [{"model_ids": CAP}]})
+    with pytest.raises(ValueError, match="already patched"):
+        modbuild.build_mod_pack(mod_dir, client, str(tmp_path / "x.tar.gz"))
+
+
+def test_a_patch_spec_must_declare_a_capability(client, tmp_path):
+    with open(os.path.join(client, "game1127.dll"), "wb") as fh:
+        fh.write(client_dll())
+    mod_dir = make_mod_dir(tmp_path, name="nocap", patch={"binary": [{
+        "file": "game1127.dll", "expect": {"0x457d7e": "c4090000"},
+        "write": {"0x457d7e": "0f270000"}}]})
+    with pytest.raises(ValueError, match="capability it provides"):
+        modbuild.build_mod_pack(mod_dir, client, str(tmp_path / "x.tar.gz"))
+
+
+def test_an_explicit_recipe_travels_as_given(client, tmp_path):
+    """The escape hatch: offsets the studio does not know are carried, not
+    checked against this client (the installer's preconditions are the
+    check, and a recipe may build on another patch)."""
+    with open(os.path.join(client, "game1127.dll"), "wb") as fh:
+        fh.write(client_dll())
+    mod_dir = make_mod_dir(tmp_path, name="explicit", patch={"binary": [{
+        "file": "game1127.dll", "provides": ["client.modelids.9999"],
+        "expect": {"0x457d7e": "c4090000"},
+        "write": {"0x457d7e": "0f270000"}}]})
+    out = tmp_path / "explicit.tar.gz"
+    modbuild.build_mod_pack(mod_dir, client, str(out))
+    pack = clientinstall.ModPack.load(str(out))
+    assert pack.items[0]["provides"] == ["client.modelids.9999"]
+    assert pack.ceiling == 9998

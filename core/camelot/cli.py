@@ -690,17 +690,23 @@ def cmd_client(args) -> int:
                 print(f"  {claim} -> {owner}")
             return 0
         if args.client_cmd == "free-ids":
-            from . import mod, modelusage
+            from . import clientpatch, mod, modelusage
 
             used_text = None
             if args.used_models:
                 with open(args.used_models, encoding="utf-8") as fh:
                     used_text = fh.read()
-            max_id = args.max_id or mod.CLIENT_ID_MAX
+            carried = None
+            dll = clientinstall.resolve_existing(client, clientpatch.CLIENT_BINARY)
+            if dll:
+                with open(dll, "rb") as fh:
+                    carried = clientpatch.carried_cap(fh.read())
+            max_id = args.max_id or (carried - 1 if carried else mod.CLIENT_ID_MAX)
             ids = modelusage.client_row_ids(client, args.table)
             used = modelusage.used_model_ids(used_text)
             free, reclaimable = modelusage.pool(ids, used, max_id)
-            print(f"{args.table}: {len(ids)} rows, ceiling {max_id}")
+            note = f" (client.modelids.{carried})" if carried and not args.max_id else ""
+            print(f"{args.table}: {len(ids)} rows, ceiling {max_id}{note}")
             head = ", ".join(str(i) for i in free[:12])
             print(f"  free to add:       {len(free):4d} ids"
                   + (f"  (first: {head})" if free else ""))
@@ -709,6 +715,34 @@ def cmd_client(args) -> int:
                   + (f"  (first: {head})" if reclaimable else ""))
             print("  take-over is a `set` on that row (point it at your figure")
             print("  and textures); `add` needs an id from the free list.")
+            return 0
+        if args.client_cmd == "patch":
+            from . import clientpatch
+
+            running = clientinstall.client_running()
+            if running:
+                print(f"client: the game is running ({running}); close it and retry",
+                      file=sys.stderr)
+                return 1
+            path = clientinstall.resolve_existing(client, clientpatch.CLIENT_BINARY)
+            if path is None:
+                print(f"client: no {clientpatch.CLIENT_BINARY} under {client}",
+                      file=sys.stderr)
+                return 1
+            try:
+                if args.restore:
+                    clientpatch.restore_file(path)
+                    print(f"restored {clientpatch.CLIENT_BINARY} from its .orig backup")
+                    return 0
+                recipe = clientpatch.patch_file(path, cap=args.max_id + 1)
+            except (OSError, clientpatch.PatchError) as error:
+                print(f"client patch: {error}", file=sys.stderr)
+                return 1
+            print(f"patched {clientpatch.CLIENT_BINARY}: the model table holds "
+                  f"{args.max_id + 1} entries (ids up to {args.max_id}), providing "
+                  f"{', '.join(recipe['provides'])}")
+            print(f"  backup: {clientpatch.CLIENT_BINARY}.orig "
+                  "(restore with: camelot client patch --restore)")
             return 0
         if args.client_cmd == "verify":
             report = clientinstall.verify(client)
@@ -855,7 +889,17 @@ def main(argv=None) -> int:
                     help="file of server-referenced model ids (default: the "
                          "measured shipped list)")
     fp.add_argument("--max-id", type=int,
-                    help="client ceiling to respect (default: the measured one)")
+                    help="client ceiling to respect (default: the measured one, "
+                         "or the patched table's when the client carries one)")
+    pp = cp.add_parser("patch",
+                       help="raise the client's model-id ceiling in place "
+                            "(unmanaged clients; packs carry the same recipe)")
+    pp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
+    pp.add_argument("--max-id", type=int, default=32767,
+                    help="highest usable model id (default 32767; the table "
+                         "becomes max_id+1 entries wide)")
+    pp.add_argument("--restore", action="store_true",
+                    help="put the original game1127.dll back from its .orig backup")
     vp = cp.add_parser("verify", help="read the client back against the state")
     vp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
     p.set_defaults(func=cmd_client)

@@ -13,27 +13,37 @@ Two consequences, and they are the reason for the shape:
 
 The **client section** is the payload's list of destinations: what the mod
 replaces on a player's machine (a loose file, an entry of an archive, a row
-of a table), each naming the pack member that carries its bytes. The other
-consumer, `camelot.clientinstall`, applies it; a server that only wants the
-rows ignores it.
+of a table, or the client's own binary, patched in place), each naming the
+pack member that carries its bytes — except a patch, whose bytes are the
+recipe itself, never a redistributed file. The other consumer,
+`camelot.clientinstall`, applies it; a server that only wants the rows
+ignores it.
 """
 from __future__ import annotations
 
 import json
+import re
 
 __all__ = [
+    "CAPABILITY_PREFIX",
     "CLIENT_ID_MAX",
     "CLIENT_ID_MIN",
     "DEPLOYMENT_FILE",
+    "MOD_ID_RE",
+    "capability_ceiling",
     "check_client_item",
+    "check_mod_id",
     "claims",
     "client_archive_entry",
     "client_gamedata_add",
     "client_gamedata_set",
     "client_loose",
+    "client_patch",
     "client_patch_items",
     "deployment",
     "deployment_bytes",
+    "effective_ceiling",
+    "is_capability",
 ]
 
 #: Where the document lives inside a pack, beside the target projection.
@@ -41,7 +51,7 @@ DEPLOYMENT_FILE = "targets/opendaoc/mod.json"
 
 
 def deployment(mod_id: str, version: str, rows, *, priority: int = 100,
-               client=None) -> dict:
+               client=None, requires=()) -> dict:
     """The deployment document for a set of declarative rows.
 
     `rows` are mappings with a `table`, a logical `id` and a `values`
@@ -49,9 +59,14 @@ def deployment(mod_id: str, version: str, rows, *, priority: int = 100,
     a declared count can never disagree with what is actually written.
 
     `client` is the payload's item list (`client_loose`,
-    `client_archive_entry`, `client_gamedata_set`, `client_gamedata_add`).
-    It is validated here, so a pack whose own destinations contradict each
-    other never leaves the build.
+    `client_archive_entry`, `client_gamedata_set`, `client_gamedata_add`,
+    `client_patch`). It is validated here, so a pack whose own destinations
+    contradict each other never leaves the build.
+
+    `requires` names what the pack needs: other mods, and the client
+    capabilities its payload grants or relies on
+    (`client.modelids.<n>`). It travels in the document and is what the band
+    of a `client_gamedata_add` is checked against (`effective_ceiling`).
     """
     cleaned: list[dict] = []
     counts: dict[str, int] = {}
@@ -70,11 +85,14 @@ def deployment(mod_id: str, version: str, rows, *, priority: int = 100,
         counts[table] = counts.get(table, 0) + 1
 
     client_items = [dict(item) for item in (client or [])]
-    claims(client_items)   # validates; consumers re-derive the claims
+    names = [str(name) for name in requires]
+    # validates; consumers re-derive the claims, under the ceiling the pack's
+    # own declarations grant.
+    claims(client_items, ceiling=effective_ceiling(names, client_items))
 
     return {
         "mod": {"id": mod_id, "version": version, "priority": priority},
-        "requires": [],
+        "requires": names,
         "allocations": [
             {"table": table, "count": counts[table]} for table in sorted(counts)
         ],
@@ -112,12 +130,74 @@ def deployment_bytes(doc: dict) -> bytes:
 #: would change live content instead of adding to it. `camelot client
 #: free-ids` lists the pool: ~253 gap ids plus ~674 shipped rows nothing
 #: references.
+#:
+#: The ceiling is **liftable**, and the ladder lifted it: a pack declares
+#: `requires: ["client.modelids.32768"]`, a client that carries the patch
+#: (`camelot.clientpatch`) accepts ids to 32767, and the ceiling becomes the
+#: pack's own declarations (`capability_ceiling`).
 CLIENT_ID_MIN = 1
 CLIENT_ID_MAX = 2499
+
+#: A requirement naming the client itself rather than another mod; the
+#: installer verifies the client really carries it. The prefix is reserved:
+#: a mod id may not begin with it.
+CAPABILITY_PREFIX = "client."
+
+#: What a mod id may look like; it becomes a directory name in the store.
+MOD_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 #: A row's id is its identity; row ops may not write it (kept in step with
 #: `gamedata.ID_COLUMN`, the column an `add` puts its id in).
 CLIENT_ID_COLUMN = 0
+
+
+# --- capabilities and the id ceiling ------------------------------------------
+
+def is_capability(name) -> bool:
+    """True when a requirement names the client itself, not another mod."""
+    return isinstance(name, str) and name.startswith(CAPABILITY_PREFIX)
+
+
+def check_mod_id(mod_id, where: str) -> None:
+    """Refuse anything that is not a plain mod id (capabilities are separate)."""
+    if not isinstance(mod_id, str) or not MOD_ID_RE.match(mod_id) or is_capability(mod_id):
+        raise ValueError(
+            f"{where}: invalid mod id {mod_id!r} "
+            f"(the {CAPABILITY_PREFIX!r} prefix is reserved for capabilities)"
+        )
+
+
+def capability_ceiling(requires) -> int | None:
+    """The highest client id a set of capability names allows, or None.
+
+    Today only ``client.modelids.<n>`` moves a ceiling: the client's model
+    table is `<n>` entries wide, so the highest usable id is `<n> - 1`. An
+    unknown capability changes nothing here — it is refused where it can be
+    verified, by the installer.
+    """
+    ceilings = []
+    prefix = f"{CAPABILITY_PREFIX}modelids."
+    for name in requires or []:
+        text = str(name)
+        if text.startswith(prefix) and text[len(prefix):].isdigit():
+            ceilings.append(int(text[len(prefix):]) - 1)
+    return max(ceilings) if ceilings else None
+
+
+def effective_ceiling(requires, items) -> int:
+    """The ceiling a pack's own declarations grant (CLIENT_ID_MAX without any).
+
+    A patch *provides* what its ``provides`` names, so a pack that carries the
+    model-id patch may itself use the raised band without requiring it.
+    """
+    names = [str(name) for name in (requires or [])]
+    names += [
+        str(capability)
+        for item in items or []
+        if isinstance(item, dict) and item.get("kind") == "patch"
+        for capability in item.get("provides") or []
+    ]
+    return capability_ceiling(names) or CLIENT_ID_MAX
 
 
 def _client_path(value, what: str) -> str:
@@ -225,8 +305,13 @@ def client_gamedata_set(table: str, id_: int, values, *, expect, columns) -> dic
     return item
 
 
-def client_gamedata_add(table: str, id_: int, values, *, columns) -> dict:
-    """Add one table row; *id* must live in the reserved band (D5)."""
+def client_gamedata_add(table: str, id_: int, values, *, columns,
+                        ceiling: int = CLIENT_ID_MAX) -> dict:
+    """Add one table row; *id* must live in the band the pack may use (D5).
+
+    *ceiling* is the highest id the pack's declared capabilities allow
+    (`capability_ceiling`); the default is the no-patch band.
+    """
     item = {
         "kind": "gamedata_row",
         "action": "add",
@@ -235,22 +320,129 @@ def client_gamedata_add(table: str, id_: int, values, *, columns) -> dict:
         "columns": _columns_map(columns),
         "values": _values_map(values),
     }
-    if not CLIENT_ID_MIN <= item["id"] <= CLIENT_ID_MAX:
+    if not CLIENT_ID_MIN <= item["id"] <= ceiling:
+        hint = "" if ceiling != CLIENT_ID_MAX else (
+            "; a higher band needs `requires: [\"client.modelids.<n>\"]` "
+            "and a client that carries the patch"
+        )
         raise ValueError(
             f"added id {item['id']} is outside the reserved band "
-            f"{CLIENT_ID_MIN}..{CLIENT_ID_MAX}"
+            f"{CLIENT_ID_MIN}..{ceiling}{hint}"
         )
     _check_row_op(item)
     return item
 
 
-def check_client_item(item, *, band: bool = True) -> None:
+def client_patch(file: str, *, provides, expect, write, append_section=None) -> dict:
+    """One binary patch to a client file, as a recipe of offsets and bytes.
+
+    The recipe is data, not code: ``expect`` states the bytes the pristine
+    file must hold at each address (the refusal that catches a wrong client
+    build — or an already-patched one), ``write`` the bytes to put there, and
+    ``append_section`` the PE section to append and point them at. Offsets are
+    virtual addresses, hex with an explicit ``0x``; values are hex byte
+    strings. The installer checks ``expect`` before it writes a byte, and
+    uninstalling restores the stored original exactly, like every other
+    destination.
+
+    ``provides`` names the client capabilities the patch grants
+    (``client.modelids.<n>``); it is required, because a patch changes the
+    client itself and a pack must be attributable for it. Recipes are
+    generated against a pristine client (`camelot.clientpatch`), not written
+    by hand, though the format allows it.
+    """
+    item = {
+        "kind": "patch",
+        "file": _client_path(file, "file"),
+        "provides": _capability_names(provides),
+        "expect": _offset_bytes(expect, "expect"),
+        "write": _offset_bytes(write, "write"),
+    }
+    if append_section is not None:
+        item["append_section"] = _append_section(append_section)
+    _check_patch(item)
+    return item
+
+
+def _capability_names(values) -> list[str]:
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError("a patch must declare the capability it provides")
+    names = []
+    for value in values:
+        if not is_capability(value):
+            raise ValueError(
+                f"a capability must start with {CAPABILITY_PREFIX!r}, got {value!r}"
+            )
+        names.append(str(value))
+    return sorted(set(names))
+
+
+def _offset_bytes(values, what: str) -> dict:
+    """A map of virtual address -> hex bytes, canonicalised for the JSON.
+
+    Offsets are hex with an explicit ``0x`` (a bare number would be ambiguous
+    between decimal and hex); values are even-length hex strings.
+    """
+    if not isinstance(values, dict) or not values:
+        raise ValueError(f"a patch needs a non-empty {what!r} map")
+    out: dict[str, str] = {}
+    for key, value in values.items():
+        if not isinstance(key, str) or not key.startswith("0x"):
+            raise ValueError(f"{what}: {key!r} must be a hex offset with a 0x prefix")
+        try:
+            offset = int(key, 16)
+        except ValueError:
+            raise ValueError(f"{what}: {key!r} is not a hex offset") from None
+        if not isinstance(value, str) or not value or len(value) % 2:
+            raise ValueError(
+                f"{what} {key}: expected an even-length hex string, got {value!r}"
+            )
+        try:
+            bytes.fromhex(value)
+        except ValueError:
+            raise ValueError(f"{what} {key}: {value!r} is not hex") from None
+        out[f"0x{offset:x}"] = value.lower()
+    return out
+
+
+def _append_section(value) -> dict:
+    if not isinstance(value, dict):
+        raise TypeError("append_section must be an object")
+    name = value.get("name")
+    if (not isinstance(name, str) or not name or len(name) > 8
+            or not name.isascii() or not name.isprintable()):
+        raise ValueError(
+            f"append_section: the name must be 1..8 printable ASCII characters, "
+            f"got {name!r}"
+        )
+    try:
+        size = int(value.get("size"))
+        vaddr = int(value.get("vaddr"))
+    except (TypeError, ValueError):
+        raise ValueError("append_section: 'size' and 'vaddr' must be integers") from None
+    if size <= 0 or size % 0x1000:
+        raise ValueError("append_section: size must be a positive multiple of 0x1000")
+    if vaddr <= 0 or vaddr % 0x1000:
+        raise ValueError("append_section: vaddr must be a positive multiple of 0x1000")
+    return {"name": name, "size": size, "vaddr": vaddr}
+
+
+def _check_patch(item: dict) -> None:
+    _client_path(item.get("file"), "file")
+    _capability_names(item.get("provides"))
+    _offset_bytes(item.get("expect"), "expect")
+    _offset_bytes(item.get("write"), "write")
+    if item.get("append_section") is not None:
+        _append_section(item["append_section"])
+
+
+def check_client_item(item, *, ceiling: int | None = CLIENT_ID_MAX) -> None:
     """Validate one resolved payload item, as a pack would carry it.
 
-    ``band=False`` skips the reserved-band rule. The band is a build-time
-    concern: reading back what an installed mod already carries must survive
-    a later band change (the ceiling probe that measured it relies on this,
-    and so would any pack built before the constants moved).
+    ``ceiling=None`` skips the band rule. The band is a build-time concern:
+    reading back what an installed mod already carries must survive a later
+    band change (the ceiling probe that measured it relies on this, and so
+    would any pack built before the constants moved).
     """
     if not isinstance(item, dict):
         raise TypeError(f"a client item must be an object, got {item!r}")
@@ -262,6 +454,8 @@ def check_client_item(item, *, band: bool = True) -> None:
         _client_path(item.get("archive"), "archive")
         _client_path(item.get("entry"), "entry")
         _member_path(item.get("member"))
+    elif kind == "patch":
+        _check_patch(item)
     elif kind == "gamedata_row":
         action = item.get("action")
         if action not in ("set", "add"):
@@ -273,30 +467,35 @@ def check_client_item(item, *, band: bool = True) -> None:
         if action == "set":
             if item.get("expect"):
                 _values_map(item["expect"])
-        elif band and not CLIENT_ID_MIN <= _row_id(item["id"]) <= CLIENT_ID_MAX:
+        elif ceiling is not None and not CLIENT_ID_MIN <= _row_id(item["id"]) <= ceiling:
             raise ValueError(
                 f"added id {item['id']} is outside the reserved band "
-                f"{CLIENT_ID_MIN}..{CLIENT_ID_MAX}"
+                f"{CLIENT_ID_MIN}..{ceiling}"
             )
         _check_row_op(item)
     else:
         raise ValueError(f"unknown client item kind {kind!r}")
 
 
-def claims(items, *, band: bool = True) -> list[str]:
+def claims(items, *, ceiling: int | None = CLIENT_ID_MAX) -> list[str]:
     """The destinations a set of payload items claims, lower-cased to group.
 
     Validates every item on the way, so an untrusted pack cannot be planned
     without its items holding together. Two items of one mod claiming one
     destination is refused: a pack must be unambiguous about its own content.
-    ``band=False`` is for items already installed (see `check_client_item`).
+    A whole client file claims ``file:<path>`` — a loose replacement and a
+    binary patch of one file are one destination, so they cannot silently
+    layer. ``ceiling=None`` is for items already installed (see
+    `check_client_item`).
     """
     out: list[str] = []
     for item in items:
-        check_client_item(item, band=band)
+        check_client_item(item, ceiling=ceiling)
         kind = item["kind"]
         if kind == "loose":
-            out.append(f"loose:{item['path'].lower()}")
+            out.append(f"file:{item['path'].lower()}")
+        elif kind == "patch":
+            out.append(f"file:{item['file'].lower()}")
         elif kind == "archive_entry":
             out.append(f"entry:{item['archive'].lower()}#{item['entry'].lower()}")
         elif item["action"] == "add":
@@ -310,7 +509,7 @@ def claims(items, *, band: bool = True) -> list[str]:
     return out
 
 
-def client_patch_items(patch: dict, tables) -> list[dict]:
+def client_patch_items(patch: dict, tables, *, ceiling: int = CLIENT_ID_MAX) -> list[dict]:
     """Resolve an authoring `client.patch.json` body against a client.
 
     *tables* is the client's gamedata, duck-typed: ``column_index(table,
@@ -321,6 +520,10 @@ def client_patch_items(patch: dict, tables) -> list[dict]:
     where the author sees the refusal. A column name that repeats in the
     header (`Body` appears four times in `monsters.csv`) is written
     ``Body@3``: name first, the index that disambiguates it second.
+
+    ``ceiling`` is the band the pack's declared capabilities allow
+    (`camelot.mod.capability_ceiling`); `binary` specs are resolved by the
+    builder, which knows the client's binary.
     """
     if not isinstance(patch, dict):
         raise TypeError("a client patch must be an object")
@@ -345,7 +548,9 @@ def client_patch_items(patch: dict, tables) -> list[dict]:
             columns = {name: _resolve_column(tables, table, name) for name in values}
             if tables.has_row(table, id_):
                 raise ValueError(f"{table}: id {id_} already exists; `add` needs a free id")
-            items.append(client_gamedata_add(table, id_, values, columns=columns))
+            items.append(client_gamedata_add(
+                table, id_, values, columns=columns, ceiling=ceiling,
+            ))
     return items
 
 

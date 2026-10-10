@@ -101,6 +101,12 @@ namespace DOL.GS.CamelotMods
             {
                 foreach (var requirement in doc.Requires)
                 {
+                    // A `client.`-prefixed requirement names a client
+                    // capability (a patched game1127.dll and the like), not a
+                    // mod: it is the installer's to verify on each client, and
+                    // the loader must not look for it in the server's store.
+                    if (requirement.StartsWith("client."))
+                        continue;
                     if (ModStore.Existing(requirement, "any") == null &&
                         ModStore.For(requirement).Count == 0)
                     {

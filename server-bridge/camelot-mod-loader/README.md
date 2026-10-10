@@ -48,7 +48,10 @@ removes. One C# plugin, discovered by the server at boot through
   how many payload items a pack declares;
 - no script mods: the server compiles the script folder once, before this
   runs, so a mod shipping `.cs` needs an installer, not this;
-- no dependency resolution: a missing requirement skips that mod.
+- no dependency resolution: a missing requirement skips that mod. A
+  requirement that starts with `client.` is a **client capability** (D8 of the
+  design), not a mod: the loader skips it — the installer verifies it on each
+  client against the client's own bytes.
 
 ## Verifying the plugin compiles
 
