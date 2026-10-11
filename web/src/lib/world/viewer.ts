@@ -6,8 +6,9 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { api, type WorldFixture, type WorldZone } from '$lib/api/client';
+import { api, type WorldFixture, type WorldTextureLayer, type WorldZone } from '$lib/api/client';
 import { loadFromGlb, textureFromDds, tintColor, textureSide } from '$lib/gltf/load';
+import { groundMaterial, groundSlots, type GroundSlot } from './ground';
 import {
 	PATCH_CELLS,
 	ZONE_SIZE,
@@ -63,8 +64,10 @@ export class WorldViewer {
 		jumps: new THREE.Group()
 	};
 	private meshCache = new Map<string, LoadedMesh>();
+	private groundTextures = new Map<string, THREE.Texture>();
 	private terrain: TerrainData | null = null;
 	private texturedPatches = 0;
+	private composedPatches = 0;
 	private picks: PickGroup[] = [];
 	private marker = new THREE.Group();
 	private selected: WorldFixture | null = null;
@@ -137,7 +140,8 @@ export class WorldViewer {
 			bounds: this.groups.bounds.children.length,
 			water: this.groups.water.children.length,
 			jumps: this.groups.jumps.children.length,
-			sheets: this.texturedPatches
+			sheets: this.texturedPatches,
+			composed: this.composedPatches
 		};
 	}
 
@@ -219,6 +223,10 @@ export class WorldViewer {
 		this.picks = [];
 		this.selected = null;
 		this.marker.visible = false;
+		this.texturedPatches = 0;
+		this.composedPatches = 0;
+		for (const texture of this.groundTextures.values()) texture.dispose();
+		this.groundTextures.clear();
 		for (const group of Object.values(this.groups)) {
 			for (const child of [...group.children]) {
 				group.remove(child);
@@ -236,7 +244,6 @@ export class WorldViewer {
 		const token = ++this.token;
 		this.clear();
 		this.meshCache.clear();
-		this.texturedPatches = 0;
 		const response = await fetch(api.worldTerrainUrl(zoneId));
 		if (!response.ok) throw new Error(`terrain fetch failed (${response.status})`);
 		const data = parseTerrain(await response.arrayBuffer());
@@ -251,6 +258,14 @@ export class WorldViewer {
 
 	private buildGround(zoneId: number, zone: WorldZone, data: TerrainData, token: number): void {
 		const entries = new Set((zone.archives.tex?.entries ?? []).map((entry) => entry.toLowerCase()));
+		const patches = zone.patches;
+		const layersByPatch = new Map<string, WorldTextureLayer[]>();
+		for (const layer of patches?.layers ?? []) {
+			const key = `${layer.patch_x},${layer.patch_y}`;
+			const list = layersByPatch.get(key);
+			if (list) list.push(layer);
+			else layersByPatch.set(key, [layer]);
+		}
 		for (let py = 0; py < PATCH_CELLS; py++) {
 			for (let px = 0; px < PATCH_CELLS; px++) {
 				const patch = patchGeometry(data, px, py);
@@ -263,10 +278,21 @@ export class WorldViewer {
 				const mesh = new THREE.Mesh(geometry, material);
 				mesh.name = `patch-${px}-${py}`;
 				this.groups.ground.add(mesh);
+				// The client's own ground: its layer stack (up to 9 layers over the
+				// masks) when the zone ships every file those layers name, the
+				// pre-baked `texXX-YY` sheet (the same composition, 512²) else.
+				const slots = groundSlots(
+					layersByPatch.get(`${px},${py}`) ?? [],
+					patches?.masks?.[`${px},${py}`] ?? []
+				);
+				const shippable =
+					slots !== null && slots.every((slot) => (patches?.available ?? []).includes(slot.sheet));
+				if (shippable) {
+					void this.composePatch(zoneId, mesh, slots, [px, py], token);
+					continue;
+				}
 				const entry = `tex${pad(px)}-${pad(py)}.dds`;
 				if (!entries.has(entry)) continue;
-				// The client's pre-baked ground sheet for this patch (the
-				// near-field layer composition is not emulated — see docs).
 				new THREE.TextureLoader()
 					.loadAsync(api.worldTextureUrl(zoneId, 'tex', entry))
 					.then((texture) => {
@@ -277,7 +303,7 @@ export class WorldViewer {
 						texture.colorSpace = THREE.SRGBColorSpace;
 						texture.wrapS = THREE.ClampToEdgeWrapping;
 						texture.wrapT = THREE.ClampToEdgeWrapping;
-						texture.anisotropy = 4;
+						texture.anisotropy = this.anisotropy();
 						material.map = texture;
 						material.color.set(0xffffff);
 						material.needsUpdate = true;
@@ -288,6 +314,84 @@ export class WorldViewer {
 					});
 			}
 		}
+	}
+
+	/** The renderer's anisotropic filtering ceiling: the ground is the one
+	 * surface seen at grazing angles for kilometres — low anisotropy is what
+	 * made the far field read as a blur (the layer composition fixes the near
+	 * field). */
+	private anisotropy(): number {
+		return Math.min(16, this.renderer.capabilities.getMaxAnisotropy());
+	}
+
+	/** One ground texture, loaded once and shared by every patch that names it. */
+	private async groundTexture(
+		url: string,
+		flipY: boolean,
+		token: number
+	): Promise<THREE.Texture | null> {
+		const cached = this.groundTextures.get(url);
+		if (cached) return cached;
+		try {
+			const texture = await new THREE.TextureLoader().loadAsync(url);
+			if (token !== this.token) {
+				texture.dispose();
+				return null;
+			}
+			texture.colorSpace = THREE.SRGBColorSpace;
+			texture.wrapS = THREE.RepeatWrapping;
+			texture.wrapT = THREE.RepeatWrapping;
+			texture.anisotropy = this.anisotropy();
+			// The layer sheets are read bottom-up (their row 0 is the tile's
+			// south edge — see ground.ts); the masks are north-up images.
+			texture.flipY = flipY;
+			texture.needsUpdate = true;
+			this.groundTextures.set(url, texture);
+			return texture;
+		} catch (error) {
+			console.warn(`world: ground texture ${url} failed`, error);
+			return null;
+		}
+	}
+
+	private async composePatch(
+		zoneId: number,
+		mesh: THREE.Mesh,
+		slots: GroundSlot[],
+		patch: [number, number],
+		token: number
+	): Promise<void> {
+		const sheets = [...new Set(slots.map((slot) => slot.sheet))];
+		const masks = [...new Set(slots.map((slot) => slot.mask))];
+		const loaded = new Map<string, THREE.Texture>();
+		for (const name of sheets) {
+			const texture = await this.groundTexture(api.worldTerrainTexUrl(`${name}.dds`), false, token);
+			if (!texture) return;
+			loaded.set(`sheet:${name}`, texture);
+		}
+		for (const name of masks) {
+			const texture = await this.groundTexture(
+				api.worldTextureUrl(zoneId, 'ter', name),
+				true,
+				token
+			);
+			if (!texture) return;
+			loaded.set(`mask:${name}`, texture);
+		}
+		if (token !== this.token) return;
+		const material = groundMaterial(
+			slots,
+			{
+				sheet: (name) => loaded.get(`sheet:${name}`) ?? null,
+				mask: (name) => loaded.get(`mask:${name}`) ?? null
+			},
+			patch
+		);
+		if (!material) return;
+		const previous = mesh.material as THREE.Material;
+		mesh.material = material;
+		previous.dispose();
+		this.composedPatches += 1;
 	}
 
 	private async buildFixtures(

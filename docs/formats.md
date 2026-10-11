@@ -673,12 +673,28 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   mask says. A layer's sheet is the *shared* `zones/TerrainTex/<name>.dds`,
   repeated `num tiles` times across the patch (`1` with `tileable = 0` is a
   single stamp — flowers, rocks). The client's own strings name the shader
-  path (`OneLayer…SixLayerTPS`, `…RedChannelTPS`, `PassTwo…PassFour`), and
-  the Uthgard zone editor's `TexPatchGen` composes base-sheet-over-base with
-  exactly this model — the viewer serves the pre-baked `texXX-YY` sheets and
-  does **not** emulate the layer composition yet (open item, §6.5).
-  `lodXX-YY.dds` (256²) is `texXX-YY`'s lower-detail copy, `texXX-YY.bmp` an
-  8-bit indexed companion.
+  path (`OneLayer…SixLayerTPS`, `…RedChannelTPS`, `PassTwo…PassFour`).
+  **The composition is measured against the client's own bake**: for every
+  patch it also ships `texXX-YY.dds` — its composite of exactly these layers
+  at 16 units/texel — so the candidate models can be scored instead of
+  guessed (`notes/layer-compose.py`). Layer 0 first, then layers in
+  **ascending** order, each lerped over the accumulated colour by its own
+  mask channel (R = 3K, G = 3K+1, B = 3K+2 of mask K, tied to the *file
+  index*, not to the drawn rows); a tileable sheet repeats (256 tiles across
+  a patch is 32 units per tile — the 512² sheet carries the near-field
+  detail, ~1 texel per unit); an untiled row is one stamp of the **zone-wide**
+  sheet at `(patch + uv) / 8` (`CamHills-Small` is 1024² for the zone's 8×8
+  patches); v runs like the ground's own (no flip). Descending order (layers
+  *under* the base), a v flip and patch-local stamps each score 1.7–3× worse
+  mean |diff| against that bake. The stack is at most 9 layers / 3 masks
+  (sampled over the corpus: `notes/layer-span.py`); `rotate` is not
+  measured (no rotated row in the sample). The viewer composes it in one pass
+  per patch (`web/src/lib/world/ground.ts`), the single-pass equivalent of
+  the engine's `PassTwo…PassFour` draws — the one difference is the 8-bit
+  rounding the engine takes between its passes and we do not — and keeps
+  `texXX-YY` as the fallback where a zone ships no layers. `lodXX-YY.dds`
+  (256²) is `texXX-YY`'s lower-detail copy, `texXX-YY.bmp` an 8-bit indexed
+  companion.
 - **A fixture's heading** is **degrees** (0..359), counter-clockwise in the
   (x, y) plane — measured on the bridges of six zones: each one's long axis
   (from its mesh's own vertices) lies along its river's bank-to-bank

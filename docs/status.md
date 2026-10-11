@@ -198,10 +198,11 @@ planes the browser re-samples with the client's own height model),
 sheet its own `NiTexturingProperty` names, alpha-cut sheets declared, and the
 LOD level the client draws only — collision hulls and far stand-ins dropped),
 `GET …/texture/{logical}/{entry}`
-and `GET /world/terraintex/{name}` (DDS → PNG, cached). The web app gains
+`and GET /world/terraintex/{name}` (DDS → PNG, cached). The web app gains
 `/world` (SvelteKit + three.js): the terrain as the client triangulates it
-(33×33-vertex patch meshes on the subtile diagonal), the 64 pre-baked
-ground sheets applied per patch, fixtures instanced per catalog mesh with
+(33×33-vertex patch meshes on the subtile diagonal), the ground composed per
+patch from its `TerrainTex` layers and masks (below), fixtures instanced per
+catalog mesh with
 their heading (**degrees**, measured — not the server's 12-bit grid) and
 scale, bounds/water/jump overlays, a region browser, a zone picker, and
 click-to-select/recentre with a searchable fixture list and an inspector
@@ -209,13 +210,18 @@ click-to-select/recentre with a searchable fixture list and an inspector
 up, east right, `+y` (south) mapped to scene `+Z`, fixture yaw `−A` — since
 the zone frame is left-handed (`formats.md` §11, "The world frame is
 left-handed"); the first cut used the figure rotation and drew the whole
-world mirrored. Fixtures honour `Z` as authored and drop `Z = 0` + `Ground = 1`
+world mirrored. The ground is the client's layer stack, not its bake: each
+patch is composed from its `TerrainTex` sheets and masks in one pass
+(`web/src/lib/world/ground.ts`), the model scored against the client's own
+`texXX-YY` composite (`formats.md` §11) — the first cut drew that bake alone,
+which magnifies to a blur where the game shows the tiled detail — with the
+bake kept as the fallback for zones that ship no layers. Fixtures honour `Z`
+as authored and drop `Z = 0` + `Ground = 1`
 rows on the terrain; whether the client honours a non-zero `Z` under
-`Ground` is the **W-3** experiment, and the near-field layer composition
-(`patchXXYY` masks over `zones/TerrainTex` sheets) is deliberately **not**
-emulated yet. Verification: `core/tests/test_serve_world.py` (12 unit tests +
-6 corpus tests) and `web/src/lib/world/terrain.test.ts` (sampling vectors
-generated from the Python; heading, placement and the triangulation pinned).
+`Ground` is the **W-3** experiment. Verification: `core/tests/test_serve_world.py` (12 unit tests +
+6 corpus tests) and `web/src/lib/world/{terrain,ground}.test.ts` (sampling
+vectors generated from the Python; heading, placement, triangulation and the
+composition model pinned).
 The screenshot harness is `web/scripts/world_shot.mjs` (Playwright).
 
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the
