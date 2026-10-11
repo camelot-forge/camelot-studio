@@ -441,7 +441,19 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
    `sector.dat`), then 6.1 the client experiment (which zone archive is read,
    and whether a rewritten one is accepted) — one session, and it gates the
    rest; then the `/world` route, the editor, and spawn publishing through the
-   existing pack chain.
+   existing pack chain. 6.0–6.2 are done and passed their in-game checks
+   (the world frame, the ground layer composition, the patch seams).
+   **The agreed order for what follows** (operator + agent, 2026-10-11;
+   the *why* and costs are the workspace spec's §11):
+   **(a)** the `Z` vs `Ground` experiment (W-3) — it fixes the editor's own
+   placement rule; **(b)** the **spawn layer, read-only** (a snapshot JSON or
+   the live MySQL: `mob`, `worldobject`, `door`, `path`/`pathpoints`) — value
+   for an operator now, and the DB plumbing for spawn editing later;
+   **(c)** the editor (gizmos, snap, add/remove, the undo journal, the
+   authoring directory) **plus the publish path**; **(d)** the sky, fog and
+   the day/night time (a slider first — the server owns the real clock,
+   `formats.md` §11), then terrain/texture editing and the dungeon/city
+   variants.
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.

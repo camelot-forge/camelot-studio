@@ -756,6 +756,19 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   `notes/world-shots/` show it from the same side before
   (`keep-az-0.png`: the small south tower) and after
   (`Camelot_Hills-keep-north-fixed.png`: the gate).
+- **The sky is per zone, and the clock is the server's**: `sector.dat` carries
+  `[sky]` and `[fog]` (plus `[terrain]`'s horizon and cloud fields — the
+  section *exists* in every outdoor zone; its fields are not unpacked yet),
+  and the client ships the sheets and domes — `zones/sky/sky.mpk` beside
+  loose `zones/sky/*.dds` (`u_forest_sky.dds`, `u_forest_sky_horizon.dds`),
+  `pregame/sky_gradient.dds`, and real skydome meshes where a plain dome does
+  not fit (`zones/Dnifs/aerus_cskybox.npk`, `sky_veil.nif/.npk`,
+  `veil_skydome_*.dds`). Which sheet and light a given *time* uses is not a
+  client-table fact we have measured: the day/night cycle is driven by the
+  server (`WorldMgr.GetCurrentGameTime`, per-region `DayIncrement`, sent in
+  `PacketLib168`; measured 2026-10-11 in the OpenDAoC sources) — a viewer
+  that wanted the cycle would have to be *told* the time, or offer its own
+  slider.
 - **The viewer's terrain payload** (`GET /world/zone/{id}/terrain`): `CAMT`,
   a u16 version (1), the u16 grid, the two f32 factors (18-byte header), then
   the raw `terrain.pcx` and `offset.pcx` planes row-major. The browser
