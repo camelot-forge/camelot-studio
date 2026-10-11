@@ -613,7 +613,9 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   `grassmap`, `shademap`, `shadow` `.pcx`); a dungeon ships
   `dungeon.chunk/.place/.prop/.water` and `portals.csv`; a city `city.csv`
   and `adjacency.csv`. `dat` and `csv` carry identical bytes in the zones
-  measured; which one the client reads first is unmeasured (W-1).
+  measured; **the client reads `csvNNN.mpk`** for the CSV entries (measured
+  2026-10-11, W-1: a change in `dat` alone is ignored, the same change in
+  `csv` alone is visible), so a map mod patches `csv`.
 - **`terrain.pcx` / `offset.pcx`**: 8-bit, one-plane, RLE PCX, 256×256 for a
   65536-unit zone. The ground height is
   `terrain[y][x] × scalefactor + offset[y][x] × offsetfactor` — factors per
