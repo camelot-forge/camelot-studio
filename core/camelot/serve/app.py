@@ -15,6 +15,7 @@ from .config import ServeConfig
 from .index import AssetIndex
 from .security import host_allowed, origin_allowed
 from .watcher import IndexWatcher
+from .world import build_world_router
 
 
 def create_app(config: ServeConfig) -> FastAPI:
@@ -54,6 +55,7 @@ def create_app(config: ServeConfig) -> FastAPI:
         return await call_next(request)
 
     app.include_router(build_router(config, index, watcher))
+    app.include_router(build_world_router(config))
 
     static_dir = config.static_dir
     if static_dir and Path(static_dir).exists():

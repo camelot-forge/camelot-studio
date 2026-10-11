@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 
-from .dxt import viewer_dds
+from .dxt import has_alpha, viewer_dds
 from .gamedata import SlotTexture
 from .nifutil import (
     mat4_axis,
@@ -700,6 +700,11 @@ class Buffer:
         return b"".join(self.chunks)
 
 
+def _sheet_cuts(data: bytes) -> bool:
+    """True when a sheet's alpha channel is not fully opaque (alpha-cut art)."""
+    return has_alpha(data)
+
+
 def _slot_for_name(name: str) -> str | None:
     """Map a NIF node name (e.g. 'body', 'head', 'arms') to a skin slot."""
     n = name.lower()
@@ -718,6 +723,51 @@ def _slot_for_name(name: str) -> str | None:
         if any(k in n for k in keys):
             return slot
     return None
+
+
+def _shape_texture_slots(objs: list, data) -> dict[int, str]:
+    """Node index → the sheet the shape's own texturing property names.
+
+    Figure meshes carry no per-shape texture (their sheets are the caller's
+    slot list); a world object's meshes each name their own
+    (`NiTexturingProperty`'s base desc → a `NiSourceTexture` block). The key
+    is the sheet's name lower-cased, which is what the caller must use as the
+    `SlotTexture` slot for these assets.
+
+    Both readers are supported: the legacy one keeps the base desc in
+    `textures['base']` (and `base_texture`) with the source as a **block
+    index**; pyffi keeps `base_texture.source` as the block itself.
+    """
+    out: dict[int, str] = {}
+    blocks = getattr(data, "blocks", None) or []
+    for index, obj in enumerate(objs):
+        for prop in getattr(obj, "properties", None) or []:
+            name = _base_texture_name(prop, blocks)
+            if name:
+                out[index] = name
+                break
+    return out
+
+
+def _base_texture_name(prop, blocks: list) -> str | None:
+    """The base sheet's file name of one texturing property, lower-cased."""
+    desc = getattr(prop, "base_texture", None) or getattr(prop, "base", None)
+    if desc is None:
+        textures = getattr(prop, "textures", None)
+        desc = textures.get("base") if isinstance(textures, dict) else None
+    if desc is None:
+        return None
+    source = desc.get("source") if isinstance(desc, dict) else getattr(desc, "source", None)
+    if isinstance(source, int):
+        block = blocks[source] if 0 <= source < len(blocks) else None
+    else:
+        block = source  # pyffi resolves the reference to the block itself
+    file_name = getattr(block, "file_name", None) if block is not None else None
+    if not file_name:
+        return None
+    if isinstance(file_name, bytes):
+        file_name = file_name.decode("latin1")
+    return file_name.lower()
 
 
 # Base-texture UV set per slot. Cloak meshes (classic and fig3 alike) carry
@@ -850,6 +900,7 @@ def export_gltf(
     bake_pose: bool = False,
     bone_names: list[str] | None = None,
     data=None,
+    shape_textures: bool = False,
 ) -> dict:
     """
     emit_skinned=False (default): bind-pose geometry + skeleton, plus a
@@ -868,6 +919,10 @@ def export_gltf(
     survive. The viewer receives a plain posed mesh.
     data: pre-loaded (possibly assembled) NIF data; when given, ``nif_path``
     is only used for orientation overrides and animation table lookup.
+    shape_textures: world objects (not figures) — each mesh is mapped to the
+    sheet its own ``NiTexturingProperty`` names, so the caller's ``textures``
+    must carry one ``SlotTexture`` per sheet, its slot the file name
+    lower-cased.
     """
     from .nifutil import load
 
@@ -1057,6 +1112,7 @@ def export_gltf(
     meshes: list[dict[str, Any]] = []  # node_index, name, accessors
     skins: list[dict[str, Any]] = []  # joints, invbind (acc), node_index
     gltf_materials: list[dict[str, Any]] = []  # one per emitted mesh
+    shape_slots = _shape_texture_slots(objs, data) if shape_textures else {}
     stats = {"meshes": 0, "skinned": 0, "vertices": 0, "triangles": 0, "joints": 0, "skipped": 0}
     sidecar: dict[str, Any] = {"meshes": []}
 
@@ -1318,7 +1374,7 @@ def export_gltf(
         tex_list.append(SlotTexture("Body", texture_data[0], texture_data[1]))
 
     slot_views: dict[
-        str, tuple[int, str, tuple[int, int, int] | None, bool | None]
+        str, tuple[int, str, tuple[int, int, int] | None, bool | None, bool]
     ] = {}
     for tex in tex_list:
         slot, name, data, tint, double_sided = tex
@@ -1327,13 +1383,14 @@ def export_gltf(
         # DXT1 sheets cutting texels with 1-bit alpha must not reach the
         # viewer as-is: DDSLoader reads DXT1 as opaque (transparent texels
         # paint black). Re-encode those sheets to A8R8G8B8.
+        cuts = _sheet_cuts(data)
         data = viewer_dds(data)
         buf._pad()
         vi = len(buf.views)
         buf.views.append({"buffer": 0, "byteOffset": buf.size, "byteLength": len(data)})
         buf.chunks.append(data)
         buf.size += len(data)
-        slot_views[slot] = (vi, name, tint, double_sided)
+        slot_views[slot] = (vi, name, tint, double_sided, cuts)
 
     parent: dict[int, int] = {}
     for i, ch in enumerate(children):
@@ -1356,14 +1413,18 @@ def export_gltf(
         node = mesh["node"]
         gltf_nodes[node]["mesh"] = k
         if slot_views:
-            slot = _mesh_slot(node)
-            vi, nm, tint, double_sided = slot_views[slot]
+            slot = shape_slots.get(node)
+            if slot not in slot_views:
+                slot = _mesh_slot(node)
+            vi, nm, tint, double_sided, cuts = slot_views[slot]
             ext = {"bufferView": vi, "name": nm}
             if tint is not None:
                 # Engine tint (`fig3tints.csv`): the viewer multiplies the
                 # sheet by it (skin tones, tint-based hair colours).
                 ext["tint"] = list(tint)
-            if slot == "Hair":
+            if slot == "Hair" or (shape_textures and cuts):
+                # Alpha-cut sheets (hair; a world object's leaves, fences,
+                # windows): the viewer alpha-tests them.
                 ext["alpha"] = True
                 if double_sided is not None:
                     ext["doubleSided"] = double_sided

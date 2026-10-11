@@ -84,6 +84,50 @@ def dxt1_has_alpha(data: bytes, width: int, height: int) -> bool:
     return False
 
 
+def has_alpha(dds: bytes) -> bool:
+    """True when the sheet's alpha channel is not fully opaque.
+
+    A structural scan (no decode): DXT1's 1-bit transparency mode, a DXT3 or
+    DXT5 block whose alpha is not all-opaque, or an A8R8G8B8 sheet with an
+    alpha byte below 255. World-object sheets cut their foliage, fences and
+    windows with DXT3/DXT5 alpha; a viewer that ignores the channel paints
+    them as opaque quads.
+    """
+    try:
+        width, height, fourcc = parse_dds_header(dds)
+    except ValueError:
+        return False
+    if width <= 0 or height <= 0:
+        return False
+    payload = dds[_HEADER_SIZE:]
+    blocks = ((width + 3) // 4) * ((height + 3) // 4)
+    if fourcc == b"DXT1":
+        return dxt1_has_alpha(payload, width, height)
+    if fourcc == b"DXT3":
+        # The 8 alpha bytes come first in each 16-byte block: a nibble below
+        # 0xF is a partially transparent texel.
+        for index in range(blocks):
+            alpha = payload[index * 16 : index * 16 + 8]
+            if any(byte != 0xFF for byte in alpha):
+                return True
+        return False
+    if fourcc == b"DXT5":
+        for index in range(blocks):
+            block = payload[index * 16 : index * 16 + 8]
+            if len(block) < 8:
+                return False
+            a0, a1 = block[0], block[1]
+            if a0 < 255 or a1 < 255:
+                return True
+            # a0 = a1 = 255: only index 0 (opaque) keeps the texel solid.
+            if int.from_bytes(block[2:8], "little") != 0:
+                return True
+        return False
+    if not fourcc and len(payload) >= width * height * 4:
+        return any(a != 255 for a in payload[3 : width * height * 4 : 4])
+    return False
+
+
 def encode_a8r8g8b8(width: int, height: int, rgba: bytes) -> bytes:
     """Uncompressed A8R8G8B8 DDS (stored BGRA, the order DDSLoader expects)."""
     hdr = bytearray(_HEADER_SIZE)
@@ -192,11 +236,14 @@ def dds_rgba(dds: bytes) -> tuple[int, int, bytes] | None:
     """(width, height, RGBA bytes) for a DXT1/DXT5 or A8R8G8B8 DDS, else None.
 
     Non-DXT or unreadable payloads return None — callers fall back to the
-    compressed sheet rather than crash.
+    compressed sheet rather than crash. A degenerate header (a zero size, a
+    truncated payload) is unreadable and returns None too.
     """
     try:
         width, height, fourcc = parse_dds_header(dds)
     except ValueError:
+        return None
+    if width <= 0 or height <= 0:
         return None
     data = dds[_HEADER_SIZE:]
     if fourcc == b"DXT1":

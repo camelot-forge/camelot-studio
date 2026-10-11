@@ -647,3 +647,48 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   companion (header `NHD\1` plus the `.nif` name) whose role — collision or
   ground — is unmeasured. `Dnifs/` holds the dungeon set, and a zone's own
   `Nifs/` overrides it.
+- **Mesh and sheet lookup is by stem, not by name**: a catalog row's
+  `bkeep.nif` names `zones/nifs/bkeep.npk`, and a NIF's `britlog.tga` loads
+  `zones/nifs/BRITLOG.dds` (measured) — `.dds` wins over `.tga` over `.bmp`,
+  directories in the client's own order (`zones/zoneNNN/nifs` override,
+  `zones/nifs`, `Zones\DNIFs`, `frontiers/nifs`, `tutorial/zones/nifs` — its
+  string table, read 2026-10-11). Object sheets are loose beside the meshes.
+  A world object's sheets are **per shape**: each `NiTriShape`'s
+  `NiTexturingProperty` base desc names one (legacy reader:
+  `textures['base']['source']` as a block index; pyffi: `base_texture.source`
+  as the block). Foliage, fences and windows cut their silhouettes with the
+  **sheet's own alpha** — world-object sheets are commonly DXT5 (the pine's
+  is 54 % transparent texels) — so the exporter declares `alpha` per mesh
+  from a structural scan (`dxt.has_alpha`), and a viewer that skips it paints
+  opaque quads.
+- **The ground is layered per patch**: a patch is one cell of the zone's 8×8
+  texture grid — the same cell a `texXX-YY.dds` (512², DXT1) covers.
+  `terNNN.mpk` ships `textures.csv` (one header row; `patch x, patch y,base
+  texture filename,rotate,u translate,v translate,u scale,v scale,visible,
+  num tiles,tileable`) and up to three `patchXXYY-K.dds` (128², DXT3) per
+  patch. Mask `K` carries the **blend weights of layers 3K, 3K+1 and 3K+2 in
+  its R, G and B channels**; layer 0 is drawn at full weight whatever the
+  mask says. A layer's sheet is the *shared* `zones/TerrainTex/<name>.dds`,
+  repeated `num tiles` times across the patch (`1` with `tileable = 0` is a
+  single stamp — flowers, rocks). The client's own strings name the shader
+  path (`OneLayer…SixLayerTPS`, `…RedChannelTPS`, `PassTwo…PassFour`), and
+  the Uthgard zone editor's `TexPatchGen` composes base-sheet-over-base with
+  exactly this model — the viewer serves the pre-baked `texXX-YY` sheets and
+  does **not** emulate the layer composition yet (open item, §6.5).
+  `lodXX-YY.dds` (256²) is `texXX-YY`'s lower-detail copy, `texXX-YY.bmp` an
+  8-bit indexed companion.
+- **A fixture's heading** is the server's 12-bit grid: 0 points at +y, 1024
+  at −x, 2048 at −y, 3072 at +x (`Point2D.GetHeading`). A fixture's `Z` is
+  used as authored unless `Z = 0` with `Ground = 1`, which drops it on the
+  terrain; whether the client honours a non-zero `Z` when `Ground` is set
+  (Camelot Hills' authored rows) is **not yet measured** — the W-3
+  experiment settles it.
+- **The viewer's terrain payload** (`GET /world/zone/{id}/terrain`): `CAMT`,
+  a u16 version (1), the u16 grid, the two f32 factors (18-byte header), then
+  the raw `terrain.pcx` and `offset.pcx` planes row-major. The browser
+  recomputes the sampling above, so a rendered point and a `height_at` query
+  agree; note the client's own query model is not the mesh's planar
+  interpolation (BuildNav's `Lerp` chain, reproduced in `zones.height_at` and
+  `web/src/lib/world/terrain.ts`, pinned by vectors generated from the
+  Python). Rendered ground and a height query can differ by |Δpixel|/4 on a
+  subtile diagonal — the client's own quirk, kept as measured.

@@ -14,9 +14,20 @@ Everything here is read-only, and every rule is measured rather than assumed
   on the type. An outdoor zone ships `terrain.pcx` + `offset.pcx` +
   `fixtures.csv` + `nifs.csv` + `bound.csv` + `sector.dat` + `zonejump.csv`;
   a dungeon ships `dungeon.chunk/.place/.prop`; a city `city.csv` +
-  `adjacency.csv`. `dat` and `csv` carry the same data in the zones measured;
-  which one the client reads first is the W-1 experiment, still unmeasured —
-  this reader takes `dat` and falls back to `csv`;
+  `adjacency.csv`. `dat` and `csv` carry the same data in the zones measured,
+  and **the client reads `csvNNN.mpk`** (measured 2026-10-11, W-1); reads go
+  through `data_entry`, which takes `dat` and falls back to `csv` (reads do
+  not depend on the answer — writes do, and a map mod writes `csv`);
+- a zone's folder may live under several roots: `zones/zoneNNN` (the classic
+  tree), `frontiers/zones/zoneNNN` (zone163+), and the tutorial/housing trees;
+- a zone's ground *texture* is composed from up to six layers per patch (the
+  8×8 grid of 8192-unit cells): `ter/textures.csv` lists each patch's layers
+  (a shared sheet in the client's `zones/TerrainTex/`, a repeat count, a
+  rotation), `ter/patchXXYY-K.dds` carries layer 3K/3K+1/3K+2's blend weights
+  in its R/G/B channels, and `texNNN.mpk`'s `texXX-YY.dds` is the pre-baked
+  base (its `lodXX-YY.dds` a lower-detail copy). This reader exposes the
+  layer model (`texture_patches`, `patch_masks`) — compositing it is the
+  viewer's job;
 - the ground height at a zone-local point is
   `terrain[y][x] * scalefactor + offset[y][x] * offsetfactor` (factors from
   `sector.dat`), sampled the way the client does: row-major, bilinear across
@@ -35,6 +46,7 @@ Nothing here writes. An edit goes through the pack pipeline
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from . import clientfs, gamedata, pcx
@@ -43,12 +55,14 @@ from .mpak import MpakArchive, MpakError
 __all__ = [
     "ZONE_ARCHIVES",
     "ZONE_KINDS",
+    "ZONE_ROOTS",
     "ZONE_SIZE",
     "ZONE_UNIT",
     "Bound",
     "Fixture",
     "Jump",
     "River",
+    "TextureLayer",
     "WorldIndex",
     "Zone",
     "ZoneError",
@@ -66,6 +80,29 @@ ZONE_KINDS = {0: "normal", 1: "city", 2: "dungeon", 4: "skycity"}
 
 #: The archives a zone may ship, by the name this module knows them by.
 ZONE_ARCHIVES = ("dat", "csv", "ter", "lod", "tex")
+
+#: The trees a zone's folder may live under, in resolution order (the classic
+#: tree first; `frontiers/zones/` carries zone163+ with the same layout, and
+#: the tutorial and housing trees have their own).
+ZONE_ROOTS = (
+    "zones",
+    "frontiers/zones",
+    "phousing/zones",
+    "Tutorial/zones",
+    "tutorial/zones",
+)
+
+#: The trees a zone's folder may live under, in resolution order (the classic
+#: tree first; `frontiers/zones/` carries zone163+ with the same layout, and
+#: the tutorial and housing trees have their own). `clientfs.resolve` matches
+#: the on-disk case, so one spelling covers `Nifs`/`NIFS`/`nifs`.
+ZONE_ROOTS = (
+    "zones",
+    "frontiers/zones",
+    "phousing/zones",
+    "Tutorial/zones",
+    "tutorial/zones",
+)
 
 
 class ZoneError(ValueError):
@@ -271,6 +308,33 @@ class ZoneNif:
 
 
 @dataclass
+class TextureLayer:
+    """One row of a zone's `ter/textures.csv`: a ground layer of one patch.
+
+    A patch is one cell of the zone's 8×8 texture grid — the same cell a
+    `texXX-YY.dds` covers. `texture` names a shared sheet the client keeps in
+    `zones/TerrainTex/<texture>.dds`; `tiles` is the layer's repeat count
+    across the patch (1 with `tileable` false is a single, un-tiled stamp).
+    The layer's per-texel weight is a channel of the patch's mask file
+    (`patchXXYY-K.dds`: R=layer 3K, G=3K+1, B=3K+2); layer 0 is blended at
+    full weight whatever the mask says.
+    """
+
+    patch_x: int
+    patch_y: int
+    texture: str
+    rotate: float
+    u: float
+    v: float
+    u_scale: float
+    v_scale: float
+    visible: bool
+    tiles: int
+    tileable: bool
+    row: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Bound:
     """One walkable polygon of `bound.csv`, in zone-local units."""
 
@@ -323,8 +387,21 @@ class Zone:
 
     @property
     def folder(self) -> str | None:
-        """The on-disk folder (`zones/zoneNNN`), or None when not shipped."""
-        return clientfs.resolve(self.client_dir, f"zones/zone{self.info.zone_id:03d}")
+        """The on-disk folder (`zones/zoneNNN` or a sibling root), or None.
+
+        The classic tree wins; `frontiers/zones/`, the housing and the
+        tutorial trees follow (`ZONE_ROOTS`). `clientfs.resolve` matches the
+        extraction's own case (`Zone000` beside `ZONE008`).
+        """
+        if "folder" not in self._cache:
+            found: str | None = None
+            for root in ZONE_ROOTS:
+                found = clientfs.resolve(
+                    self.client_dir, f"{root}/zone{self.info.zone_id:03d}")
+                if found is not None:
+                    break
+            self._cache["folder"] = found
+        return self._cache["folder"]  # type: ignore[return-value]
 
     @property
     def available(self) -> bool:
@@ -627,3 +704,160 @@ class Zone:
                 continue
             rows.append(fields)
         return rows
+
+    # -- ground texture layers (terNNN.mpk) ------------------------------------
+
+    def texture_patches(self) -> list[TextureLayer]:
+        """`ter/textures.csv`: the ground layers of each patch, in file order.
+
+        One header row (`patch x,patch y,base texture filename,…`), then
+        blocks of rows per patch, blank-line separated. Rows the columns do
+        not cover are skipped rather than guessed at.
+        """
+        raw = self.entry("ter", "textures.csv")
+        out: list[TextureLayer] = []
+        for line in raw.decode("latin-1").splitlines():
+            if not line.strip():
+                continue
+            if line.lower().startswith("patch"):
+                continue
+            fields = [field_.strip() for field_ in line.split(",")]
+            if len(fields) < 10 or not fields[0]:
+                continue
+            out.append(TextureLayer(
+                patch_x=int(_number(fields[0], f"{self.name}: textures.csv patch x")),
+                patch_y=int(_number(fields[1], f"{self.name}: textures.csv patch y")),
+                texture=fields[2],
+                rotate=_number(fields[3], f"{self.name}: textures.csv rotate"),
+                u=_number(fields[4], f"{self.name}: textures.csv u"),
+                v=_number(fields[5], f"{self.name}: textures.csv v"),
+                u_scale=_number(fields[6], f"{self.name}: textures.csv u scale"),
+                v_scale=_number(fields[7], f"{self.name}: textures.csv v scale"),
+                visible=_flag(fields[8]),
+                tiles=int(_number(fields[9], f"{self.name}: textures.csv num tiles")),
+                tileable=_flag(fields[10]) if len(fields) > 10 else True,
+                row=list(fields),
+            ))
+        return out
+
+    def patch_masks(self) -> dict[tuple[int, int], list[str]]:
+        """`ter`'s mask entries, keyed by patch: `{(x, y): ['patchXXYY-00.dds',…]}`.
+
+        Mask `K` carries the blend weights of the patch's layers 3K, 3K+1 and
+        3K+2 in its R, G and B channels.
+        """
+        out: dict[tuple[int, int], list[str]] = {}
+        for name in self.entries("ter"):
+            base = name.rsplit("/", 1)[-1]
+            if not base.startswith("patch") or not base.endswith(".dds"):
+                continue
+            stem = base[len("patch"):-len(".dds")]
+            if len(stem) < 5 or stem[4] != "-":
+                continue
+            try:
+                x, y = int(stem[0:2]), int(stem[2:4])
+                int(stem[5:])
+            except ValueError:
+                continue
+            out.setdefault((x, y), []).append(name)
+        for names in out.values():
+            names.sort()
+        return out
+
+    # -- the meshes and sheets a fixture's catalog names -----------------------
+
+    def _object_dirs(self) -> list[str]:
+        r"""Where the client looks a zone object's mesh and sheets up, in order.
+
+        The zone's own folder first (an override), then the folder's sibling
+        set, then the client's own search list (its string table carries
+        `tutorial/zones/nifs`, `frontiers/nifs`, `zones/nifs` and
+        `Zones\DNIFs`).
+        """
+        dirs: list[str] = []
+        folder = self.folder
+        if folder is not None:
+            rel = os.path.relpath(folder, self.client_dir).replace(os.sep, "/")
+            dirs.append(f"{rel}/Nifs")
+            parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+            if parent:
+                dirs.append(f"{parent}/Nifs")
+        dirs += [
+            "zones/nifs",
+            "zones/dnifs",
+            "frontiers/nifs",
+            "frontiers/dnifs",
+            "tutorial/zones/nifs",
+            "phousing/nifs",
+        ]
+        return dirs
+
+    def object_mesh(self, filename: str) -> str | None:
+        """The client's mesh file for a catalog `Filename`, or None.
+
+        `bkeep.nif` names the MPAK `bkeep.npk` (one NIF inside); the caller
+        reads its single entry.
+        """
+        stem = self._object_stem(filename)
+        if stem is None:
+            return None
+        return self._object_files()["npk"].get(stem)
+
+    def object_texture(self, name: str) -> str | None:
+        """The client's file for a NIF texture name, or None.
+
+        The client resolves a sheet **by stem**: `britlog.tga` loads
+        `zones/nifs/BRITLOG.dds` (measured) — so the lookup is
+        extension-agnostic, `.dds` winning over `.tga` over `.bmp`.
+        """
+        stem = self._object_stem(name)
+        if stem is None:
+            return None
+        return self._object_files()["tex"].get(stem)
+
+    @staticmethod
+    def _object_stem(name: str) -> str | None:
+        base = name.replace("\\", "/").rsplit("/", 1)[-1]
+        stem, _extension = os.path.splitext(base)
+        if not stem or stem in (".", ".."):
+            return None
+        return stem.casefold()
+
+    def _object_files(self) -> dict[str, dict[str, str]]:
+        r"""The zone's object files by stem: `{"npk": {stem: path}, "tex": …}`.
+
+        One listing per search directory (`_object_dirs`, the client's own
+        order), cached: a zone's catalog has dozens of entries and the mesh
+        directories carry thousands of files.
+        """
+        cached = self._cache.get("object-files")
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        meshes: dict[str, str] = {}
+        textures: dict[str, list[tuple[int, int, str]]] = {}
+        directories = self._object_dirs() + ["zones/textures", "textures",
+                                             "frontiers/textures"]
+        for rank, directory in enumerate(directories):
+            resolved = clientfs.resolve(self.client_dir, directory)
+            if resolved is None or not os.path.isdir(resolved):
+                continue
+            try:
+                names = os.listdir(resolved)
+            except OSError:
+                continue
+            for name in names:
+                stem, extension = os.path.splitext(name)
+                if not stem or not extension:
+                    continue
+                extension = extension.lower()
+                if extension == ".npk":
+                    meshes.setdefault(stem.casefold(), os.path.join(resolved, name))
+                elif extension in (".dds", ".tga", ".bmp"):
+                    order = (".dds", ".tga", ".bmp").index(extension)
+                    textures.setdefault(stem.casefold(), []).append(
+                        (order, rank, os.path.join(resolved, name)))
+        self._cache["object-files"] = {
+            "npk": meshes,
+            "tex": {stem: min(items)[2] for stem, items in textures.items()},
+        }
+        return self._cache["object-files"]  # type: ignore[return-value]

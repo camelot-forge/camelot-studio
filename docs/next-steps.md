@@ -591,7 +591,10 @@ content authorable in the same pipeline as everything else.
   CLI and the GUI as two faces of it. Godot and Unity were considered and
   rejected (they would duplicate the asset pipeline and lose the zero-install
   distribution); the comparison and the zone formats are recorded in the
-  workspace's `notes/phase6-world-editor.md`.
+  workspace's `notes/phase6-world-editor.md`. **Read-only `/world` is
+  delivered** (6.2: `GET /world/…` on the daemon, the SvelteKit + three.js
+  viewer — `docs/status.md`); the editor (6.3), server spawns (6.4) and
+  terrain/texture editing (6.5) follow.
 
 - The canonical client corpus is `DAOC CLIENT V2`, resolved through
   `$DAOC_CLIENT`; its exact build version must be recorded in the client

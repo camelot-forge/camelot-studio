@@ -85,6 +85,135 @@ export interface AssetQuery {
 	limit?: number;
 }
 
+// --- the world (Phase 6.2) ----------------------------------------------------
+
+export interface WorldZoneSummary {
+	id: number;
+	name: string;
+	region: number;
+	kind: string;
+	enabled: boolean;
+	music: number | null;
+	world_rect: [number, number, number, number];
+	cells: [number, number, number, number];
+	available: boolean;
+}
+
+export interface WorldRegionSummary {
+	id: number;
+	zones: number[];
+	available: number;
+	settings: Record<string, string>;
+}
+
+export interface WorldIndex {
+	zones: WorldZoneSummary[];
+	regions: WorldRegionSummary[];
+}
+
+export interface WorldTerrain {
+	width: number;
+	height: number;
+	terrain_factor: number;
+	offset_factor: number;
+	url: string;
+}
+
+export interface WorldFixture {
+	id: number;
+	nif_id: number;
+	name: string;
+	x: number;
+	y: number;
+	z: number;
+	angle: number;
+	scale: number;
+	radius: number;
+	collide: number;
+	animate: boolean;
+	ground: boolean;
+	flip: boolean;
+	cave: boolean;
+	unique_id: number;
+}
+
+export interface WorldCatalogEntry {
+	id: number;
+	name: string;
+	filename: string;
+	ground: boolean;
+	radius: number;
+	min_scale: number;
+	max_scale: number;
+	min_angle: number;
+	max_angle: number;
+	mesh: boolean;
+}
+
+export interface WorldBound {
+	id: number;
+	points: Array<[number, number]>;
+}
+
+export interface WorldWater {
+	name: string;
+	kind: string;
+	texture: string;
+	height: number;
+	flow: number;
+	left: Array<[number, number]>;
+	right: Array<[number, number]>;
+}
+
+export interface WorldJump {
+	name: string;
+	x: number;
+	y: number;
+	z: number;
+	angle: number;
+}
+
+export interface WorldTextureLayer {
+	patch_x: number;
+	patch_y: number;
+	texture: string;
+	rotate: number;
+	u: number;
+	v: number;
+	u_scale: number;
+	v_scale: number;
+	visible: boolean;
+	tiles: number;
+	tileable: boolean;
+}
+
+export interface WorldPatches {
+	layers: WorldTextureLayer[];
+	masks: Record<string, string[]>;
+	textures: string[];
+	available: string[];
+}
+
+export interface WorldArchive {
+	path: string;
+	entries: string[];
+}
+
+export interface WorldZone {
+	info: WorldZoneSummary;
+	urls: Record<string, string>;
+	terrain: WorldTerrain | null;
+	fixtures: WorldFixture[];
+	catalog: WorldCatalogEntry[];
+	bounds: WorldBound[];
+	water: WorldWater[];
+	jumps: WorldJump[];
+	zonejumps: string[][];
+	patches: WorldPatches | null;
+	archives: Record<string, WorldArchive>;
+	warnings: string[];
+}
+
 const BASE_KEY = 'camelot.apiBase';
 
 function normalize(base: string): string {
@@ -197,5 +326,17 @@ export const api = {
 		if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 		return (await res.json()) as AnimClip;
 	},
-	events: () => new EventSource(`${getApiBase()}/api/v1/events`)
+	events: () => new EventSource(`${getApiBase()}/api/v1/events`),
+
+	// --- the world ---------------------------------------------------------
+	worldIndex: (signal?: AbortSignal) => get<WorldIndex>('/world/index', signal),
+	worldZone: (zoneId: number, signal?: AbortSignal) =>
+		get<WorldZone>(`/world/zone/${zoneId}`, signal),
+	worldTerrainUrl: (zoneId: number) => `${getApiBase()}/api/v1/world/zone/${zoneId}/terrain`,
+	worldMeshUrl: (zoneId: number, name: string) =>
+		`${getApiBase()}/api/v1/world/zone/${zoneId}/mesh/${encodeURIComponent(name)}`,
+	worldTextureUrl: (zoneId: number, logical: string, entry: string) =>
+		`${getApiBase()}/api/v1/world/zone/${zoneId}/texture/${encodeURIComponent(logical)}/${encodeURIComponent(entry)}`,
+	worldTerrainTexUrl: (name: string) =>
+		`${getApiBase()}/api/v1/world/terraintex/${encodeURIComponent(name)}`
 };

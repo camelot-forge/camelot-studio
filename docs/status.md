@@ -178,9 +178,37 @@ terrain heightmaps (256×256 PCX plus the offset map, factors per zone from
 `sector.dat`), the object placements (`fixtures.csv`), the catalog, bounds,
 jumps and water — and `height_at()` reproduces the client's own sampling
 exactly (calibrated against the client's `fixtures.csv`: median error 0-1 on
-the ground-placed zones). The world editor's design is the private
+the ground-placed zones). A zone's folder may live under `zones/`,
+`frontiers/zones/` (zone163+), the tutorial or housing trees; its object
+meshes and sheets resolve by stem (`britlog.tga` → `zones/nifs/BRITLOG.dds`),
+and its ground layers are typed too (`texture_patches`, `patch_masks` —
+`formats.md` §11). 6.1 measured that **the client reads `csvNNN.mpk`** for a
+zone's CSV entries and that a tool-rewritten zone archive is accepted and
+byte-exactly reversible. The world editor's design is the private
 workspace's `notes/phase6-world-editor.md`; the formats are in
 `formats.md` §11.
+
+**The world API and `/world`** (Phase 6.2, 2026-10-11): the daemon grows a
+world service (`serve/world.py`, `serve/models.py`) — `GET /world/index`
+(regions, zones, what the client ships), `GET /world/zone/{id}` (info,
+fixtures, catalog with mesh availability, bounds, water, jumps, the ground
+layer model, the archive directory), `GET …/terrain` (the compact `CAMT`
+planes the browser re-samples with the client's own height model),
+`GET …/mesh/{name}` (a zone object as one cached glb, each mesh carrying the
+sheet its own `NiTexturingProperty` names, alpha-cut sheets declared), `GET …/texture/{logical}/{entry}`
+and `GET /world/terraintex/{name}` (DDS → PNG, cached). The web app gains
+`/world` (SvelteKit + three.js): the terrain as the client triangulates it
+(33×33-vertex patch meshes on the subtile diagonal), the 64 pre-baked
+ground sheets applied per patch, fixtures instanced per catalog mesh with
+their heading and scale, bounds/water/jump overlays, a region browser and a
+zone picker. Fixtures honour `Z` as authored and drop `Z = 0` + `Ground = 1`
+rows on the terrain; whether the client honours a non-zero `Z` under
+`Ground` is the **W-3** experiment, and the near-field layer composition
+(`patchXXYY` masks over `zones/TerrainTex` sheets) is deliberately **not**
+emulated yet. Verification: `core/tests/test_serve_world.py` (12 unit tests +
+4 corpus tests) and `web/src/lib/world/terrain.test.ts` (sampling vectors
+generated from the Python; heading, placement and the triangulation pinned).
+The screenshot harness is `web/scripts/world_shot.mjs` (Playwright).
 
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the
 1.127 client under Wine: a rewritten container, modified table data and a new
@@ -237,11 +265,12 @@ Dated baselines: the V2 corpus run of 2026-10-07 was 390 passed / 4 failed
 expectations, one Ettin bbox golden — await a data/test decision). On the
 test machine's **completed corpus** (a pristine copy of the OpenDAoC 1.127
 client — the recipe and its hashes are in the workspace's
-`notes` §2.3) the suite is **535 passed / 0 failed** as of
-2026-10-11 (Phase 6.0's zone layer included), with `OPENDAOC_RACE_SQL`
-pointing at OpenDAoC-Database's `race.sql`; without it one test skips. The web
-suite is 38 passed / 3 skipped, `pnpm check` reports zero errors and three
-existing warnings (measured on the test machine, 2026-10-11).
+`notes` §2.3) the suite was **535 passed / 0 failed** with
+Phase 6.0, then **554 passed / 0 failed** with 6.2's world API (2026-10-11),
+with `OPENDAOC_RACE_SQL` pointing at OpenDAoC-Database's `race.sql`; without
+it one test skips. The web suite is 47 passed / 3 skipped, `pnpm check`
+reports zero errors and three existing warnings (measured on the test
+machine, 2026-10-11).
 
 ## Known limits
 

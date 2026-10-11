@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { Boxes } from '@lucide/svelte';
+	import { Boxes, Globe2 } from '@lucide/svelte';
+	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
 
 	interface Props {
 		onReset?: () => void;
@@ -16,6 +18,13 @@
 			<span class="sub">DAoC figure viewer — glTF</span>
 		</div>
 	</div>
+
+	<nav>
+		<a class:on={page.url.pathname === '/'} href={resolve('/')}>Figures</a>
+		<a class:on={page.url.pathname.startsWith('/world')} href={resolve('/world')}>
+			<Globe2 size={13} /> World
+		</a>
+	</nav>
 
 	{#if hasModel && onReset}
 		<button class="btn btn--secondary" onclick={onReset}>Load another</button>
@@ -59,5 +68,28 @@
 	.sub {
 		font-size: 12px;
 		color: var(--text-3);
+	}
+	nav {
+		display: flex;
+		gap: 6px;
+		margin-left: auto;
+	}
+	nav a {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 5px 10px;
+		border-radius: var(--r-input, 6px);
+		border: 1px solid transparent;
+		color: var(--text-3, #9aa4a0);
+		text-decoration: none;
+		font-size: 12px;
+	}
+	nav a:hover {
+		background: var(--accent-tint-12, #17302a);
+	}
+	nav a.on {
+		border-color: var(--accent, #2dd4a7);
+		color: var(--text-1, #e8e8e8);
 	}
 </style>

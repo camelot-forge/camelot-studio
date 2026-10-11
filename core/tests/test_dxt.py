@@ -8,6 +8,7 @@ from camelot.dxt import (
     dxt1_has_alpha,
     dxt1_to_a8r8g8b8,
     encode_a8r8g8b8,
+    has_alpha,
     parse_dds_header,
 )
 
@@ -138,3 +139,52 @@ def test_viewer_dds_rewrites_only_dxt1_alpha_sheets():
     assert out != bytes(cut)
     assert parse_dds_header(out)[2] == b""  # re-encoded uncompressed
     assert out[128 + 3] == 0  # the cut texel keeps its alpha
+
+
+def _dds(fourcc: bytes, width: int, height: int, payload: bytes) -> bytes:
+    header = bytearray(b"DDS " + b"\x00" * 124)
+    struct.pack_into("<I", header, 80, 0x4)
+    header[84:88] = fourcc
+    struct.pack_into("<II", header, 12, height, width)
+    return bytes(header) + payload
+
+
+def test_has_alpha_is_structural_not_a_decode():
+    # Not a DDS, a degenerate header, and a zero size are all "no alpha".
+    assert not has_alpha(b"nope")
+    assert not has_alpha(b"DDS " + b"\x00" * 124)
+
+    # DXT1: the 4-color mode is opaque, the 3-color mode cuts.
+    assert not has_alpha(_dds(b"DXT1", 4, 4, _block(0xFFFF, 0x0000)))
+    assert has_alpha(_dds(b"DXT1", 4, 4, _block(0x0000, 0xFFFF)))
+
+    # DXT3: 8 explicit-alpha bytes per 16-byte block, a nibble below 0xF cuts.
+    opaque3 = b"\xff" * 8 + _block(0xFFFF, 0x0000)
+    assert not has_alpha(_dds(b"DXT3", 4, 4, opaque3))
+    cut3 = b"\xff" * 7 + b"\xf0" + _block(0xFFFF, 0x0000)
+    assert has_alpha(_dds(b"DXT3", 4, 4, cut3))
+
+    # DXT5: a0 = a1 = 255 with zero indices is opaque; anything else cuts.
+    opaque5 = bytes([255, 255]) + b"\x00" * 6 + _block(0xFFFF, 0x0000)
+    assert not has_alpha(_dds(b"DXT5", 4, 4, opaque5))
+    assert has_alpha(_dds(b"DXT5", 4, 4, bytes([255, 0]) + b"\x00" * 6 + _block(0xFFFF, 0x0000)))
+    assert has_alpha(_dds(b"DXT5", 4, 4, bytes([255, 255, 1]) + b"\x00" * 5 + _block(0xFFFF, 0x0000)))
+
+    # Uncompressed A8R8G8B8: the fourth byte is the alpha.
+    assert not has_alpha(encode_a8r8g8b8(1, 1, bytes([1, 2, 3, 255])))
+    assert has_alpha(encode_a8r8g8b8(1, 1, bytes([1, 2, 3, 128])))
+
+
+def test_has_alpha_matches_the_real_corpus_sheets():
+    """The pine's DXT5 foliage cuts (54 % of its texels are transparent) and
+    the terrain-composed sector sheet is dense; DAOC_CLIENT guards the read."""
+    import os
+
+    root = os.environ.get("DAOC_CLIENT")
+    if not root:
+        pytest.skip("DAOC_CLIENT not set")
+    foliage = os.path.join(root, "zones", "Nifs", "BPineAF.dds")
+    if not os.path.exists(foliage):
+        pytest.skip("no pine sheet in this corpus")
+    with open(foliage, "rb") as fh:
+        assert has_alpha(fh.read())
