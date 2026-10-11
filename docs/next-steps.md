@@ -491,12 +491,13 @@ ladder has run (P5-A…P5-F pass, 2026-10-10); the model-id ceiling is
 measured at 2500 (ids must stay ≤ 2499 — a row at 2500 truncates the client's
 parse of the whole table). Remaining:
 
-- fold the measured model-id ceiling patch into the studio: a `patch`
-  payload kind (offsets + bytes + preconditions), applied by
-  `camelot client install` with backup and byte-exact removal, plus a
-  `requires: client.modelids.N` capability the installer checks (measured
-  2026-10-10: 2 cap compares + 4 array references + one PE section -> 32768
-  ids, model 10000 renders; P5-H in the workspace);
+- the model-id ceiling patch **is in the studio** (2026-10-10, `aa6b66a`): a
+  `patch` payload kind (a recipe of expected bytes, writes and an appended PE
+  section — never a redistributed DLL), the `requires: client.modelids.N`
+  capability verified against the client's own bytes, `camelot client patch`
+  for unmanaged clients, and the loader skipping `client.` requirements. The
+  field test (P5-J) rebuilt the validated DLL byte for byte; the same recipe
+  is the shape for every later per-table patch;
 - export the server's own referenced-id list from the loader (the studio
   side is done: `camelot client free-ids` reports 253 add ids and 674
   take-over rows, and `mod build --used-models` accepts an export);
@@ -506,11 +507,66 @@ parse of the whole table). Remaining:
 - package the tools for repeatable server-developer use;
 - separate public implementation documentation from private research.
 
+## Phase 6 — World editor (the suite comes together)
+
+Decided 2026-10-11 (operator request, reconnaissance done the same day): a
+map viewer **and editor** that renders the world from the client's own data,
+shows the server's spawns, edits placements, and publishes the result through
+the Phase 5 chain. The design is `notes/phase6-world-editor.md` in the
+private workspace; it is **not** a new pipeline — it is a front end over
+`mod build` / `client install` / the loader.
+
+The reconnaissance measured the three sides: the client ships the world per
+zone (`zones/`, 2.3 GB — a 256×256 PCX heightmap, terrain patches,
+`fixtures.csv` placements, a NIF catalog, bounds, water, jumps), the server
+ships the living world (481 zones, 354 regions, 97,737 `mob` spawns, 799
+statics), and this repository already reads every container involved (a zone
+object exports to glTF today). The world coordinate contract is confirmed in
+the server's own code: a zone is `OffX×8192 … +Width×8192`, i.e. 65536²,
+the same `0..65535` space the client's CSVs use.
+
+In order (each step testable without the game, except the ladder):
+
+1. **6.0 — the zone data layer** (`core/camelot/zones.py`, read-only):
+   `zones.dat` (the client's 483-zone/358-region index), `terrain.pcx` +
+   `offset.pcx` (height = `terrain×scalefactor + offset×offsetfactor`, factors
+   per zone from `sector.dat`), `fixtures.csv`, `nifs.csv`, `bound.csv`,
+   `sector.dat` (fog/sky/water/jumps/holes), and the four zone types
+   (normal, city, dungeon, skycity). Exit criterion: the **calibration
+   test** — for `Ground=1` fixtures, the row's `Z` equals the height computed
+   from the maps, across zones;
+2. **6.1 — the client experiment** (one session, like the MPAK ladder):
+   which of `datNNN.mpk` / `csvNNN.mpk` the client reads first, and whether
+   it accepts a tool-rewritten zone archive. *This gates everything below*;
+3. **6.2 — the zone API + `/world`**: terrain mesh (the client's subtile
+   triangulation), texture patches (DDS → PNG, cached), instanced fixtures
+   (NIF → glTF, cached), bounds/water/jumps, a region browser;
+4. **6.3 — the editor**: selection, transform gizmos, snap-to-terrain, add
+   from the zone's NIF catalog, remove, an undo journal, all written to an
+   **authoring directory**;
+5. **6.4 — spawns and publishing**: the DB (or an exported snapshot) as a
+   layer, spawn editing, `mob`/`worldobject` in the loader's schema (their
+   key is a GUID: mod rows get deterministic ids derived from the mod, not
+   allocated blocks), and the publish flow;
+6. **6.5 — later**: terrain and texture editing (needs a BC1 encoder and
+   regenerated patches; Uthgard's HMapEdit proves the client accepts edited
+   terrain), the dungeon/city variants of the editor, and new décor models
+   (the `objects` cap-5000 patch recipe + the NIF writer).
+
+Prerequisites, decided here so they are not discovered mid-phase: the **web
+toolchain must run on the test machine** (Node + pnpm; `web/` has never been
+built there — the daemon is Python and already works), and the **zone corpus
+for tests** is the live client (`zones/` is 2.3 GB and only it has them; zone
+files are not modded there).
+
 ## Explicitly deferred
 
 Until Phases 0–4 are complete, defer broad UI expansion, MCP endpoints,
 multi-root workspaces, desktop packaging and speculative features that do not
-shorten the Studio-to-server delivery loop.
+shorten the Studio-to-server delivery loop. The **world editor (Phase 6) is
+the one deliberate exception** (operator decision, 2026-10-11): it is what
+turns the tool set into a suite, and it shortens the loop by making map
+content authorable in the same pipeline as everything else.
 
 ## Decisions recorded (continued)
 
@@ -529,6 +585,13 @@ shorten the Studio-to-server delivery loop.
 - **The client side is the real constraint**, not the server: assets a mod
   *brings* need NIF writing (MPAK writing is done and validated in-client),
   and client-file conflicts between mods have no precedence mechanism today.
+- **The world editor is a web route over the same pipeline** (2026-10-11):
+  the daemon owns files and caches, the browser consumes JSON/glTF, and edits
+  are published through `mod build`/`client install` — one write path, the
+  CLI and the GUI as two faces of it. Godot and Unity were considered and
+  rejected (they would duplicate the asset pipeline and lose the zero-install
+  distribution); the comparison and the zone formats are recorded in the
+  workspace's `notes/phase6-world-editor.md`.
 
 - The canonical client corpus is `DAOC CLIENT V2`, resolved through
   `$DAOC_CLIENT`; its exact build version must be recorded in the client

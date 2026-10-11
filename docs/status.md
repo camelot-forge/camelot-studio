@@ -365,19 +365,20 @@ live client plays for the male Troll player is still to confirm
 
 The canonical roadmap is `docs/next-steps.md`. The immediate order is:
 
-1. Use the closed audit as the implementation backlog; do not reopen stale
-   documentation claims as requirements.
-2. Verify the native builder against `DAOC_CLIENT V2`, prioritizing skin-tone
-   scope, eye fidelity, armour materials and real browser rendering. The
-   18-race list, positional hair styles (`Bald`) and the hair `S/T/M` decal
-   bake shipped 2026-09-23; the private workshop's builder-fidelity backlog
-   tracks the remaining points.
-3. Close only the fidelity gaps confirmed by that audit; keep tests and
-   structured visual reproduction cases with each change.
-4. Define and implement the OpenDAoC content-pack adapter and its mod
-   loader, then validate the complete client/server path.
-5. Defer Blender integration and broad product features until the server pack
-   loop is reproducible.
+1. **Phase 6 — the world editor** (decided 2026-10-11; design in the private
+   workspace, `notes/phase6-world-editor.md`): 6.0 the zone data layer
+   (`core/camelot/zones.py` — `zones.dat`, the PCX heightmaps, `fixtures.csv`,
+   `sector.dat`), then 6.1 the client experiment (which zone archive is read,
+   and whether a rewritten one is accepted) — one session, and it gates the
+   rest; then the `/world` route, the editor, and spawn publishing through the
+   existing pack chain.
+2. Keep the delivery chain honest while it grows: the loader's own used-id
+   export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
+   16-bit wire) are the next measurements.
+3. The NIF writer (P5-B) is the gate on mods that *bring* new geometry; it
+   runs parallel to Phase 6, not inside it.
+4. Blender integration and broad product features stay deferred until the
+   world editor can publish a map mod end to end.
 
 ## Command cheat sheet
 
