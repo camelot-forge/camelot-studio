@@ -138,18 +138,34 @@ export function fixtureZ(
 export interface PatchGeometry {
 	positions: Float32Array;
 	uvs: Float32Array;
+	normals: Float32Array;
 	indices: Uint32Array;
 }
 
 /** One patch's terrain mesh: 33×33 vertices, two triangles per subtile along
  * the client's diagonal (the one `heightAt` samples across), so a rendered
  * point and a height query agree by construction. */
-export function patchGeometry(data: TerrainData, patchX: number, patchY: number): PatchGeometry {
+/** One patch's terrain mesh: 33×33 vertices, two triangles per subtile along
+ * the client's diagonal (the one `heightAt` samples across), so a rendered
+ * point and a height query agree by construction.
+ *
+ * The normals come from `zoneNormals` — the whole zone's triangle normals,
+ * averaged per grid vertex — so two patches share the normals along what would
+ * be their seam: computing them per patch leaves a shading step on every
+ * boundary of the 8×8 grid, and the client's terrain has none. */
+export function patchGeometry(
+	data: TerrainData,
+	patchX: number,
+	patchY: number,
+	normals: Float32Array = zoneNormals(data)
+): PatchGeometry {
 	const side = SUBTILES_PER_PATCH + 1;
 	const positions = new Float32Array(side * side * 3);
 	const uvs = new Float32Array(side * side * 2);
+	const normalArr = new Float32Array(side * side * 3);
 	const baseX = patchX * SUBTILES_PER_PATCH;
 	const baseY = patchY * SUBTILES_PER_PATCH;
+	const stride = SUBTILES + 1;
 	for (let j = 0; j < side; j++) {
 		for (let i = 0; i < side; i++) {
 			const x = (baseX + i) * UNITS_PER_SUBTILE;
@@ -159,6 +175,10 @@ export function patchGeometry(data: TerrainData, patchX: number, patchY: number)
 			positions[v * 3] = x;
 			positions[v * 3 + 1] = h;
 			positions[v * 3 + 2] = y;
+			const grid = (baseY + j) * stride + (baseX + i);
+			normalArr[v * 3] = normals[grid * 3];
+			normalArr[v * 3 + 1] = normals[grid * 3 + 1];
+			normalArr[v * 3 + 2] = normals[grid * 3 + 2];
 			// uv within the patch; the sheet is "the ground seen from above"
 			// (north up), so image row 0 is the patch's north edge — its lowest
 			// y, since `+y` is south. Row 0 lands here on the `v = 1` side.
@@ -186,7 +206,68 @@ export function patchGeometry(data: TerrainData, patchX: number, patchY: number)
 			indices[o++] = d;
 		}
 	}
-	return { positions, uvs, indices };
+	return { positions, uvs, normals: normalArr, indices };
+}
+
+/** The zone's vertex normals, one per height-grid node (`SUBTILES + 1`
+ * squared): every subtile triangle's face normal accumulated into its three
+ * corners, in the same triangulation `patchGeometry` draws (a–c–b, b–c–d).
+ * Shared by all 64 patches, which is what keeps their shading continuous. */
+export function zoneNormals(data: TerrainData): Float32Array {
+	const stride = SUBTILES + 1;
+	const heights = new Float32Array(stride * stride);
+	for (let j = 0; j < stride; j++) {
+		for (let i = 0; i < stride; i++) {
+			heights[j * stride + i] = data.heightAt(i * UNITS_PER_SUBTILE, j * UNITS_PER_SUBTILE);
+		}
+	}
+	const out = new Float32Array(stride * stride * 3);
+	const unit = UNITS_PER_SUBTILE;
+	for (let j = 0; j < SUBTILES; j++) {
+		for (let i = 0; i < SUBTILES; i++) {
+			const a = j * stride + i;
+			const b = a + 1;
+			const c = a + stride;
+			const d = c + 1;
+			// Two triangles, as drawn: (a, c, b) and (b, c, d), in the (x, y, z)
+			// grid with +z up — the face normal is (dy1*dz2 - dz1*dy2, ...) over
+			// the edges; written out for the axis-aligned subtile.
+			const ha = heights[a];
+			const hb = heights[b];
+			const hc = heights[c];
+			const hd = heights[d];
+			// (a, c, b): u = c - a = (0, hc - ha, unit), v = b - a = (unit, hb - ha, 0)
+			let nx = (hc - ha) * 0 - unit * (hb - ha);
+			let ny = unit * unit - 0 * 0;
+			let nz = 0 * (hb - ha) - (hc - ha) * unit;
+			add(out, a, nx, ny, nz);
+			add(out, c, nx, ny, nz);
+			add(out, b, nx, ny, nz);
+			// (b, c, d): u = c - b = (-unit, hc - hb, 0), v = d - b = (0, hd - hb, unit)
+			nx = (hc - hb) * unit - 0 * (hd - hb);
+			ny = 0 * 0 - -unit * unit;
+			nz = -unit * (hd - hb) - (hc - hb) * 0;
+			add(out, b, nx, ny, nz);
+			add(out, c, nx, ny, nz);
+			add(out, d, nx, ny, nz);
+		}
+	}
+	for (let v = 0; v < stride * stride; v++) {
+		const x = out[v * 3];
+		const y = out[v * 3 + 1];
+		const z = out[v * 3 + 2];
+		const length = Math.hypot(x, y, z) || 1;
+		out[v * 3] = x / length;
+		out[v * 3 + 1] = y / length;
+		out[v * 3 + 2] = z / length;
+	}
+	return out;
+}
+
+function add(out: Float32Array, vertex: number, x: number, y: number, z: number): void {
+	out[vertex * 3] += x;
+	out[vertex * 3 + 1] += y;
+	out[vertex * 3 + 2] += z;
 }
 
 /** A fixture's placement: scene position, yaw and scale (percent → factor). */

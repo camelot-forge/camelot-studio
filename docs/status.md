@@ -210,7 +210,10 @@ click-to-select/recentre with a searchable fixture list and an inspector
 up, east right, `+y` (south) mapped to scene `+Z`, fixture yaw `−A` — since
 the zone frame is left-handed (`formats.md` §11, "The world frame is
 left-handed"); the first cut used the figure rotation and drew the whole
-world mirrored. The ground is the client's layer stack, not its bake: each
+world mirrored. The terrain patches share one zone-wide normal field (a
+per-patch computation drew the 8×8 grid as 64 shaded tiles) and the ground
+masks are clamped (a mask covers its patch exactly). The ground is the
+client's layer stack, not its bake: each
 patch is composed from its `TerrainTex` sheets and masks in one pass
 (`web/src/lib/world/ground.ts`), the sheets tiled across the zone
 (`tiles = 256` is a 256-unit tile), the model scored against the client's own

@@ -698,7 +698,10 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   (`web/src/lib/world/ground.ts`) where the engine splits the stack across
   `PassTwo…PassFour` draws; how the engine blends between those draws (and
   whether it rounds to 8 bits) is not measured — a single pass is the one
-  place our composition could differ. `texXX-YY` stays as the fallback where
+  place our composition could differ. A mask is sampled with **clamp**, not
+  repeat: it covers its patch exactly, and wrapping would blend a patch's
+  edge weights with the opposite edge — a seam on every one of the 64 patch
+  boundaries. `texXX-YY` stays as the fallback where
   a zone ships no layers. `lodXX-YY.dds` (256²) is `texXX-YY`'s lower-detail
   copy, `texXX-YY.bmp` an 8-bit indexed companion.
 - **A fixture's heading** is **degrees** (0..359), counter-clockwise in the
@@ -761,4 +764,8 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   interpolation (BuildNav's `Lerp` chain, reproduced in `zones.height_at` and
   `web/src/lib/world/terrain.ts`, pinned by vectors generated from the
   Python). Rendered ground and a height query can differ by |Δpixel|/4 on a
-  subtile diagonal — the client's own quirk, kept as measured.
+  subtile diagonal — the client's own quirk, kept as measured. The viewer's
+  patch **normals** come from one zone-wide field (every subtile triangle's
+  face normal accumulated into its grid corners, the same triangulation the
+  mesh draws): computing them per patch leaves a shading step on all 64
+  boundaries, which the client's terrain does not have.

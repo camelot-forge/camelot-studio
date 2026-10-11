@@ -16,6 +16,7 @@ import {
 	fixturePlacement,
 	parseTerrain,
 	patchGeometry,
+	zoneNormals,
 	type TerrainData
 } from './terrain';
 
@@ -258,6 +259,9 @@ export class WorldViewer {
 
 	private buildGround(zoneId: number, zone: WorldZone, data: TerrainData, token: number): void {
 		const entries = new Set((zone.archives.tex?.entries ?? []).map((entry) => entry.toLowerCase()));
+		// One normal field for the whole zone: the patches then share their
+		// boundary normals and the grid does not show as 64 shaded tiles.
+		const normals = zoneNormals(data);
 		const patches = zone.patches;
 		const layersByPatch = new Map<string, WorldTextureLayer[]>();
 		for (const layer of patches?.layers ?? []) {
@@ -268,12 +272,12 @@ export class WorldViewer {
 		}
 		for (let py = 0; py < PATCH_CELLS; py++) {
 			for (let px = 0; px < PATCH_CELLS; px++) {
-				const patch = patchGeometry(data, px, py);
+				const patch = patchGeometry(data, px, py, normals);
 				const geometry = new THREE.BufferGeometry();
 				geometry.setAttribute('position', new THREE.BufferAttribute(patch.positions, 3));
+				geometry.setAttribute('normal', new THREE.BufferAttribute(patch.normals, 3));
 				geometry.setAttribute('uv', new THREE.BufferAttribute(patch.uvs, 2));
 				geometry.setIndex(new THREE.BufferAttribute(patch.indices, 1));
-				geometry.computeVertexNormals();
 				const material = new THREE.MeshLambertMaterial({ color: 0x66705a });
 				const mesh = new THREE.Mesh(geometry, material);
 				mesh.name = `patch-${px}-${py}`;
@@ -328,6 +332,7 @@ export class WorldViewer {
 	private async groundTexture(
 		url: string,
 		flipY: boolean,
+		wrap: THREE.Wrapping,
 		token: number
 	): Promise<THREE.Texture | null> {
 		const cached = this.groundTextures.get(url);
@@ -339,11 +344,14 @@ export class WorldViewer {
 				return null;
 			}
 			texture.colorSpace = THREE.SRGBColorSpace;
-			texture.wrapS = THREE.RepeatWrapping;
-			texture.wrapT = THREE.RepeatWrapping;
+			texture.wrapS = wrap;
+			texture.wrapT = wrap;
 			texture.anisotropy = this.anisotropy();
 			// The layer sheets are read bottom-up (their row 0 is the tile's
-			// south edge — see ground.ts); the masks are north-up images.
+			// south edge — see ground.ts); the masks are north-up images. A mask
+			// covers its patch exactly, so it clamps: repeating it would blend a
+			// patch's edge weights with the opposite edge, and every patch
+			// boundary would show as a seam.
 			texture.flipY = flipY;
 			texture.needsUpdate = true;
 			this.groundTextures.set(url, texture);
@@ -362,20 +370,22 @@ export class WorldViewer {
 		patch: [number, number],
 		token: number
 	): Promise<void> {
-		const wanted = new Map<string, { url: string; flipY: boolean }>();
+		const wanted = new Map<string, { url: string; flipY: boolean; wrap: THREE.Wrapping }>();
 		for (const slot of slots) {
 			wanted.set(`sheet:${slot.sheet}`, {
 				url: api.worldTerrainTexUrl(`${slot.sheet}.dds`),
-				flipY: false
+				flipY: false,
+				wrap: THREE.RepeatWrapping
 			});
 			wanted.set(`mask:${slot.mask}`, {
 				url: api.worldTextureUrl(zoneId, 'ter', slot.mask),
-				flipY: true
+				flipY: true,
+				wrap: THREE.ClampToEdgeWrapping
 			});
 		}
 		const loaded = new Map<string, THREE.Texture>();
 		for (const [key, source] of wanted) {
-			const texture = await this.groundTexture(source.url, source.flipY, token);
+			const texture = await this.groundTexture(source.url, source.flipY, source.wrap, token);
 			if (!texture) return;
 			loaded.set(key, texture);
 		}

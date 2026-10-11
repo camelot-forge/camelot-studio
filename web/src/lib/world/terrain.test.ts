@@ -16,6 +16,7 @@ import {
 	headingYaw,
 	parseTerrain,
 	patchGeometry,
+	zoneNormals,
 	zoneToScene
 } from './terrain';
 
@@ -210,5 +211,30 @@ describe('patchGeometry', () => {
 		const side = SUBTILES_PER_PATCH + 1;
 		const end = Array.from(last.positions.slice((side * side - 1) * 3, (side * side - 1) * 3 + 3));
 		expect(end).toEqual([ZONE_SIZE, data.heightAt(ZONE_SIZE, ZONE_SIZE), ZONE_SIZE]);
+	});
+
+	it('shares its boundary normals with the next patch', () => {
+		// The client's terrain has no shading step at the 8×8 patch seams; a
+		// per-patch normal computation leaves one, so both patches read the
+		// same zone-wide normal field.
+		const data = zone();
+		const normals = zoneNormals(data);
+		const side = SUBTILES_PER_PATCH + 1;
+		const left = patchGeometry(data, 0, 0, normals);
+		const right = patchGeometry(data, 1, 0, normals);
+		const at = (geometry: ReturnType<typeof patchGeometry>, i: number, j: number) =>
+			Array.from(
+				geometry.normals
+					.slice((j * side + i) * 3, (j * side + i) * 3 + 3)
+					.map((v) => Number(v.toFixed(6)))
+			);
+		for (let j = 0; j < side; j++) {
+			// east edge of patch (0,0) and west edge of patch (1,0): same grid node
+			expect(at(left, side - 1, j)).toEqual(at(right, 0, j));
+		}
+		// unit length, and pointing up
+		const normal = at(left, 16, 16);
+		expect(Math.hypot(...normal)).toBeCloseTo(1, 5);
+		expect(normal[1]).toBeGreaterThan(0);
 	});
 });
