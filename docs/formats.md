@@ -680,22 +680,27 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   guessed (`notes/layer-compose.py`). Layer 0 first, then layers in
   **ascending** order, each lerped over the accumulated colour by its own
   mask channel (R = 3K, G = 3K+1, B = 3K+2 of mask K, tied to the *file
-  index*, not to the drawn rows); a tileable sheet repeats (256 tiles across
-  a patch is 32 units per tile — the 512² sheet carries the near-field
-  detail, ~1 texel per unit); an untiled row is one stamp of the **zone-wide**
-  sheet at `(patch + uv) / 8` (`CamHills-Small` is 1024² for the zone's 8×8
-  patches); v runs like the ground's own (no flip). Descending order (layers
-  *under* the base), a v flip and patch-local stamps each score 1.7–3× worse
-  mean |diff| against that bake. The stack is at most 9 layers / 3 masks
-  (sampled over the corpus: `notes/layer-span.py`); `rotate` is not
-  measured (no rotated row in the sample). The viewer composes it in one pass
-  per patch (`web/src/lib/world/ground.ts`) where the engine splits the stack
-  across `PassTwo…PassFour` draws; how the engine blends between those draws
-  (and whether it rounds to 8 bits) is not measured — a single pass is the one
-  place our composition could differ. `texXX-YY` stays as the fallback where a
-  zone ships no layers. `lodXX-YY.dds`
-  (256²) is `texXX-YY`'s lower-detail copy, `texXX-YY.bmp` an 8-bit indexed
-  companion.
+  index*, not to the drawn rows). A sheet repeats `tiles` times **across the
+  zone** — the layer uv is `((patch + uv) / 8) × tiles` — so `tiles = 256`
+  is a 256-unit tile (a 512² sheet at ~0.5 units per texel: the pebbles and
+  grass blades the game shows), and the untiled `CamHills-Small` row
+  (`tileable = 0`, `tiles = 1`) is exactly one patch window of the
+  zone-wide sheet, at 64 units/texel. Reading `num tiles` patch-locally
+  instead (32-unit grass tiles) is 8× too dense: the first viewer cut drew
+  that, a flat wash next to the game's pebbles (`layer-period.py` cannot
+  settle the scale — a tile finer than the bake's own texel aliases away —
+  but the scores can: zone tiling beats patch-local 1.2–1.4× and descending
+  order 1.2–2.0×, a v flip 1.5–1.8×, and the in-game pebbles pin the
+  absolute size). v runs like the ground's own (no flip). The stack is at
+  most 9 layers / 3 masks (sampled over the corpus: `notes/`
+  `layer-span.py`); `rotate` is not measured (no rotated row in the sample).
+  The viewer composes it in one pass per patch
+  (`web/src/lib/world/ground.ts`) where the engine splits the stack across
+  `PassTwo…PassFour` draws; how the engine blends between those draws (and
+  whether it rounds to 8 bits) is not measured — a single pass is the one
+  place our composition could differ. `texXX-YY` stays as the fallback where
+  a zone ships no layers. `lodXX-YY.dds` (256²) is `texXX-YY`'s lower-detail
+  copy, `texXX-YY.bmp` an 8-bit indexed companion.
 - **A fixture's heading** is **degrees** (0..359), counter-clockwise in the
   (x, y) plane — measured on the bridges of six zones: each one's long axis
   (from its mesh's own vertices) lies along its river's bank-to-bank

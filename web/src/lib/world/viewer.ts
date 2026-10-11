@@ -354,6 +354,7 @@ export class WorldViewer {
 		}
 	}
 
+	/** The patch's material, once its sheets and masks are loaded. */
 	private async composePatch(
 		zoneId: number,
 		mesh: THREE.Mesh,
@@ -361,28 +362,28 @@ export class WorldViewer {
 		patch: [number, number],
 		token: number
 	): Promise<void> {
-		const sheets = [...new Set(slots.map((slot) => slot.sheet))];
-		const masks = [...new Set(slots.map((slot) => slot.mask))];
-		const loaded = new Map<string, THREE.Texture>();
-		for (const name of sheets) {
-			const texture = await this.groundTexture(api.worldTerrainTexUrl(`${name}.dds`), false, token);
-			if (!texture) return;
-			loaded.set(`sheet:${name}`, texture);
+		const wanted = new Map<string, { url: string; flipY: boolean }>();
+		for (const slot of slots) {
+			wanted.set(`sheet:${slot.sheet}`, {
+				url: api.worldTerrainTexUrl(`${slot.sheet}.dds`),
+				flipY: false
+			});
+			wanted.set(`mask:${slot.mask}`, {
+				url: api.worldTextureUrl(zoneId, 'ter', slot.mask),
+				flipY: true
+			});
 		}
-		for (const name of masks) {
-			const texture = await this.groundTexture(
-				api.worldTextureUrl(zoneId, 'ter', name),
-				true,
-				token
-			);
+		const loaded = new Map<string, THREE.Texture>();
+		for (const [key, source] of wanted) {
+			const texture = await this.groundTexture(source.url, source.flipY, token);
 			if (!texture) return;
-			loaded.set(`mask:${name}`, texture);
+			loaded.set(key, texture);
 		}
 		if (token !== this.token) return;
 		const material = groundMaterial(
 			slots,
 			{
-				sheet: (name) => loaded.get(`sheet:${name}`) ?? null,
+				sheet: (slot) => loaded.get(`sheet:${slot.sheet}`) ?? null,
 				mask: (name) => loaded.get(`mask:${name}`) ?? null
 			},
 			patch

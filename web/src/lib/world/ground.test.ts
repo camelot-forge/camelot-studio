@@ -69,14 +69,15 @@ describe('groundSlots', () => {
 		]);
 	});
 
-	it('reads an untiled row as the zone-wide stamp', () => {
+	it('reads an untiled row as one window of the zone-wide sheet', () => {
 		const slots = groundSlots(
 			[layer({}), layer({ texture: 'CamHills-Small', tiles: 1, tileable: false })],
 			['patch0305-00.dds']
 		);
-		expect(slots![0].stamp).toBe(false);
 		expect(slots![0].tiles).toBe(256);
-		expect(slots![1].stamp).toBe(true);
+		// tileable = 0 needs no case of its own: tiles = 1 is one zone window
+		expect(slots![1].tiles).toBe(1);
+		expect(slots![1].sheet).toBe('CamHills-Small');
 	});
 
 	it('refuses a patch whose mask the client does not ship', () => {
@@ -121,7 +122,7 @@ describe('groundShader', () => {
 		expect(body).toContain('texture2D(uGroundMask1, vGroundUv)');
 	});
 
-	it('repeats a tileable sheet tiles times and stamps the zone-wide one', () => {
+	it('repeats a sheet tiles times across the zone', () => {
 		const slots = groundSlots(
 			[
 				layer({ texture: 'LightGrass2', tiles: 256 }),
@@ -133,13 +134,14 @@ describe('groundShader', () => {
 			slots.length,
 			slots.map((slot) => slot.maskIndex)
 		);
-		expect(declarations).toContain('return t * shape.y;');
-		expect(declarations).toContain(`(uv + uGroundPatch) / ${PATCH_GRID}.0;`);
-		// the layer sheets read (u, 1 - v) — row 0 north, flipY off
+		// one zone uv for every layer: ((patch + uv) / 8) * tiles
 		expect(declarations).toContain(
-			'vec2 groundSheetUv() { return vec2(vGroundUv.x, 1.0 - vGroundUv.y); }'
+			`(vec2(vGroundUv.x, 1.0 - vGroundUv.y) + uGroundPatch) / ${PATCH_GRID}.0;`
 		);
-		// every layer goes through the tiling helper, which takes the stamp flag
+		expect(declarations).toContain('return t * shape.y;');
+		// the layer sheets read (u, 1 - v) — row 0 north, flipY off
+		expect(declarations).toContain('1.0 - vGroundUv.y');
+		// every layer goes through the same helper; the tiles ride in the shape
 		expect(body).toContain('groundLayerUv(uGroundTransform0, uGroundShape0)');
 		expect(body).toContain('groundLayerUv(uGroundTransform1, uGroundShape1)');
 	});

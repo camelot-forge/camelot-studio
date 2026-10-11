@@ -2,6 +2,8 @@
 // save screenshots (plain, overlays, and a selected+centred fixture) plus the
 // scene stats.
 // Usage: node scripts/world_shot.mjs [base-url] [zone-name] [out-dir] [x y | fixture-name]
+// Env: SHOT_WIDTH / SHOT_HEIGHT shrink the viewport (the software WebGL path
+// gets expensive once the ground samples its sheets without mipmaps).
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
 
@@ -11,13 +13,16 @@ const outDir = process.argv[4] ?? process.env.SHOT_DIR ?? '/tmp/camelot-world';
 const focusX = Number.isFinite(Number(process.argv[5])) ? Number(process.argv[5]) : null;
 const focusY = Number.isFinite(Number(process.argv[6])) ? Number(process.argv[6]) : null;
 const azimuth = Number.isFinite(Number(process.argv[7])) ? Number(process.argv[7]) : null;
+const distance_ = Number.isFinite(Number(process.argv[8])) ? Number(process.argv[8]) : null;
 const fixtureName = process.argv[5] && focusX === null ? process.argv[5] : null;
+const width = Number(process.env.SHOT_WIDTH ?? 1280);
+const height = Number(process.env.SHOT_HEIGHT ?? 800);
 mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({
 	args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--use-gl=angle']
 });
-const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+const page = await browser.newPage({ viewport: { width, height } });
 page.on('console', (msg) => {
 	if (msg.type() === 'error') console.log('console error:', msg.text());
 });
@@ -40,7 +45,11 @@ console.log('scene after settle:', JSON.stringify(after));
 const slug = zoneName.replace(/[^a-z0-9_.-]/gi, '_');
 if (focusX !== null && focusY !== null) {
 	if (azimuth !== null) {
-		await page.evaluate(`window.__worldLook(${focusX}, ${focusY}, ${azimuth})`);
+		await page.evaluate(
+			distance_ === null
+				? `window.__worldLook(${focusX}, ${focusY}, ${azimuth})`
+				: `window.__worldLook(${focusX}, ${focusY}, ${azimuth}, ${distance_})`
+		);
 	} else {
 		await page.evaluate(`window.__worldFocus(${focusX}, ${focusY}, 8000)`);
 	}
