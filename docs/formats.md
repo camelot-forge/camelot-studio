@@ -589,3 +589,59 @@ texture, full chain known, mount rig = good anim regression test).
    idle/attack intact. Never run without a backup.
 Simpler static alternative first: an item on a `GROUND` node
 (e.g. `items/jackolantern-GROUND.NIF`).
+
+## 11. Zones (the world)
+
+Measured 2026-10-11 on the OpenDAoC 1.127 client. The reader is
+`core/camelot/zones.py`; the probe and its numbers are in the private
+workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
+
+- `zones/zones.mpk` → **`zones.dat`**: the client's own world index, a text
+  INI (BOM, CRLF) with **483 `[zoneNNN]` and 358 `[regionNNN]`** sections. A
+  comment may be attached to a header (`[zone245];Hall of the Corrupt`), so a
+  header ends at its first `]`. A zone carries `name`, `region`, `type`
+  (0 normal, 1 city, 2 dungeon, 4 skycity), `enabled`, `entry_music`, and its
+  world rectangle in 8192-unit cells: `region_offset_x/y`, `width`, `height`.
+- **The world grid**: a zone spans `offset × 8192 … + size × 8192`, i.e.
+  65536 units; zone-local coordinates are `0..65535`. The server builds the
+  same rectangle from its DB (`OffX * 8192`, `WorldMgr.cs`), and
+  `Zone.ZoneSkinID` is the id the client is sent.
+- A zone's data lives in archives named after it: `zones/zoneNNN/datNNN.mpk`
+  (+ `csvNNN`, `terNNN`, `lodNNN`, `texNNN`). Which exist depends on the
+  type: an outdoor zone ships `terrain.pcx`, `offset.pcx`, `fixtures.csv`,
+  `nifs.csv`, `bound.csv`, `sector.dat`, `zonejump.csv` (plus `densemap`,
+  `grassmap`, `shademap`, `shadow` `.pcx`); a dungeon ships
+  `dungeon.chunk/.place/.prop/.water` and `portals.csv`; a city `city.csv`
+  and `adjacency.csv`. `dat` and `csv` carry identical bytes in the zones
+  measured; which one the client reads first is unmeasured (W-1).
+- **`terrain.pcx` / `offset.pcx`**: 8-bit, one-plane, RLE PCX, 256×256 for a
+  65536-unit zone. The ground height is
+  `terrain[y][x] × scalefactor + offset[y][x] × offsetfactor` — factors per
+  zone in `sector.dat`'s `[terrain]` (8 and 32 in Camelot Hills, 8 and 48 in
+  Vale of Mularn) — sampled **row-major, bilinear across each subtile's
+  diagonal** (`xPercent + yPercent <= 1` picks the first triangle).
+  Calibrated against the client's own `fixtures.csv`: exact (median error 0-1)
+  on the zones whose rows are ground-placed.
+- **`fixtures.csv`**: two header rows; `ID, NIF #, Textual Name, X, Y, Z, A,
+  Scale, Collide, Radius, Animate, Ground, Flip, Cave, Unique Id` (newer
+  files add 3D angle/axis columns). Coordinates are zone-local, `A` a 12-bit
+  heading, `Scale` a percentage. **`Z = 0` with `Ground = 1` means "drop it on
+  the terrain"** (Midgard's zones ship most rows that way); a non-zero `Z` may
+  be authored on a structure — Camelot Hills' rows sit ~600-1000 above the
+  terrain and only 2.5 % match the heightmap — so an editor should emit
+  `z = 0` + `Ground = 1` rather than copy an authored value.
+- **`nifs.csv`**: the zone's object catalog (`NIF, Textual Name, Filename,
+  Only, Shadow, Color, Animate, Collide, Ground, MinAngle, MaxAngle,
+  MinScale, MaxScale, Radius, Unique, Local, Terrain`); `fixtures.csv`'s
+  `NIF #` indexes it.
+- **`bound.csv`**: `id, count, x,y pairs…` — the walkable polygons.
+- **`sector.dat`**: INI — `[sectorsize]` (8×8), `[fog]`, `[sky]`, `[terrain]`
+  (factors, horizon, clouds), `[jumpdefs]`/`[jumpNN]` (named jump points),
+  `[waterdefs]`/`[riverNN]` (water: `height`, `flow`, `texture`,
+  `bankpoints`, `leftNN`/`rightNN` in **256-unit pixels** — `pixel × 256` is
+  zone-local), `[holes]`, `[forest]`, `[mongens]`.
+- **Object meshes**: `zones/Nifs/<name>.npk` is an **MPAK containing one
+  NetImmerse 4.2.2.0 NIF** (the studio exports it to glTF today); `.nhd` is a
+  companion (header `NHD\1` plus the `.nif` name) whose role — collision or
+  ground — is unmeasured. `Dnifs/` holds the dungeon set, and a zone's own
+  `Nifs/` overrides it.

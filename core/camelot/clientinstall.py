@@ -168,22 +168,12 @@ def resolve_existing(client_dir: str, rel: str) -> str | None:
 
     The extraction case mismatch is real (four corpus tests trip on it), so a
     pack built on one filesystem must find the file the client actually reads
-    on another.
+    on another. The rule lives in `camelot.clientfs`.
     """
-    current = client_dir
-    for part in rel.split("/"):
-        try:
-            entries = os.listdir(current)
-        except OSError:
-            return None
-        if part in entries:
-            current = os.path.join(current, part)
-            continue
-        matches = [name for name in entries if name.casefold() == part.casefold()]
-        if len(matches) != 1:
-            return None
-        current = os.path.join(current, matches[0])
-    return current if os.path.isfile(current) else None
+    from . import clientfs
+
+    path = clientfs.resolve(client_dir, rel)
+    return path if path is not None and os.path.isfile(path) else None
 
 
 def _resolve_for_write(client_dir: str, rel: str) -> str:

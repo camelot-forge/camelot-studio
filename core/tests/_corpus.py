@@ -16,21 +16,14 @@ import os
 
 
 def resolve(client_dir: str, rel: str) -> str:
-    """The on-disk path *rel* names, matched case-insensitively."""
-    current = client_dir
-    for part in rel.split("/"):
-        try:
-            entries = os.listdir(current)
-        except OSError:
-            return os.path.join(client_dir, *rel.split("/"))
-        if part in entries:
-            current = os.path.join(current, part)
-            continue
-        matches = [name for name in entries if name.casefold() == part.casefold()]
-        if len(matches) != 1:
-            return os.path.join(client_dir, *rel.split("/"))
-        current = os.path.join(current, matches[0])
-    return current
+    """The on-disk path *rel* names, matched case-insensitively.
+
+    The rule itself lives in `camelot.clientfs` (the same one the installer
+    uses); the fallback here still names the path the caller asked for.
+    """
+    from camelot import clientfs
+
+    return clientfs.resolve(client_dir, rel) or os.path.join(client_dir, *rel.split("/"))
 
 
 def figure_path(client_dir: str, name: str) -> str:

@@ -171,6 +171,17 @@ carried — and `mod build` refuses a `monsters.csv` add at an id the measured
 server content references (`--used-models` replaces the list with a server's
 own export).
 
+**The client's world is readable** (Phase 6.0, 2026-10-11): `camelot/zones.py`
+reads the client's own zone index (`zones.dat`: 483 zones, 358 regions, each
+with the world rectangle in 8192-unit cells the server also builds), the
+terrain heightmaps (256×256 PCX plus the offset map, factors per zone from
+`sector.dat`), the object placements (`fixtures.csv`), the catalog, bounds,
+jumps and water — and `height_at()` reproduces the client's own sampling
+exactly (calibrated against the client's `fixtures.csv`: median error 0-1 on
+the ground-placed zones). The world editor's design is the private
+workspace's `notes/phase6-world-editor.md`; the formats are in
+`formats.md` §11.
+
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the
 1.127 client under Wine: a rewritten container, modified table data and a new
 model id all reach the world, and the loader's server half deploys the
@@ -226,11 +237,11 @@ Dated baselines: the V2 corpus run of 2026-10-07 was 390 passed / 4 failed
 expectations, one Ettin bbox golden — await a data/test decision). On the
 test machine's **completed corpus** (a pristine copy of the OpenDAoC 1.127
 client — the recipe and its hashes are in the workspace's
-`notes` §2.3) the suite is **499 passed / 0 failed** as of
-2026-10-11, with `OPENDAOC_RACE_SQL` pointing at OpenDAoC-Database's
-`race.sql`; without it one test skips. The web suite is 38 passed / 3 skipped,
-`pnpm check` reports zero errors and three existing warnings (measured on the
-test machine, 2026-10-11).
+`notes` §2.3) the suite is **535 passed / 0 failed** as of
+2026-10-11 (Phase 6.0's zone layer included), with `OPENDAOC_RACE_SQL`
+pointing at OpenDAoC-Database's `race.sql`; without it one test skips. The web
+suite is 38 passed / 3 skipped, `pnpm check` reports zero errors and three
+existing warnings (measured on the test machine, 2026-10-11).
 
 ## Known limits
 
