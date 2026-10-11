@@ -7,10 +7,9 @@ the Z-up axis fix (the old "early 4.x is X-down" goldens locked them lying
 down); the rest date from the original harness.
 """
 
-import os
-
 import pytest
 from _bbox import feet_below_pelvis, skinned_world_bbox, world_bbox
+from _corpus import figure_path
 
 from camelot.gltf import export_gltf
 
@@ -30,7 +29,7 @@ GOLDEN: dict[str, dict] = {
 
 def _export(client_dir, name, tmp_path, **kwargs):
     prefix = str(tmp_path / "model")
-    export_gltf(os.path.join(client_dir, "figures", name), prefix, verbose=False, **kwargs)
+    export_gltf(figure_path(client_dir, name), prefix, verbose=False, **kwargs)
     return prefix + ".gltf", prefix + ".bin"
 
 

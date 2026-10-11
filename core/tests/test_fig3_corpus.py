@@ -11,6 +11,7 @@ import struct
 
 import numpy as np
 import pytest
+from _corpus import figure_path
 
 from camelot import fig3, figure, gamedata
 from camelot.gltf import _fill_partition
@@ -167,9 +168,7 @@ def test_prepare_swaps_the_classic_head(client_dir):
 
 def test_prepare_preserves_single_sided_hair_flag(client_dir):
     name = gamedata.figure_name_for_desc(client_dir, "Briton Female")
-    prepared = figure.prepare(
-        client_dir, os.path.join(client_dir, "figures", name + ".NIF")
-    )
+    prepared = figure.prepare(client_dir, figure_path(client_dir, name + ".NIF"))
     assert prepared is not None
     _data, textures = prepared
     hair = next(tex for tex in textures if tex.slot == "Hair")

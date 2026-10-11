@@ -3,6 +3,7 @@
 import os
 
 import pytest
+from _corpus import figure_path
 
 from camelot.gltf import export_gltf, map_kfa_to_nodes
 from camelot.kfa import load_kfa
@@ -322,7 +323,7 @@ def test_rabbit_skips_rig_helpers(client_dir, tmp_path):
     assert not _is_skipped_mesh("Editable Poly", 180)
     assert not _is_skipped_mesh("body", 22)
     assert not _is_skipped_mesh("body", None)
-    nif = os.path.join(client_dir, "figures", "amb_rabbit.NIF")
+    nif = figure_path(client_dir, "amb_rabbit.NIF")
     stats = export_gltf(nif, str(tmp_path / "rabbit"), verbose=False, texture=None, textures=[])
     assert stats["meshes"] == 1
     assert stats["skipped"] == 37
