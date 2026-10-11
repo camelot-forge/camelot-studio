@@ -83,31 +83,55 @@ export function parseTerrain(buffer: ArrayBuffer): TerrainData {
 	return { width, height, terrainFactor, offsetFactor, terrain, offset, heightAt };
 }
 
-/** A zone-local point in scene space (glTF Y-up: the exporter maps NIF
- * (x, y, z) to (x, z, -y), so DAoC's +y is scene -Z). */
-export function zoneToScene(x: number, y: number, z: number): [number, number, number] {
-	return [x, z, -y];
-}
-
-/** A fixture's 12-bit heading as a scene yaw, radians about +Y.
+/** A zone-local point in scene space.
  *
- * The server's own grid: heading 0 points at +y, 1024 at -x, 2048 at -y,
- * 3072 at +x (`Point2D.GetHeading`, OpenDAoC). The mesh must be authored
- * facing NIF +y for the sign to hold — visual check pending (report, 6.2).
- */
-export function headingYaw(angle: number): number {
-	return ((angle % 4096) * Math.PI * 2) / 4096;
+ * The client's zone frame is left-handed: `+x` is east, **`+y` is south**,
+ * `+z` up (the server's own compass, `Point2D.GetPointFromHeading`: heading
+ * 0 at `+y`, `where.cs` calling it "South"; 1024 at `-x`, "West"). A
+ * right-handed three.js scene therefore cannot use a rotation to show it —
+ * that mirrors the world. Keep `x` and `up`, flip `y`: DAoC's `+y` (south)
+ * is scene **+Z**, and a camera south of its target looks north with north
+ * up, east right — the client's own map orientation. The zone meshes are
+ * exported with the same reflection (`nifutil.WORLD_AXIS_CONVERSION`). */
+export function zoneToScene(x: number, y: number, z: number): [number, number, number] {
+	return [x, z, y];
 }
 
-/** The Z a fixture is drawn at. The file's `Z` when it carries one; a
- * `Ground = 1` row shipped as `Z = 0` drops onto the terrain — the client's
- * own convention (W-3 will confirm the client honours `Z` when both are set).
+/** A fixture's heading as a scene yaw, radians about +Y.
+ *
+ * The corpus settles the unit: `fixtures.csv`'s `A` runs 0..359 with every
+ * human value on top (0/90/180/45/270/315) — **degrees**, not the server's
+ * 12-bit grid (`door.Heading` is 0..4095; 1024 = 90° there). The sense is
+ * counter-clockwise in DAoC's (x, y) plane, measured on the bridges: each
+ * one's long axis (from its mesh's own vertices) lies along its river's
+ * bank-to-bank direction, and `A` matches that rotation sign across a dozen
+ * rows in six zones (`notes/heading-convention.py`). `A = 0` faces
+ * `+y` = south — the client's compass — and 90° faces `-x` = west.
+ *
+ * The plane is mirrored into the scene (`+y` -> `+Z`), which reverses the
+ * rotation's sense: the scene yaw is `-A` about +Y, which sends the mesh's
+ * own `+y` (its forward) to `+Z` at `A = 0` and to `-X` (west) at `A = 90`,
+ * as the client places it. */
+export function headingYaw(angle: number): number {
+	const yaw = -(((angle % 360) * Math.PI * 2) / 360);
+	// -0 is a different value to Object.is; callers compare yaws exactly.
+	return yaw === 0 ? 0 : yaw;
+}
+
+/** The Z a fixture is drawn at.
+ *
+ * `Ground = 1` means "stand it on the terrain" — the client drops the row
+ * wherever its authored `Z` sits, and the corpus shows why it must: Camelot
+ * Hills ships its pines at `Z = 1600` where the terrain is 1984 (384 *under*
+ * the ground), and in game they stand on the ground (user comparison,
+ * 2026-10-11). `Ground = 0` rows carry a deliberate height (walls, decks)
+ * and keep their `Z`.
  */
 export function fixtureZ(
 	data: TerrainData,
 	fixture: { x: number; y: number; z: number; ground: boolean }
 ): number {
-	if (fixture.ground && fixture.z === 0) return data.heightAt(fixture.x, fixture.y);
+	if (fixture.ground) return data.heightAt(fixture.x, fixture.y);
 	return fixture.z;
 }
 
@@ -134,9 +158,10 @@ export function patchGeometry(data: TerrainData, patchX: number, patchY: number)
 			const v = j * side + i;
 			positions[v * 3] = x;
 			positions[v * 3 + 1] = h;
-			positions[v * 3 + 2] = -y;
+			positions[v * 3 + 2] = y;
 			// uv within the patch; the sheet is "the ground seen from above"
-			// (north up), so image row 0 is the patch's highest y.
+			// (north up), so image row 0 is the patch's north edge — its lowest
+			// y, since `+y` is south. Row 0 lands here on the `v = 1` side.
 			uvs[v * 2] = (x - patchX * ZONE_UNIT) / ZONE_UNIT;
 			uvs[v * 2 + 1] = 1 - (y - patchY * ZONE_UNIT) / ZONE_UNIT;
 		}
@@ -149,14 +174,16 @@ export function patchGeometry(data: TerrainData, patchX: number, patchY: number)
 			const b = a + 1;
 			const c = a + side;
 			const d = c + 1;
-			// Counter-clockwise seen from +Y in scene space; the diagonal is
-			// b–c, the one the client's sampling splits on.
+			// Counter-clockwise seen from +Y in scene space (the terrain face
+			// points up); the diagonal is b–c, the one the client's sampling
+			// splits on. The winding is the mirror of the client's own (x, y)
+			// winding, as `zoneToScene` mirrors the plane.
 			indices[o++] = a;
-			indices[o++] = b;
 			indices[o++] = c;
 			indices[o++] = b;
+			indices[o++] = b;
+			indices[o++] = c;
 			indices[o++] = d;
-			indices[o++] = c;
 		}
 	}
 	return { positions, uvs, indices };

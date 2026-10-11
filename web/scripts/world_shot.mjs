@@ -1,14 +1,17 @@
 // The /world verification shot: open the daemon's viewer, load one zone, and
-// save screenshots (plain, then with the overlays on) plus the scene stats.
-// Usage: node scripts/world_shot.mjs [base-url] [zone-name] [out-dir] [focus-x focus-y]
+// save screenshots (plain, overlays, and a selected+centred fixture) plus the
+// scene stats.
+// Usage: node scripts/world_shot.mjs [base-url] [zone-name] [out-dir] [x y | fixture-name]
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
 
 const base = process.argv[2] ?? 'http://127.0.0.1:8760';
 const zoneName = process.argv[3] ?? 'Camelot Hills';
 const outDir = process.argv[4] ?? process.env.SHOT_DIR ?? '/tmp/camelot-world';
-const focusX = process.argv[5] ? Number(process.argv[5]) : null;
-const focusY = process.argv[6] ? Number(process.argv[6]) : null;
+const focusX = Number.isFinite(Number(process.argv[5])) ? Number(process.argv[5]) : null;
+const focusY = Number.isFinite(Number(process.argv[6])) ? Number(process.argv[6]) : null;
+const azimuth = Number.isFinite(Number(process.argv[7])) ? Number(process.argv[7]) : null;
+const fixtureName = process.argv[5] && focusX === null ? process.argv[5] : null;
 mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({
@@ -36,7 +39,11 @@ console.log('scene at load:', JSON.stringify(stats));
 console.log('scene after settle:', JSON.stringify(after));
 const slug = zoneName.replace(/[^a-z0-9_.-]/gi, '_');
 if (focusX !== null && focusY !== null) {
-	await page.evaluate(`window.__worldFocus(${focusX}, ${focusY}, 8000)`);
+	if (azimuth !== null) {
+		await page.evaluate(`window.__worldLook(${focusX}, ${focusY}, ${azimuth})`);
+	} else {
+		await page.evaluate(`window.__worldFocus(${focusX}, ${focusY}, 8000)`);
+	}
 	await page.waitForTimeout(700);
 }
 await page.screenshot({ path: `${outDir}/${slug}.png` });
@@ -48,5 +55,33 @@ for (const layer of ['bounds', 'jumps']) {
 await page.waitForTimeout(500);
 await page.screenshot({ path: `${outDir}/${slug}-overlays.png` });
 console.log(`shot -> ${outDir}/${slug}-overlays.png`);
+
+if (fixtureName) {
+	// Select the first fixture of that name through the page's own hook, then
+	// recentre — the click path cannot be scripted reliably without knowing
+	// where the object is on screen.
+	const found = await page.evaluate(`(() => {
+		const stats = window.__world;
+		return stats ? stats.fixtures : 0;
+	})()`);
+	console.log('fixtures in scene:', found);
+	const picked = await page.evaluate(`(async () => {
+		const zone = await fetch('${base}/api/v1/world/zone/' + window.__world.zone).then((r) => r.json());
+		const hit = zone.fixtures.find((f) => f.name.toLowerCase().includes(${JSON.stringify(
+			fixtureName.toLowerCase()
+		)}));
+		if (!hit) return null;
+		window.__worldSelect(hit.id);
+		return hit;
+	})()`);
+	if (picked) {
+		await page.keyboard.press('f');
+		await page.waitForTimeout(700);
+		await page.screenshot({ path: `${outDir}/${slug}-selected.png` });
+		console.log(`shot -> ${outDir}/${slug}-selected.png (${picked.name} #${picked.id})`);
+	} else {
+		console.log(`no fixture named ${fixtureName}`);
+	}
+}
 
 await browser.close();

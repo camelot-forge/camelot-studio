@@ -331,10 +331,7 @@ def test_the_corpus_mesh_carries_one_sheet_per_shape():
         ext = mesh.get("extensions", {}).get("CS_camelot_texture")
         if ext:
             names.add(ext["name"].lower())
-    assert {"britlog.dds", "brtwd01.dds"} <= names
-    # Every mesh with a sheet must also carry the extension: a shape without
-    # its own texture falls back to the slot map, not to nothing.
-    assert len(names) >= 2
+    assert {"britlog.dds", "brtwd01.dds", "b_stone2.dds"} <= names
 
     # The pine's sheet is alpha-cut art: the mesh must say so (the viewer
     # alpha-tests it) and stay a single sheet.
@@ -347,6 +344,34 @@ def test_the_corpus_mesh_carries_one_sheet_per_shape():
         if "extensions" in mesh
     ]
     assert sheets and all(sheet.get("alpha") for sheet in sheets)
+
+
+@corpus
+def test_the_corpus_mesh_drops_the_far_lod_and_collision_subtrees():
+    """The client draws one `NiLODNode` level and no collision hull; a viewer
+    that draws them all paints a second, coarser copy over every object.
+
+    The guard tower's near level names its parts `roof`/`tower-exterior` and
+    the far level `roof01`/`tower-exterior01` (measured); the tavern keeps
+    its visible meshes and loses every `collision *`/`collidee` one."""
+    import json
+
+    client = client_for(CORPUS)
+
+    def glb_meshes(zone_id: int, name: str) -> list[str]:
+        response = client.get(f"/api/v1/world/zone/{zone_id}/mesh/{name}")
+        assert response.status_code == 200
+        gltf = json.loads(response.content[20 : 20 + int.from_bytes(
+            response.content[12:16], "little")])
+        return [mesh.get("name", "") for mesh in gltf.get("meshes", [])]
+
+    tower = glb_meshes(0, "b-rndtw2.nif")
+    assert len(tower) == 5          # the near level's five parts (the file
+                                    # ships 18: 9 collision/climb + 5 far)
+    tavern = glb_meshes(0, "btavern.nif")
+    assert tavern and not any("far" in m.lower() for m in tavern)
+    assert not any("collision" in m.lower() or "collidee" in m.lower() for m in tavern)
+    assert any(m.lower().startswith("btavern2intnear") for m in tavern)
 
 
 @corpus

@@ -37,6 +37,18 @@ interface LoadedMesh {
 	model: Awaited<ReturnType<typeof loadFromGlb>>;
 }
 
+/** One instanced group: the mesh drawn and the fixtures it stands for, in
+ * instance order — what a click raycasts against (Phase 6.3's selection). */
+interface PickGroup {
+	mesh: THREE.InstancedMesh;
+	fixtures: WorldFixture[];
+}
+
+export interface Picked {
+	fixture: WorldFixture;
+	point: THREE.Vector3;
+}
+
 export class WorldViewer {
 	private canvas: HTMLCanvasElement;
 	private renderer: THREE.WebGLRenderer;
@@ -53,6 +65,9 @@ export class WorldViewer {
 	private meshCache = new Map<string, LoadedMesh>();
 	private terrain: TerrainData | null = null;
 	private texturedPatches = 0;
+	private picks: PickGroup[] = [];
+	private marker = new THREE.Group();
+	private selected: WorldFixture | null = null;
 	private token = 0;
 	private frame = 0;
 
@@ -73,7 +88,32 @@ export class WorldViewer {
 		const sun = this.scene.children[this.scene.children.length - 1] as THREE.DirectionalLight;
 		sun.position.set(0.55, 1, 0.35).multiplyScalar(50000);
 		for (const group of Object.values(this.groups)) this.scene.add(group);
+		this.marker.visible = false;
+		this.buildMarker();
+		this.scene.add(this.marker);
 		this.resize();
+	}
+
+	private buildMarker(): void {
+		const ring = new THREE.Mesh(
+			new THREE.RingGeometry(150, 210, 40),
+			new THREE.MeshBasicMaterial({
+				color: 0x67e8f9,
+				side: THREE.DoubleSide,
+				transparent: true,
+				opacity: 0.9,
+				depthTest: false
+			})
+		);
+		ring.rotation.x = -Math.PI / 2;
+		ring.position.y = 12;
+		const pin = new THREE.Mesh(
+			new THREE.ConeGeometry(70, 280, 12),
+			new THREE.MeshBasicMaterial({ color: 0x67e8f9, depthTest: false })
+		);
+		pin.position.y = 1000;
+		pin.rotation.x = Math.PI; // point down, at the object
+		this.marker.add(ring, pin);
 	}
 
 	setToggles(toggles: WorldToggles): void {
@@ -99,6 +139,53 @@ export class WorldViewer {
 			jumps: this.groups.jumps.children.length,
 			sheets: this.texturedPatches
 		};
+	}
+
+	// -- selection and focus (the map-editor ergonomics, 6.3's first slice) -----
+
+	/** The fixture under a click, in normalised device coordinates. */
+	pick(ndcX: number, ndcY: number): Picked | null {
+		const ray = new THREE.Raycaster();
+		ray.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+		const hits = ray.intersectObjects(this.groups.fixtures.children, false);
+		for (const hit of hits) {
+			const group = this.picks.find((entry) => entry.mesh === hit.object);
+			if (!group || hit.instanceId === undefined) continue;
+			const fixture = group.fixtures[hit.instanceId];
+			if (fixture) return { fixture, point: hit.point.clone() };
+		}
+		return null;
+	}
+
+	/** Mark a fixture: a ring at its feet and a pin above it, so a small
+	 * object stays findable from a zone-wide camera. */
+	select(fixture: WorldFixture | null): void {
+		this.selected = fixture;
+		if (!fixture || !this.terrain) {
+			this.marker.visible = false;
+			return;
+		}
+		const placement = fixturePlacement(this.terrain, fixture);
+		this.marker.position.set(...placement.position);
+		this.marker.visible = true;
+	}
+
+	get selection(): WorldFixture | null {
+		return this.selected;
+	}
+
+	/** Recentre the camera on a fixture (Unity's F): close, slightly above. */
+	focusFixture(fixture: WorldFixture, distance = 1400): void {
+		if (!this.terrain) return;
+		const placement = fixturePlacement(this.terrain, fixture);
+		const target = new THREE.Vector3(...placement.position);
+		this.controls.target.copy(target);
+		this.camera.position.set(
+			target.x + distance * 0.8,
+			target.y + distance * 0.55,
+			target.z + distance
+		);
+		this.controls.update();
 	}
 
 	resize(): void {
@@ -129,6 +216,9 @@ export class WorldViewer {
 	}
 
 	private clear(): void {
+		this.picks = [];
+		this.selected = null;
+		this.marker.visible = false;
 		for (const group of Object.values(this.groups)) {
 			for (const child of [...group.children]) {
 				group.remove(child);
@@ -266,6 +356,7 @@ export class WorldViewer {
 			instanced.frustumCulled = false; // the instances span the zone
 			instanced.name = `fixtures-${mesh.name || 'mesh'}`;
 			this.groups.fixtures.add(instanced);
+			this.picks.push({ mesh: instanced, fixtures });
 		}
 	}
 
@@ -289,7 +380,7 @@ export class WorldViewer {
 		for (const bound of zone.bounds) {
 			if (bound.points.length < 2) continue;
 			const points = bound.points.map(
-				([x, y]) => new THREE.Vector3(x, data.heightAt(x, y) + OVERLAY_LIFT, -y)
+				([x, y]) => new THREE.Vector3(x, data.heightAt(x, y) + OVERLAY_LIFT, y)
 			);
 			const geometry = new THREE.BufferGeometry().setFromPoints(points);
 			const line = new THREE.LineLoop(geometry, new THREE.LineBasicMaterial({ color: 0xffd166 }));
@@ -312,7 +403,7 @@ export class WorldViewer {
 					[rx1, ry1],
 					[lx1, ly1]
 				];
-				for (const [x, y] of quad) positions.push(x, river.height + OVERLAY_LIFT, -y);
+				for (const [x, y] of quad) positions.push(x, river.height + OVERLAY_LIFT, y);
 			}
 			const geometry = new THREE.BufferGeometry();
 			geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -332,7 +423,7 @@ export class WorldViewer {
 		for (const jump of zone.jumps) {
 			const geometry = new THREE.ConeGeometry(ZONE_UNIT / 64, ZONE_UNIT / 16, 12);
 			const marker = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x67e8f9 }));
-			marker.position.set(jump.x, jump.z + ZONE_UNIT / 32, -jump.y);
+			marker.position.set(jump.x, jump.z + ZONE_UNIT / 32, jump.y);
 			marker.name = `jump-${jump.name}`;
 			this.groups.jumps.add(marker);
 		}
@@ -341,8 +432,25 @@ export class WorldViewer {
 	/** Move the camera to a zone-local point (the screenshot harness). */
 	focus(x: number, y: number, distance = ZONE_UNIT * 1.5): void {
 		const z = this.terrain ? this.terrain.heightAt(x, y) : 0;
-		this.controls.target.set(x, z, -y);
-		this.camera.position.set(x + distance * 0.7, z + distance * 0.55, -y + distance);
+		this.controls.target.set(x, z, y);
+		this.camera.position.set(x + distance * 0.7, z + distance * 0.55, y + distance);
+		this.controls.update();
+	}
+
+	/** Stand on a circle around a zone-local point and look at it: azimuth 0 is
+	 * the scene's +Z — the client's *south* (its +y is scene +Z) — 90 is east,
+	 * 180 north. The screenshot harness uses it to see a structure from a named
+	 * side; north stands on a north-up view, framing it as the game does. */
+	lookFrom(x: number, y: number, azimuthDeg: number, distance = ZONE_UNIT * 0.45): void {
+		if (!this.terrain) return;
+		const z = this.terrain.heightAt(x, y);
+		const radians = (azimuthDeg * Math.PI) / 180;
+		this.controls.target.set(x, z, y);
+		this.camera.position.set(
+			x + Math.sin(radians) * distance,
+			z + distance * 0.4,
+			y + Math.cos(radians) * distance
+		);
 		this.controls.update();
 	}
 
@@ -357,7 +465,9 @@ export class WorldViewer {
 			}
 		}
 		const mid = (minZ + maxZ) / 2;
-		const center = new THREE.Vector3(ZONE_SIZE / 2, mid, -ZONE_SIZE / 2);
+		// North up, east right: the camera stands south of the zone centre
+		// (scene +Z is the client's south) and looks north.
+		const center = new THREE.Vector3(ZONE_SIZE / 2, mid, ZONE_SIZE / 2);
 		this.controls.target.copy(center);
 		this.camera.position.set(center.x, mid + ZONE_SIZE * 0.55, center.z + ZONE_SIZE * 0.75);
 		this.controls.update();

@@ -51,7 +51,8 @@ result.
 Composing the node tree, **every DAoC exporter (NetImmerse 4.1.0.12 through
 Gamebryo 10.1) authors Z-up in NIF world space**. The glTF conversion is
 therefore always `(x,y,z) → (x, z, −y)` (`nifutil.mat4_axis`, the synthetic
-`__axes__` root node).
+`__axes__` root node); a zone object takes the *world* conversion instead (§11
+"The world frame is left-handed").
 
 Evidence (row-major reading): for every biped the feet sit lowest along +Z and
 the pelvis→neck direction is +Z — Zombie.NIF (4.1.0.12), Ettin/Ogre/Fomor
@@ -626,8 +627,9 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   on the zones whose rows are ground-placed.
 - **`fixtures.csv`**: two header rows; `ID, NIF #, Textual Name, X, Y, Z, A,
   Scale, Collide, Radius, Animate, Ground, Flip, Cave, Unique Id` (newer
-  files add 3D angle/axis columns). Coordinates are zone-local, `A` a 12-bit
-  heading, `Scale` a percentage. **`Z = 0` with `Ground = 1` means "drop it on
+  files add 3D angle/axis columns). Coordinates are zone-local, `A` a heading
+  in **degrees** (0..359; 1 row out of 7 000 above 360, measured 2026-10-11 —
+  not the server's 12-bit `door.Heading`), `Scale` a percentage. **`Z = 0` with `Ground = 1` means "drop it on
   the terrain"** (Midgard's zones ship most rows that way); a non-zero `Z` may
   be authored on a structure — Camelot Hills' rows sit ~600-1000 above the
   terrain and only 2.5 % match the heightmap — so an editor should emit
@@ -677,12 +679,58 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   does **not** emulate the layer composition yet (open item, §6.5).
   `lodXX-YY.dds` (256²) is `texXX-YY`'s lower-detail copy, `texXX-YY.bmp` an
   8-bit indexed companion.
-- **A fixture's heading** is the server's 12-bit grid: 0 points at +y, 1024
-  at −x, 2048 at −y, 3072 at +x (`Point2D.GetHeading`). A fixture's `Z` is
+- **A fixture's heading** is **degrees** (0..359), counter-clockwise in the
+  (x, y) plane — measured on the bridges of six zones: each one's long axis
+  (from its mesh's own vertices) lies along its river's bank-to-bank
+  direction and `A` matches that rotation
+  (`notes/heading-convention.py`). The plane's compass is the client's
+  own (§11 "The world frame is left-handed"): `A = 0` faces `+y` = **south**,
+  `A = 90` faces `−x` = west — the same sense as the server's 12-bit grid,
+  which is nevertheless a **different** field (`door.Heading`, 0..4095; 0 at
+  `+y`, 1024 at `−x`, `Point2D.GetHeading`) — mixing the two turns every
+  fixture by A/11 and looks like "the rotation is ignored". A fixture's `Z` is
   used as authored unless `Z = 0` with `Ground = 1`, which drops it on the
   terrain; whether the client honours a non-zero `Z` when `Ground` is set
   (Camelot Hills' authored rows) is **not yet measured** — the W-3
   experiment settles it.
+- **A world object ships one visible level, not three**: every zone object's
+  visible branch is a `NiLODNode` with a `(near, far)` range per child *in
+  file order* (the tavern lists the far child first, the guard tower the
+  near one) and its collision hulls (`collisionswitch`'s children:
+  `collision …`, `collidee …`, `climb …`) beside it. The client's own string
+  table carries those names (`collidee`, `collisionswitch`,
+  `!collidee_PlugTier%d`), so the name is the engine's rule: draw the level
+  whose range starts at 0, drop the rest. Drawing them all paints a second,
+  coarser copy over every object (measured on the zone corpus; the exporter
+  does this under `world_object=True`, dropping the tavern from 80 meshes to
+  38 and the guard tower from 18 to 5).
+- **The world frame is left-handed**: zone-local `+x` is **east**, `+y` is
+  **south**, `+z` up — `x × y` is *down*. Measured 2026-10-11 on two
+  independent sources, not guessed: the server's own compass
+  (`Point2D.GetPointFromHeading` puts heading 0 at `+y`; `where.cs`/`yell.cs`
+  translate 0/1024/2048/3072 to South/West/North/East), and the in-game
+  screenshots (facing south from the keep's north approach, the gate — its
+  mesh's `−y` side — faces the player, the crop field sits east, the walled
+  graveyard west). A **rotation** into a right-handed renderer is therefore
+  wrong: it mirrors the world — a north-up map flips, and every mesh with it
+  (the keep's gate came out on the wrong side). The faithful conversion keeps
+  `x` and `up` and flips `y`: `(x,y,z) → (x, z, +y)`
+  (`nifutil.WORLD_AXIS_CONVERSION`, determinant −1), used by
+  `export_gltf(..., world_object=True)` — three.js flips front faces on a
+  negative-determinant node, so the mirrored winding renders correctly — and
+  by `web/src/lib/world/terrain.ts` (`zoneToScene`; the fixture yaw is `−A`,
+  and a three.js camera south of its target shows the client's own north-up,
+  east-right map). Figures still use the rotation `mat4_axis`; whether the
+  figure pipeline should flip too (it would re-mirror every character, and
+  the `_ORIENTATION`/signature corrections were tuned under the rotation) is
+  an **open decision**.
+  Proof: `notes/ground-mosaic.py` assembles the client's own 64 baked
+  `texXX-YY` sheets — sheet row 0 is the patch's lowest y, roads and the
+  river bed continue across every patch seam, and `sector.dat`'s river banks
+  land on the painted river — and the keep shots in
+  `notes/world-shots/` show it from the same side before
+  (`keep-az-0.png`: the small south tower) and after
+  (`Camelot_Hills-keep-north-fixed.png`: the gate).
 - **The viewer's terrain payload** (`GET /world/zone/{id}/terrain`): `CAMT`,
   a u16 version (1), the u16 grid, the two f32 factors (18-byte header), then
   the raw `terrain.pcx` and `offset.pcx` planes row-major. The browser

@@ -195,18 +195,26 @@ fixtures, catalog with mesh availability, bounds, water, jumps, the ground
 layer model, the archive directory), `GET …/terrain` (the compact `CAMT`
 planes the browser re-samples with the client's own height model),
 `GET …/mesh/{name}` (a zone object as one cached glb, each mesh carrying the
-sheet its own `NiTexturingProperty` names, alpha-cut sheets declared), `GET …/texture/{logical}/{entry}`
+sheet its own `NiTexturingProperty` names, alpha-cut sheets declared, and the
+LOD level the client draws only — collision hulls and far stand-ins dropped),
+`GET …/texture/{logical}/{entry}`
 and `GET /world/terraintex/{name}` (DDS → PNG, cached). The web app gains
 `/world` (SvelteKit + three.js): the terrain as the client triangulates it
 (33×33-vertex patch meshes on the subtile diagonal), the 64 pre-baked
 ground sheets applied per patch, fixtures instanced per catalog mesh with
-their heading and scale, bounds/water/jump overlays, a region browser and a
-zone picker. Fixtures honour `Z` as authored and drop `Z = 0` + `Ground = 1`
+their heading (**degrees**, measured — not the server's 12-bit grid) and
+scale, bounds/water/jump overlays, a region browser, a zone picker, and
+click-to-select/recentre with a searchable fixture list and an inspector
+(6.3's first slice). The scene is the client's own map orientation — north
+up, east right, `+y` (south) mapped to scene `+Z`, fixture yaw `−A` — since
+the zone frame is left-handed (`formats.md` §11, "The world frame is
+left-handed"); the first cut used the figure rotation and drew the whole
+world mirrored. Fixtures honour `Z` as authored and drop `Z = 0` + `Ground = 1`
 rows on the terrain; whether the client honours a non-zero `Z` under
 `Ground` is the **W-3** experiment, and the near-field layer composition
 (`patchXXYY` masks over `zones/TerrainTex` sheets) is deliberately **not**
 emulated yet. Verification: `core/tests/test_serve_world.py` (12 unit tests +
-4 corpus tests) and `web/src/lib/world/terrain.test.ts` (sampling vectors
+6 corpus tests) and `web/src/lib/world/terrain.test.ts` (sampling vectors
 generated from the Python; heading, placement and the triangulation pinned).
 The screenshot harness is `web/scripts/world_shot.mjs` (Playwright).
 
@@ -237,12 +245,20 @@ in `workspace/notes/`.
   for selected figures, not a complete Ghidra proof of every client path.
 - **glTF axis**: vertices/normals stay in NIF space and the synthetic root
   node (`__axes__`) applies the axis conversion once (no double rotation).
-  Every era composes **Z-up** in NIF world space, so the conversion is always
-  `(x,y,z)→(x,z,−y)` (`formats.md` §2 "Up axis"): the former version-based
-  "early 4.x is X-down" rule was a pre-row-major artifact and is gone. The
-  viewer normalises scale to ~5 units and keeps a 90° rotate control. Open:
-  `Rat.NIF` (10.x) still has its length along the horizontal axis — its tail
-  dominates the bbox, visual confirmation pending.
+  Every era composes **Z-up** in NIF world space, so the figure conversion is
+  always `(x,y,z)→(x,z,−y)` (`formats.md` §2 "Up axis"): the former
+  version-based "early 4.x is X-down" rule was a pre-row-major artifact and is
+  gone. **The world is not a figure**: the client's zone frame is
+  left-handed (`+y` south — the server's own compass, `formats.md` §11), so
+  zone objects are exported with the reflection `(x,y,z)→(x,z,+y)`
+  (`nifutil.WORLD_AXIS_CONVERSION`); with the rotation they came out mirrored
+  (every map flipped, the keep's gate on the wrong side, measured
+  2026-10-11). Whether the figure pipeline should flip too — it would
+  re-mirror every character, and the orientation corrections were tuned under
+  the rotation — is an open decision. The viewer normalises scale to ~5 units
+  and keeps a 90° rotate control. Open: `Rat.NIF` (10.x) still has its length
+  along the horizontal axis — its tail dominates the bbox, visual confirmation
+  pending.
 
 ## Testing
 

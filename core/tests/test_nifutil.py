@@ -76,12 +76,39 @@ class TestMatrixMath:
         )
         assert det == pytest.approx(1.0)
 
+    def test_world_axis_conversion_is_the_reflection(self):
+        """The client's world frame is left-handed (`+y` is south: the
+        server's `where.cs` calls heading 0 "South", `Point2D.GetHeading`
+        puts 0 at `+y`), so the world pipeline flips `y` instead of rotating:
+        a determinant -1 reflection. A rotation here mirrored the whole map
+        (rivers, roads, the keep's gate) — measured 2026-10-11."""
+        ax = nifutil.WORLD_AXIS_CONVERSION
+        assert ax == ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))
+        det = (
+            ax[0][0] * (ax[1][1] * ax[2][2] - ax[1][2] * ax[2][1])
+            - ax[0][1] * (ax[1][0] * ax[2][2] - ax[1][2] * ax[2][0])
+            + ax[0][2] * (ax[1][0] * ax[2][1] - ax[1][1] * ax[2][0])
+        )
+        assert det == pytest.approx(-1.0)
+
     def test_axis_matrix_applies(self):
         m = nifutil.mat4_axis()
         for vec, want in [
             ((1, 0, 0, 1), (1, 0, 0, 1)),
             ((0, 1, 0, 1), (0, 0, -1, 1)),   # +Y_up NIF -> -Y glTF
             ((0, 0, 1, 1), (0, 1, 0, 1)),    # +Z NIF -> +Y glTF
+        ]:
+            out = [
+                sum(m[i][j] * vec[j] for j in range(4)) for i in range(4)
+            ]
+            assert out == list(want)
+
+    def test_world_axis_matrix_applies(self):
+        m = nifutil.mat4_world_axis()
+        for vec, want in [
+            ((1, 0, 0, 1), (1, 0, 0, 1)),    # +x stays east
+            ((0, 1, 0, 1), (0, 0, 1, 1)),    # +y (south) -> scene +Z
+            ((0, 0, 1, 1), (0, 1, 0, 1)),    # +z stays up
         ]:
             out = [
                 sum(m[i][j] * vec[j] for j in range(4)) for i in range(4)

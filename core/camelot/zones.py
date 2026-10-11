@@ -266,8 +266,10 @@ class WorldIndex:
 class Fixture:
     """One row of a zone's `fixtures.csv`: an object placed in the world.
 
-    Coordinates are zone-local (`0..ZONE_SIZE`), `angle` is the client's
-    12-bit heading, `scale` a percentage. `ground` is the client's own "drop
+    Coordinates are zone-local (`0..ZONE_SIZE`), `angle` is the heading in
+    **degrees** (measured 2026-10-11: the corpus runs 0..359 with 0/90/180/
+    45/270 on top; the server's `door.Heading` is a *different* field, a
+    12-bit grid), `scale` a percentage. `ground` is the client's own "drop
     it on the terrain" flag: with `z == 0` the object stands at
     `Zone.height_at(x, y)`. `row` keeps the fields exactly as read, so an
     editor can write back what it did not understand.

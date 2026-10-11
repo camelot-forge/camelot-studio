@@ -22,6 +22,7 @@ from .nifutil import (
     mat4_axis,
     mat4_identity,
     mat4_mul,
+    mat4_world_axis,
     nif_rot_cell,
     node_local_matrix,
     skin_transform_matrix,
@@ -705,6 +706,95 @@ def _sheet_cuts(data: bytes) -> bool:
     return has_alpha(data)
 
 
+def _nearest_lod_child(block) -> int | None:
+    """Index (into the block's *own* children list) of the level the client
+    shows up close.
+
+    `NiLODNode` keeps one `(near, far)` range per child, **in file order**
+    (measured: the tavern lists the far child first, the guard tower the near
+    one) — the nearest is the level whose range starts at 0, and every zone
+    object has exactly one.
+    """
+    children = list(getattr(block, "children", None) or [])
+    levels = list(getattr(block, "lod_levels", None) or [])
+    for index, level in enumerate(levels[: len(children)]):
+        near, _far = _lod_range(level)
+        if near == 0.0:
+            return index
+    paired = levels[: len(children)]
+    if paired:
+        return min(range(len(paired)), key=lambda i: _lod_range(paired[i])[1])
+    return 0 if children else None
+
+
+def _lod_range(level) -> tuple[float, float]:
+    if isinstance(level, (tuple, list)) and len(level) >= 2:
+        return float(level[0]), float(level[1])
+    near = getattr(level, "near_extent", None)
+    far = getattr(level, "far_extent", None)
+    if near is None or far is None:
+        return 0.0, float("inf")
+    return float(near), float(far)
+
+
+#: A world object's node subtrees the client never draws, matched on the node
+#: name (case-insensitive prefix). The collision hulls and climb helpers sit
+#: beside the visible model in every zone object (`collision Btavern2Int`,
+#: `collidee (ladder-low)`, …); drawing them paints a second, coarser copy
+#: over the real one. The client's own string table carries these names
+#: (`collidee`, `collisionswitch`, `!collidee_PlugTier%d`), so the name *is*
+#: the engine's rule.
+WORLD_SKIP_PREFIXES = (
+    "collidee",
+    "collision",
+    "climb",
+    "shadowcaster",
+    "!lod_cullme",
+    "!visible_damaged",
+)
+
+#: …except the *group holder*: `collisionswitch` is a plain node whose
+#: children are the switch's groups — collision helpers **and** the visible
+#: model (`visible (LOD)`), so it must be descended into, not dropped.
+WORLD_SKIP_EXCEPTIONS = ("collisionswitch",)
+
+
+def _world_skip_nodes(objs: list, children: list[list[int]], names: list[str],
+                      synth: int) -> set[int]:
+    """Node indices a world object never draws (their whole subtree does not).
+
+    Two rules, both measured rather than guessed: a node whose name is a
+    collision/climb stand-in takes its subtree with it, and a `NiLODNode`
+    keeps only its nearest level — the other levels are the client's
+    far-distance stand-ins and stacking them double-scales every detail.
+    """
+    skip: set[int] = set()
+    stack = [(child, False) for child in children[synth]]
+    while stack:
+        index, dead = stack.pop()
+        obj = objs[index]
+        name = (names[index] or "").lower()
+        hidden = any(name.startswith(prefix) for prefix in WORLD_SKIP_PREFIXES) and not any(
+            exception in name for exception in WORLD_SKIP_EXCEPTIONS
+        )
+        if dead or hidden:
+            skip.add(index)
+            stack.extend((child, True) for child in children[index])
+            continue
+        if type(obj).__name__ == "NiLODNode":
+            # The export's child order is reversed (its DFS walks a LIFO
+            # stack), so pair the level with the block's *own* child list by
+            # identity rather than by position.
+            levels = list(getattr(obj, "children", None) or [])
+            keep = _nearest_lod_child(obj)
+            keep_obj = levels[keep] if keep is not None and keep < len(levels) else None
+            for child in children[index]:
+                stack.append((child, keep_obj is not None and objs[child] is not keep_obj))
+            continue
+        stack.extend((child, False) for child in children[index])
+    return skip
+
+
 def _slot_for_name(name: str) -> str | None:
     """Map a NIF node name (e.g. 'body', 'head', 'arms') to a skin slot."""
     n = name.lower()
@@ -900,7 +990,7 @@ def export_gltf(
     bake_pose: bool = False,
     bone_names: list[str] | None = None,
     data=None,
-    shape_textures: bool = False,
+    world_object: bool = False,
 ) -> dict:
     """
     emit_skinned=False (default): bind-pose geometry + skeleton, plus a
@@ -919,10 +1009,12 @@ def export_gltf(
     survive. The viewer receives a plain posed mesh.
     data: pre-loaded (possibly assembled) NIF data; when given, ``nif_path``
     is only used for orientation overrides and animation table lookup.
-    shape_textures: world objects (not figures) — each mesh is mapped to the
-    sheet its own ``NiTexturingProperty`` names, so the caller's ``textures``
+    world_object: a zone object (not a figure) — each mesh is mapped to the
+    sheet its own ``NiTexturingProperty`` names (the caller's ``textures``
     must carry one ``SlotTexture`` per sheet, its slot the file name
-    lower-cased.
+    lower-cased), and the subtrees the client never draws are dropped: the
+    collision hulls and every ``NiLODNode`` level but the nearest (measured
+    on the zone objects, 2026-10-11).
     """
     from .nifutil import load
 
@@ -934,7 +1026,12 @@ def export_gltf(
     # figures corpus with the row-major reading (skinning identity <= 5e-03).
     # The former "early 4.x is X-down" conversion was compensating for the
     # pre-row-major transposed reading and is gone (see docs/formats.md §2).
-    axis_matrix = mat4_axis()
+    #
+    # A zone object is exported with the *world* conversion (a reflection:
+    # the client's zone frame is left-handed, +y south — see
+    # `nifutil.WORLD_AXIS_CONVERSION`), so it lands in the viewer's scene
+    # exactly where the client draws it, the fixture's heading aside.
+    axis_matrix = mat4_world_axis() if world_object else mat4_axis()
 
     # ---------- node tree (DFS) ----------
     objs: list = []
@@ -974,11 +1071,14 @@ def export_gltf(
     names.append("__axes__")
     children.append(list(root_ids))
 
-    # Orientation overrides: by family signature first, then per-asset.
+    # Orientation overrides: by family signature first, then per-asset. They
+    # reorient *figure* assets for the model viewers; a world object is drawn
+    # as the client draws it, so its heading is the fixture's job (the two
+    # rules describe one client frame, they must not compound).
     signature = _container_signature(objs, children)
     for extra in (
-        SIGNATURE_OVERRIDES.get((data.version, signature)) if signature else None,
-        ORIENTATION_OVERRIDES.get(os.path.basename(nif_path).lower()),
+        SIGNATURE_OVERRIDES.get((data.version, signature)) if signature and not world_object else None,
+        ORIENTATION_OVERRIDES.get(os.path.basename(nif_path).lower()) if not world_object else None,
     ):
         if extra is not None:
             axis_matrix = mat4_mul(_euler_xyz_matrix(extra), axis_matrix)
@@ -1112,14 +1212,15 @@ def export_gltf(
     meshes: list[dict[str, Any]] = []  # node_index, name, accessors
     skins: list[dict[str, Any]] = []  # joints, invbind (acc), node_index
     gltf_materials: list[dict[str, Any]] = []  # one per emitted mesh
-    shape_slots = _shape_texture_slots(objs, data) if shape_textures else {}
+    shape_slots = _shape_texture_slots(objs, data) if world_object else {}
+    world_skip = _world_skip_nodes(objs, children, names, synth) if world_object else set()
     stats = {"meshes": 0, "skinned": 0, "vertices": 0, "triangles": 0, "joints": 0, "skipped": 0}
     sidecar: dict[str, Any] = {"meshes": []}
 
     for i, obj in enumerate(objs):
         if obj is None or type(obj).__name__ not in ("NiTriShape", "NiTriStrips"):
             continue
-        if _is_skipped_mesh(names[i], getattr(obj, "flags", None)):
+        if i in world_skip or _is_skipped_mesh(names[i], getattr(obj, "flags", None)):
             stats["skipped"] += 1
             continue
         shp = getattr(obj, "data", None)
@@ -1422,7 +1523,7 @@ def export_gltf(
                 # Engine tint (`fig3tints.csv`): the viewer multiplies the
                 # sheet by it (skin tones, tint-based hair colours).
                 ext["tint"] = list(tint)
-            if slot == "Hair" or (shape_textures and cuts):
+            if slot == "Hair" or (world_object and cuts):
                 # Alpha-cut sheets (hair; a world object's leaves, fences,
                 # windows): the viewer alpha-tests them.
                 ext["alpha"] = True

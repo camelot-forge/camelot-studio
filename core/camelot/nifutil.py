@@ -14,10 +14,12 @@ from pyffi.formats.nif import NifFormat
 
 __all__ = [
     "AXIS_CONVERSION",
+    "WORLD_AXIS_CONVERSION",
     "CamelotFormatError",
     "block_types",
     "load",
     "mat4_axis",
+    "mat4_world_axis",
     "mat4_cell",
     "mat4_identity",
     "mat4_mul",
@@ -123,10 +125,35 @@ def version_bits(data) -> tuple[int, int]:
 
 # Axis conversion matrix: NIF (Z-up, every DAoC era) -> glTF (Y-up).
 # -90 deg about X: (x, y, z) -> (x, z, -y).
+#
+# This is a *rotation*, i.e. it reads the NIF numbers as a right-handed
+# frame — true for a figure on its own, but the client's *world* frame is
+# left-handed (`WORLD_AXIS_CONVERSION` below). Figures keep this conversion
+# until the character pipeline is re-verified against it.
 AXIS_CONVERSION = (
     (1.0, 0.0, 0.0),
     (0.0, 0.0, 1.0),
     (0.0, -1.0, 0.0),
+)
+
+# Axis conversion matrix for the client's *world*: NIF (Z-up, left-handed)
+# -> glTF (Y-up, right-handed, `(x, y, z) -> (x, z, y)`).
+#
+# The client's zone-local frame is `+x` east, **`+y` south**, `+z` up —
+# measured on the engine's own compass, not guessed: the server's
+# `Point2D.GetPointFromHeading` puts heading 0 at `+y` and 1024 at `-x`, and
+# its `where.cs`/`yell.cs` translate heading 0 to "South", 1024 to "West",
+# 2048 to "North", 3072 to "East" (OpenDAoC, read 2026-10-11). `x cross y`
+# is then `-z` (down), so the frame is left-handed and a *rotation* into a
+# right-handed renderer mirrors the world: the viewer showed a north-up map
+# flipped (rivers, roads, the keep's gate all on the wrong side of the
+# screenshot). A faithful conversion keeps `x` and `up` and flips `y` — a
+# reflection (determinant -1), which renderers that honour winding (three.js
+# flips front faces on negative-determinant nodes) draw exactly.
+WORLD_AXIS_CONVERSION = (
+    (1.0, 0.0, 0.0),
+    (0.0, 0.0, 1.0),
+    (0.0, 1.0, 0.0),
 )
 
 
@@ -200,8 +227,13 @@ def mat4_identity() -> list[list[float]]:
 
 
 def mat4_axis() -> list[list[float]]:
-    """Matrice 4x4 de la conversion d'axes (rotation pure)."""
+    """The figure pipeline's axis conversion (rotation, see AXIS_CONVERSION)."""
     return _mat4_from3(AXIS_CONVERSION)
+
+
+def mat4_world_axis() -> list[list[float]]:
+    """The world pipeline's axis conversion (reflection, see WORLD_AXIS_CONVERSION)."""
+    return _mat4_from3(WORLD_AXIS_CONVERSION)
 
 
 def _mat4_from3(conv) -> list[list[float]]:

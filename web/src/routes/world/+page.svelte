@@ -1,12 +1,12 @@
 <script lang="ts">
 	// The world viewer: browse the client's regions and zones, see the terrain
-	// the client renders, the fixtures it places, its bounds, water and jumps.
-	// Phase 6.2 — read-only; editing is 6.3.
+	// the client renders, the fixtures it places, its bounds, water and jumps —
+	// and pick an object to inspect and recentre on (the editor's first slice).
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
-	import { api, type WorldIndex, type WorldZone } from '$lib/api/client';
+	import { api, type WorldFixture, type WorldIndex, type WorldZone } from '$lib/api/client';
 	import { WorldViewer } from '$lib/world/viewer';
-	import { LoaderCircle } from '@lucide/svelte';
+	import { LoaderCircle, Crosshair } from '@lucide/svelte';
 
 	let canvasEl = $state<HTMLCanvasElement | null>(null);
 	let viewer: WorldViewer | null = null;
@@ -19,6 +19,8 @@
 	let busy = $state(false);
 	let toggles = $state({ ground: true, fixtures: true, bounds: false, water: true, jumps: false });
 	let query = $state('');
+	let fixtureQuery = $state('');
+	let selected = $state<WorldFixture | null>(null);
 
 	// Zones of the picked region, filtered by the search box; a zone the
 	// client does not ship is listed but cannot be opened.
@@ -34,6 +36,24 @@
 				(z) => z && (!needle || z.name.toLowerCase().includes(needle) || String(z.id) === needle)
 			);
 	});
+	// The zone's fixtures, searchable by name, catalog file or id — the way to
+	// find one pine among 1536 without hunting for it on screen.
+	const fixtureRows = $derived.by(() => {
+		if (!zone) return [];
+		const catalog = new Map(zone.catalog.map((entry) => [entry.id, entry]));
+		const needle = fixtureQuery.trim().toLowerCase();
+		const rows = zone.fixtures.filter((fixture) => {
+			if (!needle) return true;
+			const entry = catalog.get(fixture.nif_id);
+			return (
+				fixture.name.toLowerCase().includes(needle) ||
+				String(fixture.id) === needle ||
+				(entry?.filename.toLowerCase().includes(needle) ?? false)
+			);
+		});
+		return rows.slice(0, 300);
+	});
+	const catalogOf = $derived(new Map((zone?.catalog ?? []).map((entry) => [entry.id, entry])));
 
 	onMount(() => {
 		if (!canvasEl) return;
@@ -41,6 +61,11 @@
 		viewer.start();
 		const observer = new ResizeObserver(() => viewer?.resize());
 		observer.observe(canvasEl.parentElement!);
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key === 'f' && selected) focusFixture(selected);
+			if (event.key === 'Escape') selectFixture(null);
+		};
+		window.addEventListener('keydown', onKey);
 		api
 			.worldIndex()
 			.then((loaded) => {
@@ -54,6 +79,7 @@
 				status = 'no client';
 			});
 		return () => {
+			window.removeEventListener('keydown', onKey);
 			observer.disconnect();
 			viewer?.dispose();
 			viewer = null;
@@ -70,13 +96,14 @@
 		error = null;
 		status = `loading ${zoneRow.name}…`;
 		zoneId = zoneRow.id;
+		selected = null;
 		try {
 			const loaded = await api.worldZone(zoneRow.id);
 			zone = loaded;
 			await viewer.show(zoneRow.id, loaded);
 			status = `${loaded.info.name} — ${loaded.fixtures.length} fixtures, ${loaded.catalog.length} catalog entries`;
-			// The headless screenshot harness reads this; it also makes the load
-			// deterministic to wait on.
+			// The headless screenshot harness reads this; it also makes the
+			// load deterministic to wait on.
 			(window as unknown as { __world?: object }).__world = {
 				zone: loaded.info.id,
 				name: loaded.info.name,
@@ -91,14 +118,55 @@
 			(window as unknown as { __worldStats?: () => object }).__worldStats = () => ({
 				...viewer!.stats()
 			});
+			(window as unknown as { __worldSelect?: (id: number) => void }).__worldSelect = (
+				id: number
+			) => {
+				const found = loaded.fixtures.find((fixture) => fixture.id === id);
+				if (found) selectFixture(found);
+			};
 			(
 				window as unknown as { __worldFocus?: (x: number, y: number, d?: number) => void }
 			).__worldFocus = (x, y, d) => viewer?.focus(x, y, d);
+			(
+				window as unknown as {
+					__worldLook?: (x: number, y: number, az: number, d?: number) => void;
+				}
+			).__worldLook = (x, y, az, d) => viewer?.lookFrom(x, y, az, d);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 			status = 'load failed';
 		} finally {
 			busy = false;
+		}
+	}
+
+	function selectFixture(fixture: WorldFixture | null) {
+		selected = fixture;
+		viewer?.select(fixture);
+	}
+
+	function focusFixture(fixture: WorldFixture) {
+		viewer?.focusFixture(fixture);
+	}
+
+	function onCanvasClick(event: MouseEvent) {
+		if (!viewer || !canvasEl) return;
+		const rect = canvasEl.getBoundingClientRect();
+		const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+		const ndcY = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
+		const picked = viewer.pick(ndcX, ndcY);
+		selectFixture(picked ? picked.fixture : null);
+	}
+
+	function onCanvasDoubleClick(event: MouseEvent) {
+		if (!viewer || !canvasEl) return;
+		const rect = canvasEl.getBoundingClientRect();
+		const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+		const ndcY = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
+		const picked = viewer.pick(ndcX, ndcY);
+		if (picked) {
+			selectFixture(picked.fixture);
+			focusFixture(picked.fixture);
 		}
 	}
 
@@ -125,7 +193,7 @@
 			</label>
 			<label class="field">
 				<span>Search</span>
-				<input type="search" bind:value={query} placeholder="name or id" />
+				<input type="search" bind:value={query} placeholder="zone name or id" />
 			</label>
 
 			<ul class="zones">
@@ -152,10 +220,6 @@
 				<dl>
 					<dt>zone</dt>
 					<dd>{zone.info.id} · {kindLabel(zone.info.kind)}</dd>
-					<dt>world</dt>
-					<dd>
-						{zone.info.world_rect[0]}, {zone.info.world_rect[1]} (+{zone.info.world_rect[2]}²)
-					</dd>
 					<dt>fixtures</dt>
 					<dd>{zone.fixtures.length}</dd>
 					<dt>catalog</dt>
@@ -177,11 +241,66 @@
 				<label><input type="checkbox" bind:checked={toggles.water} /> water</label>
 				<label><input type="checkbox" bind:checked={toggles.jumps} /> jumps</label>
 			</section>
+
+			<section class="picked">
+				<h2>Selected</h2>
+				{#if selected}
+					<dl>
+						<dt>name</dt>
+						<dd>{selected.name || '(unnamed)'} <span class="dim">#{selected.id}</span></dd>
+						<dt>mesh</dt>
+						<dd>{catalogOf.get(selected.nif_id)?.filename ?? `nif ${selected.nif_id}`}</dd>
+						<dt>at</dt>
+						<dd>{selected.x.toFixed(0)}, {selected.y.toFixed(0)}, {selected.z.toFixed(0)}</dd>
+						<dt>angle</dt>
+						<dd>{selected.angle.toFixed(0)}° · scale {selected.scale.toFixed(0)}%</dd>
+						<dt>flags</dt>
+						<dd>
+							{selected.ground ? 'ground ' : ''}{selected.animate ? 'animate ' : ''}{selected.flip
+								? 'flip '
+								: ''}{selected.cave ? 'cave' : ''}
+						</dd>
+					</dl>
+					<button class="focus" type="button" onclick={() => focusFixture(selected!)}>
+						<Crosshair size={13} /> Focus (F)
+					</button>
+				{:else}
+					<p class="hint">click an object in the scene, or a row below — double-click recentres</p>
+				{/if}
+			</section>
+
+			<section class="fixtures">
+				<label class="field">
+					<span>Fixtures</span>
+					<input type="search" bind:value={fixtureQuery} placeholder="name, file or id" />
+				</label>
+				<ul>
+					{#each fixtureRows as fixture (fixture.id)}
+						<li>
+							<button
+								type="button"
+								class:active={fixture.id === selected?.id}
+								onclick={() => selectFixture(fixture)}
+								ondblclick={() => focusFixture(fixture)}
+								title="click to select, double-click to focus"
+							>
+								<span class="zname">{fixture.name || '(unnamed)'}</span>
+								<span class="zmeta">{fixture.x.toFixed(0)}, {fixture.y.toFixed(0)}</span>
+							</button>
+						</li>
+					{/each}
+				</ul>
+			</section>
 		{/if}
 	</aside>
 
 	<div class="stage">
-		<canvas bind:this={canvasEl}></canvas>
+		<canvas
+			bind:this={canvasEl}
+			onclick={onCanvasClick}
+			ondblclick={onCanvasDoubleClick}
+			aria-label="the zone, rendered; click to select an object"
+		></canvas>
 		{#if busy}
 			<div class="busy"><LoaderCircle class="spin" size={20} /> loading…</div>
 		{/if}
@@ -196,8 +315,8 @@
 		color: var(--text-1, #e8e8e8);
 	}
 	aside {
-		width: 320px;
-		min-width: 260px;
+		width: 330px;
+		min-width: 270px;
 		overflow-y: auto;
 		padding: 14px;
 		border-right: 1px solid #2a2a2a;
@@ -258,17 +377,23 @@
 		padding: 5px 6px;
 		font: inherit;
 	}
-	.zones {
+	ul {
 		list-style: none;
 		margin: 0;
 		padding: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
-		max-height: 40dvh;
+	}
+	.zones {
+		max-height: 30dvh;
 		overflow-y: auto;
 	}
-	.zones button {
+	.fixtures ul {
+		max-height: 32dvh;
+		overflow-y: auto;
+	}
+	button {
 		width: 100%;
 		display: flex;
 		justify-content: space-between;
@@ -282,14 +407,14 @@
 		font: inherit;
 		text-align: left;
 	}
-	.zones button:hover {
+	button:hover {
 		background: #1e2320;
 	}
-	.zones button.active {
+	button.active {
 		border-color: #2dd4a7;
 		background: #17302a;
 	}
-	.zones button.unavailable {
+	button.unavailable {
 		opacity: 0.45;
 		cursor: default;
 	}
@@ -297,22 +422,33 @@
 		color: #7f8a86;
 		font: 10px monospace;
 	}
-	.info dl {
+	.info dl,
+	.picked dl {
 		display: grid;
-		grid-template-columns: 64px 1fr;
+		grid-template-columns: 56px 1fr;
 		gap: 2px 8px;
 		margin: 0;
 		font-size: 11px;
 	}
-	.info dt {
+	.info dt,
+	.picked dt {
 		color: #7f8a86;
 	}
-	.info dd {
+	.info dd,
+	.picked dd {
 		margin: 0;
+	}
+	.dim {
+		color: #7f8a86;
 	}
 	.warn {
 		font: 10px/1.4 monospace;
 		color: #ffd166;
+	}
+	.hint {
+		margin: 0;
+		font: 10px/1.5 monospace;
+		color: #7f8a86;
 	}
 	.layers {
 		display: flex;
@@ -324,6 +460,13 @@
 		display: flex;
 		gap: 4px;
 		align-items: center;
+	}
+	button.focus {
+		justify-content: center;
+		gap: 6px;
+		margin-top: 6px;
+		border-color: #2dd4a7;
+		color: #2dd4a7;
 	}
 	.busy {
 		position: absolute;

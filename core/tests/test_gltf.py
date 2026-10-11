@@ -118,6 +118,30 @@ class TestExportSynthetic:
             sidecar = json.load(fh)
         assert sidecar["meshes"][0]["name"] == "Mesh"
 
+    def test_world_object_takes_the_world_axis_reflection(self, nif_path, tmp_path):
+        """A zone object must land in the client's world frame: the exported
+        axis node is the *reflection* (`mat4_world_axis`), while a figure still
+        gets the rotation — a mirror here flipped every object in `/world`."""
+        from camelot.nifutil import mat4_axis, mat4_world_axis
+
+        def axis_node(prefix: str) -> list[float]:
+            with open(prefix + ".gltf") as fh:
+                gltf = json.load(fh)
+            node = next(n for n in gltf["nodes"] if n["name"] == "__axes__")
+            return node["matrix"]
+
+        def flatten_colmajor(m):
+            return [m[i][j] for j in range(4) for i in range(4)]
+
+        world = str(tmp_path / "world")
+        export_gltf(nif_path, world, verbose=False, world_object=True)
+        assert axis_node(world) == flatten_colmajor(mat4_world_axis())
+        assert axis_node(world) != flatten_colmajor(mat4_axis())
+
+        figure = str(tmp_path / "figure")
+        export_gltf(nif_path, figure, verbose=False)
+        assert axis_node(figure) == flatten_colmajor(mat4_axis())
+
     def test_export_skinned_flag_without_bones(self, nif_path, tmp_path):
         # synthetic mesh is not skinned: --skinned must not crash and must
         # not emit JOINTS_0

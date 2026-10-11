@@ -83,29 +83,41 @@ describe('parseTerrain', () => {
 });
 
 describe('scene transforms', () => {
-	it('maps DAoC +y to scene -Z', () => {
-		expect(zoneToScene(100, 200, 300)).toEqual([100, 300, -200]);
+	it('maps DAoC +y (the client south axis) to scene +Z', () => {
+		expect(zoneToScene(100, 200, 300)).toEqual([100, 300, 200]);
 	});
 
-	it('turns a 12-bit heading into the server grid', () => {
+	it('turns a fixture heading (degrees) into the scene yaw', () => {
+		// The plane is mirrored into the scene (+y -> +Z), so the sense is
+		// reversed: heading 90 (west, the client's compass) is -90° about +Y.
 		expect(headingYaw(0)).toBe(0);
-		expect(headingYaw(1024)).toBeCloseTo(Math.PI / 2, 12);
-		expect(headingYaw(2048)).toBeCloseTo(Math.PI, 12);
-		expect(headingYaw(3072)).toBeCloseTo((3 * Math.PI) / 2, 12);
-		expect(headingYaw(4096)).toBe(0); // wraps
+		expect(headingYaw(90)).toBeCloseTo(-Math.PI / 2, 12);
+		expect(headingYaw(180)).toBeCloseTo(-Math.PI, 12);
+		expect(headingYaw(270)).toBeCloseTo((-3 * Math.PI) / 2, 12);
+		expect(headingYaw(45)).toBeCloseTo(-Math.PI / 4, 12);
+		expect(headingYaw(360)).toBe(0); // wraps
+		// The server's 12-bit grid is a *different* unit: 1024 is a quarter
+		// turn there, 1024 degrees here is not (the old mix-up turned every
+		// fixture by A/4096 of a turn — nearly no rotation at all).
+		expect(headingYaw(1024)).not.toBeCloseTo(-Math.PI / 2, 3);
 	});
 
-	it('places a fixture: Z as authored, or dropped when Z=0+Ground', () => {
+	it('places a fixture: Ground rows stand on the terrain, others keep their Z', () => {
 		const data = parseTerrain(payload());
+		// The authored Z of a Ground row is ignored — the pines of Camelot
+		// Hills ship 384 units *below* their terrain and stand on it in game.
 		const authored = { x: 8192, y: 8192, z: 2770, angle: 0, scale: 100, ground: true };
-		expect(fixtureZ(data, authored)).toBe(2770);
+		expect(fixtureZ(data, authored)).toBe(364); // heightAt(8192, 8192)
 		const dropped = { x: 8192, y: 8192, z: 0, angle: 0, scale: 100, ground: true };
-		expect(fixtureZ(data, dropped)).toBe(364); // heightAt(8192, 8192)
-		const floating = { x: 8192, y: 8192, z: 0, angle: 0, scale: 100, ground: false };
-		expect(fixtureZ(data, floating)).toBe(0);
+		expect(fixtureZ(data, dropped)).toBe(364);
+		// Ground = 0 rows carry a deliberate height (walls, decks).
+		const wall = { x: 8192, y: 8192, z: 0, angle: 0, scale: 100, ground: false };
+		expect(fixtureZ(data, wall)).toBe(0);
+		const deck = { x: 8192, y: 8192, z: 900, angle: 0, scale: 100, ground: false };
+		expect(fixtureZ(data, deck)).toBe(900);
 
 		const placement = fixturePlacement(data, { ...dropped, scale: 200 });
-		expect(placement.position).toEqual([8192, 364, -8192]);
+		expect(placement.position).toEqual([8192, 364, 8192]);
 		expect(placement.scale).toBe(2);
 		expect(placement.yaw).toBe(0);
 	});
@@ -129,11 +141,12 @@ describe('patchGeometry', () => {
 
 		const baseX = 1 * ZONE_UNIT;
 		const baseY = 2 * ZONE_UNIT;
-		// First vertex: the patch's low corner, at its own height.
+		// First vertex: the patch's lowest corner (north, since +y is south),
+		// at its own height.
 		expect(Array.from(geometry.positions.slice(0, 3))).toEqual([
 			baseX,
 			data.heightAt(baseX, baseY),
-			-baseY
+			baseY
 		]);
 		// UVs run 0..1 across the patch, v from the north edge down.
 		expect(geometry.uvs[0]).toBe(0);
@@ -146,8 +159,27 @@ describe('patchGeometry', () => {
 		for (let v = 0; v < side * side; v++) {
 			const x = geometry.positions[v * 3];
 			const z = geometry.positions[v * 3 + 2];
-			expect(geometry.positions[v * 3 + 1]).toBe(data.heightAt(x, -z));
+			expect(geometry.positions[v * 3 + 1]).toBe(data.heightAt(x, z));
 		}
+	});
+
+	it('winds every cell face-up in scene space, on the sampling diagonal', () => {
+		// a, c, b then b, c, d: the plane mirror reverses the client's own
+		// winding; both triangles still share the b–c sampling diagonal.
+		const data = zone();
+		const geometry = patchGeometry(data, 0, 0);
+		const side = SUBTILES_PER_PATCH + 1;
+		expect(Array.from(geometry.indices.slice(0, 6))).toEqual([0, side, 1, 1, side, side + 1]);
+		const p = geometry.positions;
+		const ax = p[0];
+		const az = p[2];
+		const bx = p[3];
+		const bz = p[5];
+		const cx = p[side * 3];
+		const cz = p[side * 3 + 2];
+		// The +Y component of (c - a) × (b - a) must be positive (faces up).
+		const up = (cz - az) * (bx - ax) - (cx - ax) * (bz - az);
+		expect(up).toBeGreaterThan(0);
 	});
 
 	it('triangulates the same diagonal the sampling splits on', () => {
@@ -177,6 +209,6 @@ describe('patchGeometry', () => {
 		const last = patchGeometry(data, PATCH_CELLS - 1, PATCH_CELLS - 1);
 		const side = SUBTILES_PER_PATCH + 1;
 		const end = Array.from(last.positions.slice((side * side - 1) * 3, (side * side - 1) * 3 + 3));
-		expect(end).toEqual([ZONE_SIZE, data.heightAt(ZONE_SIZE, ZONE_SIZE), -ZONE_SIZE]);
+		expect(end).toEqual([ZONE_SIZE, data.heightAt(ZONE_SIZE, ZONE_SIZE), ZONE_SIZE]);
 	});
 });

@@ -15,7 +15,9 @@ Formats, measured 2026-10-11 (`notes/` in the private workspace):
   agree by construction;
 - `GET …/mesh/{name}` resolves a catalog `Filename` to the MPAK that holds it
   (`zones/nifs/<stem>.npk`, the dungeon set, the zone's own override), embeds
-  the sheets the NIF itself names (`shape_textures`), and serves one glb;
+  the sheets the NIF itself names (`world_object`), drops the subtrees the
+  client never draws (collision hulls, every `NiLODNode` level but the
+  nearest), and serves one glb;
 - `GET …/texture/{logical}/{entry}` and `GET /world/terraintex/{name}` serve
   DDS as PNG (the browser cannot read DXT): the zone's `tex`/`lod`/`ter`
   entries, and the shared `zones/TerrainTex` sheets the ground layers name.
@@ -61,8 +63,10 @@ from .models import (
 )
 
 #: Bump when an exported artefact (glb, png) changes shape: the mtime alone
-#: would keep serving files built by an older exporter.
-_WORLD_EXPORT_VERSION = "3"
+#: would keep serving files built by an older exporter. Bumped to 7 when the
+#: zone meshes moved to the world axis conversion (the reflection of the
+#: client's left-handed frame — the cached glbs were mirrored).
+_WORLD_EXPORT_VERSION = "7"
 
 #: `/world/zone/{id}/terrain`'s payload: magic, version, grid, factors, planes.
 TERRAIN_MAGIC = b"CAMT"
@@ -354,7 +358,7 @@ def _export_zone_mesh(zone: Zone, path: str) -> bytes:
         out_prefix = str(Path(tmpdir) / "mesh")
         try:
             export_gltf(str(nif_path), out_prefix, verbose=False, data=document,
-                        textures=textures, shape_textures=True)
+                        textures=textures, world_object=True)
         except (ValueError, AttributeError, KeyError, IndexError) as error:
             raise WorldError(f"{nif_name}: export failed: {error}") from error
         gltf = json.loads(Path(out_prefix + ".gltf").read_text(encoding="utf-8"))
