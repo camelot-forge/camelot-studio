@@ -221,13 +221,16 @@ product contract; run the commands above for the authoritative local result.
 Corpus tests skip without `DAOC_CLIENT`, and the web suite is run separately
 from `core/`.
 
-Dated V2 baseline (2026-10-07): 390 core tests passed and 4 failed. The
-failures cover a changed `Boar_CATA` animation link, two legacy version
-expectations and one historical Ettin bbox golden; they require a separate
-data/test decision before being treated as regressions or as an accepted
-baseline.
-The web suite passed 42/42; `pnpm check` reports zero errors and three existing
-warnings.
+Dated baselines: the V2 corpus run of 2026-10-07 was 390 passed / 4 failed
+(the failures — a changed `Boar_CATA` animation link, two legacy version
+expectations, one Ettin bbox golden — await a data/test decision). On the
+test machine's **completed corpus** (a pristine copy of the OpenDAoC 1.127
+client — the recipe and its hashes are in the workspace's
+`notes` §2.3) the suite is **499 passed / 0 failed** as of
+2026-10-11, with `OPENDAOC_RACE_SQL` pointing at OpenDAoC-Database's
+`race.sql`; without it one test skips. The web suite is 38 passed / 3 skipped,
+`pnpm check` reports zero errors and three existing warnings (measured on the
+test machine, 2026-10-11).
 
 ## Known limits
 
