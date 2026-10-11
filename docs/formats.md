@@ -689,10 +689,11 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   mean |diff| against that bake. The stack is at most 9 layers / 3 masks
   (sampled over the corpus: `notes/layer-span.py`); `rotate` is not
   measured (no rotated row in the sample). The viewer composes it in one pass
-  per patch (`web/src/lib/world/ground.ts`), the single-pass equivalent of
-  the engine's `PassTwo…PassFour` draws — the one difference is the 8-bit
-  rounding the engine takes between its passes and we do not — and keeps
-  `texXX-YY` as the fallback where a zone ships no layers. `lodXX-YY.dds`
+  per patch (`web/src/lib/world/ground.ts`) where the engine splits the stack
+  across `PassTwo…PassFour` draws; how the engine blends between those draws
+  (and whether it rounds to 8 bits) is not measured — a single pass is the one
+  place our composition could differ. `texXX-YY` stays as the fallback where a
+  zone ships no layers. `lodXX-YY.dds`
   (256²) is `texXX-YY`'s lower-detail copy, `texXX-YY.bmp` an 8-bit indexed
   companion.
 - **A fixture's heading** is **degrees** (0..359), counter-clockwise in the
