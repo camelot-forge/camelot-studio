@@ -55,6 +55,37 @@ await page.mouse.up({ button: 'left' });
 await page.waitForTimeout(500);
 console.log('click selects:', JSON.stringify((await state()).selection));
 
+// 1b. shift + a *click* still adds (or takes back), and shift + a drag moves
+//     the map
+await page.keyboard.down('Shift');
+await page.mouse.move(middle.x, middle.y);
+await page.mouse.down({ button: 'left' });
+await page.waitForTimeout(80);
+await page.mouse.up({ button: 'left' });
+await page.keyboard.up('Shift');
+await page.waitForTimeout(300);
+console.log('shift+click toggles off:', JSON.stringify((await state()).selection));
+await page.keyboard.down('Shift');
+await page.mouse.move(middle.x, middle.y);
+await page.mouse.down({ button: 'left' });
+await page.waitForTimeout(80);
+await page.mouse.up({ button: 'left' });
+await page.keyboard.up('Shift');
+await page.waitForTimeout(300);
+console.log('shift+click adds back:', JSON.stringify((await state()).selection));
+
+const target = () =>
+	page.evaluate('JSON.stringify(window.__worldViewer.target.toArray().map(Math.round))');
+const targetBefore = await target();
+await page.keyboard.down('Shift');
+await page.mouse.move(middle.x, middle.y);
+await page.mouse.down({ button: 'left' });
+await page.mouse.move(middle.x + 120, middle.y + 60, { steps: 8 });
+await page.mouse.up({ button: 'left' });
+await page.keyboard.up('Shift');
+await page.waitForTimeout(500);
+console.log('shift+drag pans:', targetBefore, '->', await target());
+
 // 2. a left drag that starts *on the selection* grabs it (the middle button may
 //    not exist); a left drag anywhere else is still a box
 await page.mouse.move(middle.x, middle.y);

@@ -224,6 +224,8 @@ export class WorldViewer {
 		at: { x: number; y: number };
 		moved: boolean;
 	} | null = null;
+	/** A shift+left drag moves the camera; the same gesture *without* movement\n	 * is still "add to the selection". */
+	private panning = false;
 	private marquee: HTMLDivElement;
 	private abort = new AbortController();
 
@@ -300,9 +302,12 @@ export class WorldViewer {
 		canvas.style.touchAction = 'none';
 		canvas.style.cursor = 'grab';
 		// the page's own menu has no business over the scene: right is the camera.
-		// A capture-phase listener on the document, and the *position* decides —
-		// some browsers retarget the event when the pointer is captured, so the
-		// target is not something to trust here.
+		// Three layers, because a browser that keeps an old page or retargets the
+		// event must not win: the canvas' own property handler, a capture-phase
+		// listener on the document, and the *position* decides rather than the
+		// event's target.
+		const shut = (event: MouseEvent) => event.preventDefault();
+		canvas.addEventListener('contextmenu', shut, { signal });
 		document.addEventListener(
 			'contextmenu',
 			(event) => {
@@ -356,10 +361,16 @@ export class WorldViewer {
 			this.beginDrag(this.dragKindFor(event), ndc);
 			return;
 		}
+		// shift+left drags the map (a shift+left *click* still adds to the
+		// selection: the threshold decides, see `onUp`)
+		if (event.button === 0 && event.shiftKey) {
+			this.panning = true;
+			return;
+		}
 		// a drag that starts *on the selection* grabs it: the middle button may
 		// not exist (the operator's does not), and this is the gesture every
 		// editor has. On anything else the left button still only selects.
-		if (event.button === 0 && !event.shiftKey && this.hitSelection(ndc)) {
+		if (event.button === 0 && this.hitSelection(ndc)) {
 			this.beginDrag(this.dragKindFor(event), ndc);
 		}
 	}
@@ -393,6 +404,10 @@ export class WorldViewer {
 		const total =
 			Math.abs(event.clientX - pointer.from.x) + Math.abs(event.clientY - pointer.from.y);
 		if (total > 3) pointer.moved = true;
+		if (this.panning) {
+			this.pan(dx, dy);
+			return;
+		}
 		if (pointer.button === 2) {
 			if (event.shiftKey) this.pan(dx, dy);
 			else this.orbitBy(dx, dy);
@@ -412,13 +427,19 @@ export class WorldViewer {
 		this.canvas.releasePointerCapture?.(event.pointerId);
 		if (pointer.button === 6) return;
 		if (pointer.button === 0) {
+			if (this.panning) {
+				this.panning = false;
+				// a shift+left *click* never moves the camera: it adds to the selection
+				if (!pointer.moved) this.clickSelect(this.ndcOf(event), true);
+				return;
+			}
 			// a grab (the drag started on the selection) ends like any other drag
 			if (this.drag) {
 				this.finishDrag();
 				return;
 			}
 			if (pointer.moved) this.finishMarquee(pointer.from, { x: event.clientX, y: event.clientY });
-			else this.clickSelect(this.ndcOf(event), event.shiftKey);
+			else this.clickSelect(this.ndcOf(event), false);
 			return;
 		}
 		if (pointer.button === 1 && this.drag) this.finishDrag();
@@ -426,6 +447,7 @@ export class WorldViewer {
 
 	private endPointer(): void {
 		this.pointer = null;
+		this.panning = false;
 		this.hideMarquee();
 		this.drag = null;
 		this.dragged = [];

@@ -795,6 +795,7 @@
 	<div class="stage">
 		<canvas
 			bind:this={canvasEl}
+			oncontextmenu={(event) => event.preventDefault()}
 			aria-label="the zone, rendered; click to select, drag a box to select several"
 		></canvas>
 		{#if busy}
@@ -1041,10 +1042,10 @@
 							</section>
 						{:else}
 							<p class="hint controls">
-								left: click to select, drag a box for several — and a drag starting on the selection <b
-									>moves</b
-								> it (add ctrl to scale, alt to lift). The middle button does the same; right orbits,
-								shift+right pans, the wheel zooms. F focuses, Del removes, Escape lets go.
+								left: click to select, shift+click to add, drag a box for several — and a drag
+								starting on the selection <b>moves</b> it (add ctrl to scale, alt to lift).
+								<b>shift+drag moves the map</b>; right orbits, the wheel zooms. F focuses, Del
+								removes, Escape lets go.
 							</p>
 						{/if}
 
