@@ -1,45 +1,53 @@
 """The `camelot pack` command (Phase 3): an offline, reproducible build."""
 import json
 
+import pytest
+
 from camelot.cli import main
 
 
-def test_pack_writes_a_manifest_and_a_report(client_dir, tmp_path):
-    out = tmp_path / "pack"
-    code = main([
-        "contract", "--client", str(client_dir),
-        "--out", str(out), "--id", "test.pack", "--version", "0.1.0",
-    ])
-    assert code == 0
-    doc = json.loads((out / "manifest" / "content.json").read_text())
+@pytest.fixture(scope="session")
+def cli_pack(client_dir, tmp_path_factory):
+    """One full `camelot contract` run per session (~45 s), artifacts and all.
+
+    Three tests assert on what a real build *wrote*; the build is the whole
+    cost, so they share this one. The CLI's own behaviour reports (exit codes,
+    refusals, the quick `--figures 2` run) keep their own invocations.
+    """
+    out = tmp_path_factory.mktemp("cli-pack") / "pack"
+    assert main([
+        "contract", "--client", str(client_dir), "--out", str(out),
+        "--id", "test.pack", "--version", "0.1.0",
+    ]) == 0
+    return out
+
+
+def test_pack_writes_a_manifest_and_a_report(cli_pack):
+    doc = json.loads((cli_pack / "manifest" / "content.json").read_text())
     assert doc["pack"]["id"] == "test.pack"
     assert doc["schema_version"]
     assert len(doc["figures"]) == 36
-    report = json.loads((out / "reports" / "validation.json").read_text())
+    report = json.loads((cli_pack / "reports" / "validation.json").read_text())
     assert report["ok"] is True
 
 
-def test_pack_is_reproducible_byte_for_byte(client_dir, tmp_path):
-    first, second = tmp_path / "a", tmp_path / "b"
-    for out in (first, second):
-        assert main([
-            "contract", "--client", str(client_dir), "--out", str(out),
-            "--id", "p", "--version", "1",
-        ]) == 0
-    a = (first / "manifest" / "content.json").read_bytes()
-    b = (second / "manifest" / "content.json").read_bytes()
-    assert a == b
-
-
-def test_pack_records_artifact_hashes(client_dir, tmp_path):
-    out = tmp_path / "pack"
+def test_pack_is_reproducible_byte_for_byte(cli_pack, client_dir, tmp_path):
+    """Two runs of the command must write the same manifest bytes; one of the
+    two is the session's build."""
+    out = tmp_path / "fresh"
     assert main([
         "contract", "--client", str(client_dir), "--out", str(out),
-        "--id", "p", "--version", "1",
+        "--id", "test.pack", "--version", "0.1.0",
     ]) == 0
-    doc = json.loads((out / "manifest" / "content.json").read_text())
+    fresh = (out / "manifest" / "content.json").read_bytes()
+    session = (cli_pack / "manifest" / "content.json").read_bytes()
+    assert fresh == session
+
+
+def test_pack_records_artifact_hashes(cli_pack):
+    doc = json.loads((cli_pack / "manifest" / "content.json").read_text())
     assert doc["artifacts"]
-    lock = (out / "checksums.lock").read_text()
+    lock = (cli_pack / "checksums.lock").read_text()
     for name, digest in doc["artifacts"].items():
         assert name in lock
         assert digest in lock

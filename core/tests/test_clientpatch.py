@@ -237,6 +237,8 @@ def test_the_direct_patch_refuses_while_the_game_runs(tmp_path, monkeypatch):
     original = client_dll()
     (root / "game1127.dll").write_bytes(original)
     monkeypatch.setattr(clientinstall, "client_running", lambda: "game1127.dll")
+    # the game is playing from *this* copy — the one case that must refuse
+    monkeypatch.setattr(clientinstall, "running_client_dirs", lambda: [str(root)])
     assert main(["client", "patch", "--client", str(root)]) == 1
     assert (root / "game1127.dll").read_bytes() == original
 

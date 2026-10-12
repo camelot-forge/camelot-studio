@@ -128,14 +128,12 @@ def test_pack_hashes_its_artifacts_deterministically():
 
 # --- building a pack from the real client ----------------------------------
 
-@pytest.mark.usefixtures("client_dir")
-def test_build_pack_describes_every_playable_race(client_dir):
+def test_build_pack_describes_every_playable_race(player_manifest):
     """The canonical pack must cover the 18 playable races x 2 genders, each
     with a rig, appearance slots and its anim set — that is the surface a
     server needs to create a character."""
-    from camelot import contract
 
-    manifest = contract.build_player_manifest(client_dir, pack_id="daoc.studio", version="0.1.0")
+    manifest = player_manifest
     assert len(manifest.figures) == 36
     for figure in manifest.figures:
         assert figure.kind == "player"
@@ -148,25 +146,22 @@ def test_build_pack_describes_every_playable_race(client_dir):
         assert any(s.slot == "Idle" for s in figure.anim_states), figure.logical_id
 
 
-@pytest.mark.usefixtures("client_dir")
-def test_build_pack_is_reproducible(client_dir):
+def test_build_pack_is_reproducible(player_manifest, client_dir):
     """A pack is a build artifact: rebuilding it from the same client must
     produce identical bytes, or its checksums are meaningless."""
     from camelot import contract
 
-    a = contract.build_player_manifest(client_dir, pack_id="p", version="1")
-    b = contract.build_player_manifest(client_dir, pack_id="p", version="1")
-    assert a.to_bytes() == b.to_bytes()
+    fresh = contract.build_player_manifest(client_dir, pack_id="p", version="1")
+    assert fresh.to_bytes() == player_manifest.to_bytes()
 
 
-@pytest.mark.usefixtures("client_dir")
-def test_build_pack_records_the_client_build(client_dir):
+def test_build_pack_records_the_client_build(player_manifest, client_dir):
     """A pack is only valid for the build it was generated against, so the
     manifest carries the corpus's own `game.dll` FileVersion rather than
     leaving the consumer to assume one."""
     from camelot import contract
 
-    manifest = contract.build_player_manifest(client_dir, pack_id="p", version="1")
+    manifest = player_manifest
     assert contract.client_build(client_dir)
     assert manifest.client_build == contract.client_build(client_dir)
     assert manifest.to_dict()["client"]["build"] == manifest.client_build
@@ -181,22 +176,19 @@ def test_client_build_is_none_without_a_game_dll(tmp_path):
     assert contract.client_build(str(tmp_path)) is None
 
 
-@pytest.mark.usefixtures("client_dir")
-def test_build_pack_validates_against_the_real_client(client_dir):
+def test_build_pack_validates_against_the_real_client(player_manifest):
     """The real V2 corpus must produce a publishable pack: any unresolved
     reference here is a genuine gap, not a test artefact."""
-    from camelot import contract
 
-    manifest = contract.build_player_manifest(client_dir, pack_id="p", version="1")
+    manifest = player_manifest
     report = manifest.validate(strict=False)
     assert report.ok, report.errors + [u.ref for u in report.unresolved]
 
 
 @pytest.mark.usefixtures("client_dir")
-def test_manifest_is_small_and_carries_no_client_bytes(client_dir):
-    from camelot import contract
+def test_manifest_is_small_and_carries_no_client_bytes(player_manifest):
 
-    manifest = contract.build_player_manifest(client_dir, pack_id="p", version="1")
+    manifest = player_manifest
     raw = manifest.to_bytes()
     # 5958 anim states over 36 figures stay a ~1.2 MB text contract; the
     # glTF and sheets live in the artifacts beside it, not inlined.
@@ -207,14 +199,12 @@ def test_manifest_is_small_and_carries_no_client_bytes(client_dir):
     assert "b_lea1_body1f.tga" in text  # the default material's body sheet
 
 
-@pytest.mark.usefixtures("client_dir")
-def test_pack_records_which_anim_set_each_state_came_from(client_dir):
+def test_pack_records_which_anim_set_each_state_came_from(player_manifest):
     """An anim set is not a clean per-figure namespace: the Cata Troll male
     (set 263) borrows cat clips for slots like `Back`. A target adapter needs
     the set id to reason about the rig a clip was authored on."""
-    from camelot import contract
 
-    manifest = contract.build_player_manifest(client_dir, pack_id="p", version="1")
+    manifest = player_manifest
     troll = next(f for f in manifest.figures if f.logical_id == "daoc.player.tro_m")
     assert troll.anim_sets
     assert {s.anim_set for s in troll.anim_states} == {troll.anim_sets[0]}
@@ -223,16 +213,14 @@ def test_pack_records_which_anim_set_each_state_came_from(client_dir):
     assert back.kfa.lower().startswith("cat_"), back.kfa
 
 
-@pytest.mark.usefixtures("client_dir")
-def test_a_null_tint_means_white_not_a_missing_one(client_dir):
+def test_a_null_tint_means_white_not_a_missing_one(player_manifest, client_dir):
     """Skin tone 1 and hair colour 1 carry no tint at all — the client
     paints them white — and the contract must say "no tint", not invent one
     or leave the field ambiguous with a dropped sheet."""
     from camelot import appearance as app
-    from camelot import contract
 
     assert app.skin_tint_rgb(client_dir, 2, 1) is None
-    manifest = contract.build_player_manifest(client_dir, pack_id="p", version="1")
+    manifest = player_manifest
     briton = next(f for f in manifest.figures if f.logical_id == "daoc.player.bri_f")
     head = next(s for s in briton.appearance if s.slot == "Head")
     assert head.tint is None
@@ -257,59 +245,47 @@ def test_pack_exposes_a_tinted_variant_of_the_same_slots(client_dir):
 
 # --- artifacts: the contract must point at real, loadable content ----------
 
-@pytest.mark.usefixtures("client_dir")
-def test_contract_can_emit_the_gltf_artifact_of_each_figure(client_dir, tmp_path):
+def test_contract_can_emit_the_gltf_artifact_of_each_figure(emitted_pack):
     """A description alone is not a pack. With artifacts on, every figure
     gets a real GLB beside the manifest and the manifest hashes it — that is
     what makes the two verifiable as a pair."""
-    from camelot import contract
 
-    manifest = contract.build_player_manifest(
-        client_dir, pack_id="p", version="1", with_states=False,
-    )
-    out = contract.emit_artifacts(client_dir, manifest, tmp_path)
-    assert out, "no artifact was written"
+    manifest, out_dir = emitted_pack
+    assert out_dir, "no artifact was written"
     for figure in manifest.figures:
         rel = figure.artifact_for("model")
         assert rel, f"{figure.logical_id} has no model artifact"
-        path = tmp_path / rel
+        path = out_dir / rel
         assert path.exists(), path
         assert path.stat().st_size > 1024
         assert path.read_bytes()[:4] == b"glTF", "not a GLB"
 
 
 @pytest.mark.usefixtures("client_dir")
-def test_artifacts_are_hashed_into_the_manifest(client_dir, tmp_path):
-    from camelot import contract
+def test_artifacts_are_hashed_into_the_manifest(emitted_pack):
 
-    manifest = contract.build_player_manifest(
-        client_dir, pack_id="p", version="1", with_states=False,
-    )
-    contract.emit_artifacts(client_dir, manifest, tmp_path)
+    manifest, out_dir = emitted_pack
     assert manifest.artifacts
     for name, digest in manifest.artifacts.items():
-        assert (tmp_path / name).exists()
+        assert (out_dir / name).exists()
         import hashlib
-        assert hashlib.sha256((tmp_path / name).read_bytes()).hexdigest() == digest
+        assert hashlib.sha256((out_dir / name).read_bytes()).hexdigest() == digest
 
 
 @pytest.mark.usefixtures("client_dir")
-def test_artifacts_are_reproducible(client_dir, tmp_path):
+def test_artifacts_are_reproducible(emitted_pack, client_dir, tmp_path):
     """Two builds of the same corpus must produce byte-identical GLBs, or
-    the checksums are noise."""
+    the checksums are noise. One of the two is the session's build."""
     from camelot import contract
 
-    def build(out):
-        m = contract.build_player_manifest(
-            client_dir, pack_id="p", version="1", with_states=False,
-        )
-        contract.emit_artifacts(client_dir, m, out)
-        return m
-
-    first, second = build(tmp_path / "a"), build(tmp_path / "b")
-    assert first.to_bytes() == second.to_bytes()
-    rel = first.figures[0].artifact_for("model")
-    assert (tmp_path / "a" / rel).read_bytes() == (tmp_path / "b" / rel).read_bytes()
+    session_manifest, session_out = emitted_pack
+    fresh = contract.build_player_manifest(
+        client_dir, pack_id="p", version="1", with_states=False,
+    )
+    contract.emit_artifacts(client_dir, fresh, tmp_path)
+    assert fresh.to_bytes() == session_manifest.to_bytes()
+    rel = fresh.figures[0].artifact_for("model")
+    assert (tmp_path / rel).read_bytes() == (session_out / rel).read_bytes()
 
 
 # --- authoring: adding content the client does not ship --------------------

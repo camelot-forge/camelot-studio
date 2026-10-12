@@ -19,8 +19,8 @@ if [ ! -x .venv/bin/pip ]; then
     rm -f get-pip.py
 fi
 
-echo ">> installing dependencies (pyffi, setuptools, numpy, pytest, ruff, server)…"
-.venv/bin/python -m pip install --no-cache-dir -q pyffi setuptools numpy pytest ruff \
+echo ">> installing dependencies (pyffi, setuptools, numpy, pytest, xdist, ruff, server)…"
+.venv/bin/python -m pip install --no-cache-dir -q pyffi setuptools numpy pytest pytest-xdist ruff \
     fastapi "uvicorn[standard]" watchfiles httpx
 
 SP=.venv/lib/python3.*/site-packages/pyffi

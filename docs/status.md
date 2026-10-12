@@ -293,16 +293,26 @@ in `workspace/notes/`.
 pytest suite in `core/tests/` (AGENTS.md TDD rule):
 
 ```sh
-# unit tests only (no game files needed)
-.venv/bin/python -m pytest core/tests -q
-# + corpus tests against the real client (skipped otherwise)
+# the inner loop: unit tests only, no game files (seconds)
+.venv/bin/python -m pytest core/tests -q -m "not corpus"
+# the whole suite before a commit: corpus tests against the real client
 DAOC_CLIENT="/path/to/DAOC CLIENT V2" .venv/bin/python -m pytest core/tests -q
+# the corpus tier in parallel: same tests on six workers (~2.5 min)
+DAOC_CLIENT="/path/to/DAOC CLIENT V2" .venv/bin/python -m pytest core/tests -q -n 6 --dist loadfile
 ```
 
-The suite has unit and corpus tiers. Exact test counts are not a current
-product contract; run the commands above for the authoritative local result.
-Corpus tests skip without `DAOC_CLIENT`, and the web suite is run separately
-from `core/`.
+The tiers are not a hand-kept list: `core/tests/conftest.py` tags every test
+that asks for the `client_dir` fixture `corpus`, and the tier's heavy builds
+(the player manifest, its glTF artifacts, the `camelot contract` run) are
+session fixtures shared across tests — the reproducibility tests build again
+on purpose, since that comparison is what they assert. Measured on the
+workshop machine, 2026-10-12: the full sequential run was 666 s, 72 % of it
+two files rebuilding the contract pack per test; it now runs in ~2:30 on six
+workers (561 passed / 1 skipped), and the inner loop is ~8 s (385 passed /
+1 skipped / 176 deselected). `pytest-xdist` is the one added dev dependency.
+Exact test counts are not a current product contract; run the commands above
+for the authoritative local result. Corpus tests skip without `DAOC_CLIENT`,
+and the web suite is run separately from `core/`.
 
 Dated baselines: the V2 corpus run of 2026-10-07 was 390 passed / 4 failed
 (the failures — a changed `Boar_CATA` animation link, two legacy version

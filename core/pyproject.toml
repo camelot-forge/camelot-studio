@@ -17,11 +17,20 @@ dependencies = [
 
 [project.optional-dependencies]
 server = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "watchfiles>=1.0"]
-dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.27"]
+dev = ["pytest>=8", "pytest-xdist>=3", "ruff>=0.6", "httpx>=0.27"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["core"]
+# Two tiers, one switch (the tag is applied in `tests/conftest.py` to every
+# test that asks for the `client_dir` fixture — those read the real ~5 GB
+# client and hold all the wall-clock time):
+#   inner loop    : pytest -q -m "not corpus"      (~8 s)
+#   before commit : pytest -q                      (the full corpus walk)
+#   parallel      : pytest -q -n 6 --dist loadfile (~2.5 min, needs xdist)
+markers = [
+    "corpus: needs the real DAoC client ($DAOC_CLIENT) — the slow tier",
+]
 
 [tool.ruff]
 target-version = "py311"

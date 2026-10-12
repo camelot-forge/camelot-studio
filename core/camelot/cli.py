@@ -719,7 +719,7 @@ def cmd_client(args) -> int:
         if args.client_cmd == "patch":
             from . import clientpatch
 
-            running = clientinstall.client_running()
+            running = clientinstall.blocks_install(client)
             if running:
                 print(f"client: the game is running ({running}); close it and retry",
                       file=sys.stderr)

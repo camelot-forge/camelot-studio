@@ -36,9 +36,11 @@ __all__ = [
     "InstallError",
     "ModPack",
     "PackError",
+    "blocks_install",
     "client_running",
     "install_pack",
     "resolve_existing",
+    "running_client_dirs",
     "status",
     "uninstall",
     "verify",
@@ -856,10 +858,88 @@ def _prune_members(client_dir: str, installs) -> None:
 
 # --- the operations ----------------------------------------------------------
 
+#: The binary names a running DAoC client shows in `/proc/<pid>/comm`.
+CLIENT_COMMS = ("camelot.exe", "camtest.exe", "game1127.dll")
+
+
+def _wine_client_dir(command_line: str, comm: str) -> str | None:
+    """The client directory behind a process' command line, when readable.
+
+    On Linux the client runs under Wine, whose command lines carry Windows
+    paths — measured on this machine: `connect.exe` launches
+    `Z:\\home\\michael\\daoc-client\\game1127.dll`, and Wine's `Z:` drive is
+    the root mapping. A relative token, another drive letter (`C:\\…`) or no
+    token at all has no mapping we can *prove*, so they return None — and the
+    callers treat "unknown" as "refuse the write", which is the safe side.
+    """
+    for token in command_line.split("\0"):
+        if not token.endswith(comm):
+            continue
+        folder = token.replace("\\", "/").rsplit("/", 1)[0]
+        drive, separator, rest = folder.partition(":")
+        if len(drive) != 1 or not separator or not rest.startswith("/"):
+            return None
+        if drive.upper() != "Z":
+            return None
+        return rest
+    return None
+
+
+def running_client_dirs() -> list[str]:
+    """The client directories of running game clients we can read."""
+    out: list[str] = []
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return out
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/comm", encoding="utf-8", errors="replace") as fh:
+                comm = fh.read().strip()
+        except OSError:
+            continue
+        if comm not in CLIENT_COMMS:
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", encoding="utf-8", errors="replace") as fh:
+                line = fh.read()
+        except OSError:
+            continue
+        folder = _wine_client_dir(line, comm)
+        if folder:
+            out.append(folder)
+    return out
+
+
+def blocks_install(client_dir: str) -> str | None:
+    """The running client's name when it is *this* client, else None.
+
+    The client reads its files once, at startup, so writing under a copy it is
+    playing from changes nothing on screen (and on Windows the open files
+    refuse the write anyway) — but writing under a *different* copy is a
+    different set of files and is safe. That is what makes the test suite's
+    temporary clients installable while the operator plays.
+
+    When the running client is visible but its directory cannot be read, or
+    the target is the one it plays from, the write is refused: the unknown
+    case is not worth guessing about.
+    """
+    running = client_running()
+    if not running:
+        return None
+    dirs = running_client_dirs()
+    if not dirs:
+        return running
+    target = os.path.realpath(client_dir)
+    return running if any(os.path.realpath(d) == target for d in dirs) else None
+
+
 def install_pack(client_dir: str, pack_path: str, *, priority: int | None = None,
                  allow_build_mismatch: bool = False, adopt: bool = False) -> dict:
     """Install (or update) a pack's client half; returns a report."""
-    running = client_running()
+    running = blocks_install(client_dir)
     if running:
         raise InstallError(f"the game is running ({running}); close it and retry")
     pack = ModPack.load(pack_path)
@@ -920,7 +1000,7 @@ def install_pack(client_dir: str, pack_path: str, *, priority: int | None = None
 
 def uninstall(client_dir: str, mod_id: str) -> dict:
     """Remove a mod's client half; exact, from the stored originals."""
-    running = client_running()
+    running = blocks_install(client_dir)
     if running:
         raise InstallError(f"the game is running ({running}); close it and retry")
     state = _load_state(client_dir)

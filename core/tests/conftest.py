@@ -108,10 +108,59 @@ def nif_path(tmp_path, nif_bytes):
     return str(p)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def client_dir():
     """Path to the DAoC client; skips the test when DAOC_CLIENT is unset."""
     d = os.environ.get("DAOC_CLIENT")
     if not d or not os.path.isdir(d):
         pytest.skip("DAOC_CLIENT not set (corpus tests need the game client)")
     return d
+
+
+def pytest_collection_modifyitems(config, items):
+    """Tag every test that asks for the real client as `corpus`.
+
+    The suite has two tiers: unit tests (synthetic corpora, milliseconds) and
+    the corpus tests, which walk the ~5 GB client — the contract builds are the
+    extreme at ~45 s each. The tag is derived from fixture use rather than
+    sprinkled per file, so a test joins the slow tier by asking for
+    `client_dir` and nothing else. Inner loop: `pytest -q -m "not corpus"`.
+    """
+    for item in items:
+        if "client_dir" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.corpus)
+
+
+@pytest.fixture(scope="session")
+def player_manifest(client_dir):
+    """The canonical player contract, built once per session (~6 s).
+
+    `build_player_manifest` walks the corpus: 36 figures with their rigs,
+    appearance slots and anim sets. About a dozen tests need nothing but a
+    built manifest, and building it per test was most of their runtime. Tests
+    that change the manifest's *inputs* (a custom figure, another pack id)
+    still build their own.
+    """
+    from camelot import contract
+
+    return contract.build_player_manifest(client_dir, pack_id="p", version="1")
+
+
+@pytest.fixture(scope="session")
+def emitted_pack(client_dir, tmp_path_factory):
+    """The manifest *and* its GLBs, emitted once per session (~45 s).
+
+    The artifacts are the expensive half — one glTF per figure — and they are
+    a pure function of the corpus and the manifest, so every test that
+    inspects a built pack reads this one. The reproducibility tests build
+    again on purpose: that comparison is what they assert.
+    Returns `(manifest, output_dir)`.
+    """
+    from camelot import contract
+
+    out = tmp_path_factory.mktemp("emitted-pack")
+    manifest = contract.build_player_manifest(
+        client_dir, pack_id="p", version="1", with_states=False,
+    )
+    contract.emit_artifacts(client_dir, manifest, out)
+    return manifest, out

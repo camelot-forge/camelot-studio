@@ -435,15 +435,16 @@ def test_update_replaces_the_version_and_prunes_the_store(client, tmp_path):
     assert _read(client, "figures/Boar.NIF") == BOAR_NIF
 
 
-def test_the_installer_refuses_while_the_game_runs(client, tmp_path, monkeypatch):
-    """The client reads its files once, at startup: installing under a
-    running one changes nothing on screen, so the tool says so instead of
-    pretending. (The check is Linux-only and best-effort; the test drives it
+def test_the_installer_refuses_while_the_game_runs_that_client(client, tmp_path, monkeypatch):
+    """The client reads its files once, at startup: installing under the copy
+    it is playing from changes nothing on screen, so the tool says so instead
+    of pretending. (The check is Linux-only and best-effort; the test drives it
     directly.)"""
     pack = build_pack(tmp_path, "u1.tar.gz", mod_id="probe.u",
                       items=[mod.client_loose("figures/Boar.NIF")],
                       members={"client/figures/Boar.NIF": b"x"})
     monkeypatch.setattr(clientinstall, "client_running", lambda: "camelot.exe")
+    monkeypatch.setattr(clientinstall, "running_client_dirs", lambda: [client])
     with pytest.raises(clientinstall.InstallError, match="the game is running"):
         clientinstall.install_pack(client, pack)
     monkeypatch.setattr(clientinstall, "client_running", lambda: None)
@@ -451,6 +452,44 @@ def test_the_installer_refuses_while_the_game_runs(client, tmp_path, monkeypatch
     monkeypatch.setattr(clientinstall, "client_running", lambda: "camelot.exe")
     with pytest.raises(clientinstall.InstallError, match="the game is running"):
         clientinstall.uninstall(client, "probe.u")
+
+
+def test_installing_a_copy_the_game_is_not_playing_is_allowed(client, tmp_path, monkeypatch):
+    """A running game on *another* copy is not a reason to refuse: it reads
+    its own files, not these. The test suite lives on this (it installs into
+    temporary clients while the operator plays)."""
+    pack = build_pack(tmp_path, "u2.tar.gz", mod_id="probe.u2",
+                      items=[mod.client_loose("figures/Boar.NIF")],
+                      members={"client/figures/Boar.NIF": b"x"})
+    monkeypatch.setattr(clientinstall, "client_running", lambda: "game1127.dll")
+    monkeypatch.setattr(clientinstall, "running_client_dirs",
+                        lambda: ["/elsewhere/daoc-client"])
+    report = clientinstall.install_pack(client, pack)
+    assert report["mod"] == "probe.u2"
+
+
+def test_an_unreadable_running_client_still_refuses(client, tmp_path, monkeypatch):
+    """Visible but unmappable (a relative command line, another drive): the
+    unknown case is not worth guessing about."""
+    pack = build_pack(tmp_path, "u3.tar.gz", mod_id="probe.u3",
+                      items=[mod.client_loose("figures/Boar.NIF")],
+                      members={"client/figures/Boar.NIF": b"x"})
+    monkeypatch.setattr(clientinstall, "client_running", lambda: "game1127.dll")
+    monkeypatch.setattr(clientinstall, "running_client_dirs", list)
+    with pytest.raises(clientinstall.InstallError, match="the game is running"):
+        clientinstall.install_pack(client, pack)
+
+
+def test_the_running_client_directory_parses_wine_command_lines():
+    """Measured on this machine: the client's process carries
+    `Z:\\home\\michael\\daoc-client\\game1127.dll` (Wine maps `Z:` to `/`).
+    Anything we cannot map proves nothing, and the caller then refuses."""
+    parse = clientinstall._wine_client_dir
+    assert parse("Z:\\home\\michael\\daoc-client\\game1127.dll\x00127.0.0.1\x00",
+                 "game1127.dll") == "/home/you/daoc-client"
+    assert parse("game1127.dll\x00127.0.0.1\x00", "game1127.dll") is None
+    assert parse("C:\\games\\daoc\\game1127.dll\x00", "game1127.dll") is None
+    assert parse("camelot.exe\x00", "game1127.dll") is None
 
 
 def test_a_band_change_does_not_brick_an_installed_mod(client, tmp_path, monkeypatch):
