@@ -310,12 +310,28 @@ class Editor:
         return dropped
 
     def revert(self) -> None:
-        """Undo everything: the journal empties, the base tables stand again."""
+        """Undo everything: the journal empties, the base tables stand again.
+
+        The build outputs go with it — a pack left behind by a reverted
+        journal would claim an edit that no longer exists. The *installed*
+        half in the client is untouched: uninstall reads the client's own
+        stored state, never this directory.
+        """
         if not self.available:
             raise EditorError("the daemon was started without --edits <dir>")
         journal = self._load()
         journal["zones"] = {}
         self._save()
+        self._clear_build(str(journal["mod"].get("id", "world-edits")))
+
+    def _clear_build(self, mod_id: str) -> None:
+        paths = [self.dir / f"{mod_id}.tar.gz", self.dir / "client.patch.json"]
+        paths += sorted(self.dir.glob("fixtures-zone*.csv"))
+        for path in paths:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
     # -- publishing ------------------------------------------------------------
 

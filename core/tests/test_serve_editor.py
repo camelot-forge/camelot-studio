@@ -6,6 +6,7 @@ the editor edits and patches. Nothing here needs MySQL nor the real client;
 the in-game half of the ladder (W-5) is the operator's run.
 """
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -181,13 +182,24 @@ def test_apply_installs_the_edited_zone_and_the_client_reads_it_back(editing, tm
     assert (pine.x, pine.y) == (32768, 32768)
 
 
-def test_revert_empties_the_journal(editing, tmp_path):
+def test_revert_empties_the_journal_and_its_build(tmp_path, editing):
+    """A pack left behind by a reverted journal would claim an edit that no
+    longer exists — the build outputs go with the journal. The client's
+    *installed* half is untouched (uninstall reads its own stored state)."""
     client = editor_client(editing, tmp_path / "session")
     edit(client, {"kind": "scale", "id": 1, "scale": 50})
     edit(client, {"kind": "rotate", "id": 2, "angle": 90})
+    built = client.post("/api/v1/world/mod/build").json()
+    pack = Path(built["pack"])
+    csv = pack.parent / "fixtures-zone000.csv"
+    assert pack.is_file() and csv.is_file()
+
     response = client.post("/api/v1/world/mod/revert")
     assert response.status_code == 200
     assert response.json()["zones"] == []
+    assert response.json()["pack"] is None
+    assert not pack.exists()
+    assert not csv.exists()
     zone = client.get("/api/v1/world/zone/0").json()
     assert zone["fixtures"][0]["scale"] == 100
     assert zone["fixtures"][1]["angle"] == 2048
