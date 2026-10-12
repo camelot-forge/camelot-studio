@@ -297,6 +297,20 @@ def test_a_row_move_is_zone_local_and_keeps_its_height(editing, tmp_path, monkey
     assert patch["originals"]["X"] == str(LEFT + 19660)
 
 
+def test_a_row_move_can_name_its_own_height(editing, tmp_path, monkeypatch):
+    """The height gesture: an op that names a `z` means it — a gate lifted
+    onto its wall — instead of keeping the row's height above the terrain."""
+    fake = FakeConnection([[door_row()]])
+    monkeypatch.setattr(serverrows, "connect", lambda _connection: fake)
+    client = db_client(editing, tmp_path, db_write=True)
+    response = edit(client, {"kind": "row-move", "table": "door", "key": "d1",
+                             "x": 20000, "y": 21000, "z": 3200})
+    assert response.status_code == 200, response.json()
+    values = response.json()["patches"][0]["values"]
+    assert values["Z"] == "3200"  # the height the op asked for
+    assert values["X"] == str(LEFT + 20000)
+
+
 def test_two_moves_before_an_apply_stack_on_the_rows(editing, tmp_path, monkeypatch):
     """A keep nudged twice and applied once: the second op's values start from
     the row the journal already leaves (else the first move's delta is lost),
