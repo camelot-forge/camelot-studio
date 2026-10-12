@@ -728,9 +728,12 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   `Point2D.GetHeading`): 180° away from `A` at the zero, clockwise on the map
   like it, so mixing the two turns every fixture by A/11 and looks like "the
   rotation is ignored". A fixture's `Z` is used as authored unless
-  `Z = 0` with `Ground = 1`, which drops it on the terrain; whether the client
-  honours a non-zero `Z` when `Ground` is set (Camelot Hills' authored rows)
-  is **not yet measured** — the W-3 experiment settles it.
+  `Z = 0` with `Ground = 1`, which drops it on the terrain. **Measured
+  2026-10-12 (W-3)**: `Ground = 1` wins outright — a probe pine authored at
+  `Z = 5000` with `Ground = 1` stood on the terrain in game (2 428 units under
+  its authored height) while its `Ground = 0` twin floated at 5 000, so an
+  editor emits `z = 0` + `Ground = 1` and never copies an authored `Z` onto a
+  ground row (`notes/w3-report.md`).
 - **A world object ships one visible level, not three**: every zone object's
   visible branch is a `NiLODNode` with a `(near, far)` range per child *in
   file order* (the tavern lists the far child first, the guard tower the

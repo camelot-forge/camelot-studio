@@ -230,10 +230,11 @@ pebbles and grass blades — with the
 bake kept as the fallback for zones that ship no layers. Fixtures are placed
 by the viewer's rule — every `Ground = 1` row is dropped on the terrain and
 its authored `Z` is ignored, `Ground = 0` rows keep their `Z`
-(`terrain.ts::fixtureZ`, pinned by `terrain.test.ts`) — which is what the
-in-game probe screenshots show so far; whether the client honours a non-zero
-`Z` under `Ground` is the **W-3** experiment (its probe pack is installed, the
-in-game read is pending). The world reader mirrors the client's own archive
+(`terrain.ts::fixtureZ`, pinned by `terrain.test.ts`) — **which is the
+client's own rule, measured 2026-10-12 (W-3)**: a probe pine at `Z = 5000`
+with `Ground = 1` stood on the terrain in game while its `Ground = 0` twin
+floated at 5 000. The editor emits `z = 0` + `Ground = 1` and never copies an
+authored `Z` onto a ground row. The world reader mirrors the client's own archive
 preference since 2026-10-12 — `csv` first per entry, `dat` as the fallback
 (`Zone.data_entry`) — because taking `dat` first served an installed pack's
 pristine bytes and left its rows invisible; an archive the client ships empty

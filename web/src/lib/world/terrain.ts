@@ -129,8 +129,11 @@ export function headingYaw(angle: number): number {
  * wherever its authored `Z` sits, and the corpus shows why it must: Camelot
  * Hills ships its pines at `Z = 1600` where the terrain is 1984 (384 *under*
  * the ground), and in game they stand on the ground (user comparison,
- * 2026-10-11). `Ground = 0` rows carry a deliberate height (walls, decks)
- * and keep their `Z`.
+ * 2026-10-11). **Measured 2026-10-12 (W-3)**: a probe pine at `Z = 5000` with
+ * `Ground = 1` stood on the terrain in game while its twin with `Ground = 0`
+ * floated at 5 000 — the authored `Z` is *discarded*, not clamped, and 2 428
+ * units of clearance made that unambiguous. `Ground = 0` rows carry a
+ * deliberate height (walls, decks) and keep their `Z`.
  */
 export function fixtureZ(
 	data: TerrainData,
