@@ -3,7 +3,23 @@ import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
+/** The build's own clock, in the machine's own time zone, so it can be read
+ * against the operator's wall clock: "is this page the build I just made?" */
+function buildStamp(): string {
+	const now = new Date();
+	const pad = (value: number) => String(value).padStart(2, '0');
+	return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(
+		now.getHours()
+	)}:${pad(now.getMinutes())}`;
+}
+
 export default defineConfig({
+	// The viewer stamps its own build into the panel: "is this page the build I
+	// think it is?" is a question that costs more than it should when a browser
+	// keeps an old bundle (the operator's Firefox did, 2026-10-12).
+	define: {
+		__BUILD_STAMP__: JSON.stringify(buildStamp())
+	},
 	plugins: [
 		sveltekit({
 			compilerOptions: {

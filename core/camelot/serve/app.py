@@ -72,10 +72,17 @@ def create_app(config: ServeConfig) -> FastAPI:
 
         @app.get("/{full_path:path}")
         async def spa(full_path: str):
-            """Serve static files, falling back to index.html (SPA routes)."""
+            """Serve static files, falling back to index.html (SPA routes).
+
+            The *page* is never cached: `index.html` names hashed bundles, and
+            a browser that keeps it runs an old build for as long as it likes
+            (the operator's Firefox did exactly that, 2026-10-12 — the panel
+            now stamps the build, and this is the fix). The hashed files
+            themselves are content-addressed and keep their caching.
+            """
             candidate = root / full_path
             if full_path and candidate.is_file():
                 return FileResponse(candidate)
-            return FileResponse(index)
+            return FileResponse(index, headers={"cache-control": "no-store"})
 
     return app

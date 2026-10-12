@@ -934,7 +934,11 @@ class Editor:
                    for patch in entries if not patch.get("applied")]
         client_ops = any(journal["zones"].values())
         if not pending and not client_ops:
-            raise EditorError("nothing to apply: the journal is empty")
+            if any(journal["patches"].values()) or self.client_state().installed:
+                raise EditorError(
+                    "nothing to publish: the client and the server's rows already "
+                    "carry this session (revert puts back what it changed)")
+            raise EditorError("nothing to publish: the journal holds no edit")
         if pending and not self.config.db_write:
             # refused *before* any client write, so nothing lands half-applied
             self._write_connect()

@@ -145,6 +145,17 @@ def test_remove_and_undo_are_exact(editing, tmp_path):
     assert client.delete("/api/v1/world/zone/0/edits").status_code == 200
 
 
+def test_publishing_twice_says_what_is_already_there(editing, tmp_path):
+    """The operator pressed publish twice: the second press is not a mistake
+    about an empty journal, it is a session already written on both sides."""
+    client = editor_client(editing, tmp_path / "session")
+    edit(client, {"kind": "move", "id": 2, "x": 30000, "y": 31000})
+    assert client.post("/api/v1/world/mod/apply").status_code == 200
+    again = client.post("/api/v1/world/mod/apply")
+    assert again.status_code == 400
+    assert "already" in again.json()["detail"]
+
+
 def test_build_needs_something_to_publish(editing, tmp_path):
     client = editor_client(editing, tmp_path / "session")
     response = client.post("/api/v1/world/mod/build")

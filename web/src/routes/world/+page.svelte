@@ -84,12 +84,14 @@
 	const editClient = $derived(edit?.client ?? null);
 	/** Everything the journal holds, across the session's zones. */
 	const sessionOps = $derived((edit?.zones ?? []).reduce((sum, zone) => sum + zone.ops.length, 0));
-	const changes = $derived(sessionOps + editRows);
-	/** Like a repository: the session is ahead of what was published (the op
-	 * count at the last apply), or it has server rows nothing wrote yet. */
-	const dirty = $derived(
-		sessionOps !== ((edit?.published?.ops as number | undefined) ?? 0) || editRows > writtenRows
-	);
+	/** The ops the last publish covered: what the client already carries. */
+	const publishedOps = $derived((edit?.published?.ops as number | undefined) ?? 0);
+	/** What a publish would still write: ops the client does not hold yet, and
+	 * rows nothing wrote to the database yet. The journal itself may be larger —
+	 * written rows stay in it, their originals are its business. */
+	const changes = $derived(Math.max(0, sessionOps - publishedOps) + (editRows - writtenRows));
+	/** Like a repository: unpublished changes exist, or they do not. */
+	const dirty = $derived(changes > 0);
 	// The client's half is the client's own authority: `revert` cannot touch it.
 	const clientNote = $derived.by(() => {
 		const client = edit?.client;
@@ -903,6 +905,7 @@
 						{/if}
 						{#if editStatus}<p class="hint">{editStatus}</p>{/if}
 						{#if editError}<p class="warn">{editError}</p>{/if}
+						<p class="hint stamp">viewer {__BUILD_STAMP__}</p>
 
 						{#if selected}
 							<section class="context">
@@ -1346,6 +1349,9 @@
 	}
 	.panel code {
 		color: #cfe8e0;
+	}
+	.panel .stamp {
+		opacity: 0.55;
 	}
 	.fields {
 		display: flex;
