@@ -477,8 +477,12 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
    (`Ground = 1` wins, measured in game); **(b)** the **spawn layer,
    read-only** — **done 2026-10-12**: `/world` draws the server's `mob`,
    `worldobject`, `door` and `path` rows from a snapshot (`--server-rows`) or
-   the live MySQL (`--db-config`), 2,544 mobs / 35 statics / 11 doors / 67
-   patrols in Camelot Hills (counts and shots in the workspace report);
+   the live MySQL (`--db-config`), its own region's rows only (world
+   coordinates are per region — the first cut mixed seven regions into
+   Camelot Hills; corrected the same evening, rules read from the server:
+   the `Region` column, `door.InternalID / 1 000 000`, and the patrols a
+   zone's mobs walk). 2,075 mobs / 21 statics / 9 doors / 3 patrols in
+   Camelot Hills (counts and shots in the workspace report);
    **(c)** the editor (gizmos, snap, add/remove, the undo journal,
    the authoring directory) **plus the publish path** — **done 2026-10-12**:
    `--edits DIR` opens an editing session (the journal lives in the Phase 5

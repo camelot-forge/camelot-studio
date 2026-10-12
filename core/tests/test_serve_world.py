@@ -207,14 +207,23 @@ def test_the_spawns_route_reads_a_snapshot_in_zone_local_coordinates(tmp_path, w
                  "Z": 100, "Region": 1, "Level": 3, "Model": 111, "Size": 40,
                  "Heading": 2048, "PathID": "FarmPatrol"},
                 {"Mob_ID": "m2", "Name": "elsewhere", "X": 1, "Y": 1, "Z": 0},
+                # another region's row, in the same rectangle (its world
+                # coordinates are per region): never this zone's
+                {"Mob_ID": "m3", "Name": "region 165 boar", "X": 16600,
+                 "Y": 24900, "Z": 5000, "Region": 165},
             ],
             "worldobject": [
                 {"WorldObject_ID": "o1", "Name": "banner", "X": 16400,
-                 "Y": 24576, "Z": 0, "Model": 1315, "Heading": 0},
+                 "Y": 24576, "Z": 0, "Region": 1, "Model": 1315, "Heading": 0},
+                {"WorldObject_ID": "o2", "Name": "region 165 camp", "X": 16600,
+                 "Y": 24900, "Z": 4900, "Region": 165},
             ],
             "door": [
                 {"Door_ID": "d1", "Name": "gate", "Type": 0, "X": 17000,
-                 "Y": 25000, "Z": 50, "Heading": 1024},
+                 "Y": 25000, "Z": 50, "Heading": 1024, "InternalID": 40123},
+                {"Door_ID": "d2", "Name": "Midgard Mile Gate", "Type": 1,
+                 "X": 16500, "Y": 24900, "Z": 4256, "Heading": 1013,
+                 "InternalID": 165102401},
             ],
             "path": [{"Path_ID": "p1", "PathID": "FarmPatrol", "PathType": 3}],
             "pathpoints": [
@@ -233,7 +242,10 @@ def test_the_spawns_route_reads_a_snapshot_in_zone_local_coordinates(tmp_path, w
     mob = payload["mobs"][0]
     assert (mob["name"], mob["x"], mob["y"], mob["z"]) == ("a boar", 116, 224, 100)
     assert mob["path"] == "FarmPatrol"
+    assert [row["name"] for row in payload["mobs"]] == ["a boar"]  # no region 165 row
     assert payload["objects"][0]["y"] == 0
+    assert [row["name"] for row in payload["objects"]] == ["banner"]
+    assert [door["name"] for door in payload["doors"]] == ["gate"]  # not the mile gate
     assert payload["doors"][0]["x"] == 616  # 17000 - 16384
     path = payload["paths"][0]
     assert path["name"] == "FarmPatrol" and path["path_type"] == 3
@@ -266,8 +278,10 @@ def test_the_live_path_asks_for_the_zone_rectangle(monkeypatch, tmp_path, world)
         "UserId=root;Password=x</DBConnectionString>")
     seen = {}
 
-    def fake(connect_, x, y, width, height):
+    def fake(connect_, *, region, zone_id, x, y, width, height):
         seen["rect"] = (x, y, width, height)
+        seen["region"] = region
+        seen["zone"] = zone_id
         return {"mob": [{"Mob_ID": "m1", "Name": "a boar", "X": x + 10,
                          "Y": y + 20, "Z": 0}],
                 "worldobject": [], "door": [], "path": [], "pathpoints": []}
@@ -276,6 +290,7 @@ def test_the_live_path_asks_for_the_zone_rectangle(monkeypatch, tmp_path, world)
     payload = spawns_client(world, db_config=config).get(
         "/api/v1/world/zone/0/spawns").json()
     assert seen["rect"] == (16384, 24576, 65536, 65536)
+    assert (seen["region"], seen["zone"]) == (1, 0)
     assert payload["source"].startswith("mysql ")
     assert payload["mobs"][0]["x"] == 10
 

@@ -182,6 +182,29 @@ def test_apply_installs_the_edited_zone_and_the_client_reads_it_back(editing, tm
     assert (pine.x, pine.y) == (32768, 32768)
 
 
+def test_an_op_the_client_already_shows_is_already_applied(editing, tmp_path):
+    """`apply` writes the edit into the client; the journal then describes a
+    state the base already carries. Replaying it is a no-op, not a conflict
+    (the operator hit exactly this after their first in-game check) — while a
+    row that differs from both the expectation and the values still refuses."""
+    edits = tmp_path / "session"
+    client = editor_client(editing, edits)
+    edit(client, {"kind": "move", "id": 2, "x": 30000, "y": 31000})
+    assert client.post("/api/v1/world/mod/apply").status_code == 200
+    # the client now carries the move, and the journal still holds the op
+    zone = client.get("/api/v1/world/zone/0").json()
+    pine = next(fixture for fixture in zone["fixtures"] if fixture["id"] == 2)
+    assert (pine["x"], pine["y"]) == (30000, 31000)
+    assert zone["warnings"] == []
+    assert client.get("/api/v1/world/edit").json()["zones"][0]["ops"]
+
+    # a real conflict (neither the expectation nor the target matches) refuses
+    response = edit(client, {"kind": "move", "id": 2, "x": 1, "y": 1,
+                             "expect": {"X": "999", "Y": "999"}})
+    assert response.status_code == 400
+    assert "expected '999'" in response.json()["detail"]
+
+
 def test_revert_empties_the_journal_and_its_build(tmp_path, editing):
     """A pack left behind by a reverted journal would claim an edit that no
     longer exists — the build outputs go with the journal. The client's

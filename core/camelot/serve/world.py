@@ -177,7 +177,8 @@ class ServerRows:
                 snapshot = self._load_snapshot()
             except serverrows.ServerRowsError as error:
                 return {}, [str(error)]
-            return snapshot.in_rect(left, top, width, height), []
+            return snapshot.in_rect(region=zone.info.region, zone_id=zone.info.zone_id,
+                                    x=left, y=top, width=width, height=height), []
         if self.config.db_config is not None:
             cached = self._live.get(zone.info.zone_id)
             now = time.monotonic()
@@ -210,7 +211,8 @@ class ServerRows:
             self._connection = serverrows.parse_server_config(str(self.config.db_config))
         left, top, width, height = zone.info.world_rect
         return serverrows.read_rows_in_rect(
-            lambda: serverrows.connect(self._connection), left, top, width, height)
+            lambda: serverrows.connect(self._connection), region=zone.info.region,
+            zone_id=zone.info.zone_id, x=left, y=top, width=width, height=height)
 
 
 # --- payloads -----------------------------------------------------------------

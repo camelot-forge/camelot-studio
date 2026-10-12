@@ -150,11 +150,51 @@ class Editor:
         return gamedata.parse_table("fixtures.csv", raw)
 
     def working_table(self, zone: Zone) -> gamedata.Table:
-        """The base table with this zone's journal applied."""
+        """The base table with this zone's journal applied.
+
+        An op the base *already shows* counts as applied — `apply` writes the
+        edit into the client, so the journal then describes a state the base
+        carries; replaying it must be a no-op, not a conflict (the operator
+        hit exactly this right after their first in-game check, 2026-10-12).
+        A row that differs from *both* the op's expectation and its values
+        still refuses: that is a real conflict, not a replay.
+        """
+        table = self.base_table(zone)
+        for op in self.ops(zone.info.zone_id):
+            if self._already_applied(table, op):
+                continue
+            try:
+                table = gamedata.apply_row_ops(table, [op])
+            except gamedata.TableError as error:
+                raise EditorError(str(error)) from error
+        return table
+
+    @staticmethod
+    def _already_applied(table: gamedata.Table, op: dict) -> bool:
+        """Does the table already show what the op would write?"""
+        action = op.get("action")
         try:
-            return gamedata.apply_row_ops(self.base_table(zone), self.ops(zone.info.zone_id))
-        except gamedata.TableError as error:
-            raise EditorError(str(error)) from error
+            row_id = int(op["id"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        index = table.row_index(row_id)
+        if action == "remove":
+            return index is None
+        if index is None:
+            return False
+        columns = {name: int(position) for name, position in (op.get("columns") or {}).items()}
+        values = {name: str(value) for name, value in (op.get("values") or {}).items()}
+        if not values:
+            return False
+        row = table.rows[index]
+        for name, wanted in values.items():
+            position = columns.get(name)
+            if position is None:
+                return False
+            current = row[position] if len(row) > position else ""
+            if current != wanted:
+                return False
+        return True
 
     def fixtures(self, zone: Zone) -> list[Fixture]:
         """The placements as the journal leaves them — what the viewer shows."""

@@ -25,11 +25,17 @@ from camelot.serverrows import (
 )
 
 RECT = (548864, 483328, 65536, 65536)  # Camelot Hills, measured (zones.OffsetX/Y 67/59)
+REGION = 1
+ZONE = 0
+#: `rows_in_rect`/`in_rect` take the zone's identity: region for `mob` and
+#: `worldobject`, zone id for `door` (its `InternalID` carries it).
+WHERE = {"region": REGION, "zone_id": ZONE,
+         "x": RECT[0], "y": RECT[1], "width": RECT[2], "height": RECT[3]}
 
 
 def mob(row_id: str, x: int, y: int, **extra) -> dict:
     return {"Mob_ID": row_id, "Name": row_id, "X": x, "Y": y, "Z": 0,
-            "Region": 1, "PathID": None, **extra}
+            "Region": REGION, "PathID": None, **extra}
 
 
 def point(path_id: str, step: int, x: int, y: int) -> dict:
@@ -40,21 +46,32 @@ def point(path_id: str, step: int, x: int, y: int) -> dict:
 
 ROWS = {
     "mob": [
-        mob("m-in", 550000, 490000),
+        mob("m-in", 550000, 490000, PathID="Patrol_One"),
         mob("m-out", 700000, 490000),
         mob("m-border", 548864 + 65536, 490000),  # exactly on the east border: the next zone's
+        # World coordinates are per region: another region's row lands in the
+        # same rectangle and is *not* this zone's (the operator saw exactly
+        # this as mobs in the air, 2026-10-12).
+        mob("m-elsewhere", 550000, 490000, Region=165),
     ],
     "worldobject": [
         {"WorldObject_ID": "o-in", "Name": "banner", "X": 570000, "Y": 490000, "Z": 0,
-         "Region": 1, "Model": 1315},
+         "Region": REGION, "Model": 1315},
         {"WorldObject_ID": "o-out", "Name": "far", "X": 1, "Y": 1, "Z": 0,
-         "Region": 1, "Model": 1},
+         "Region": REGION, "Model": 1},
+        {"WorldObject_ID": "o-elsewhere", "Name": "camp", "X": 570000, "Y": 490000,
+         "Z": 5000, "Region": 165, "Model": 1},
     ],
     "door": [
         {"Door_ID": "d-in", "Name": "keep gate", "X": 575000, "Y": 533000, "Z": 0,
-         "Type": 0, "Heading": 0},
+         "Type": 0, "Heading": 0, "InternalID": 40123},
         {"Door_ID": "d-out", "Name": "elsewhere", "X": 100, "Y": 100, "Z": 0,
-         "Type": 0, "Heading": 0},
+         "Type": 0, "Heading": 0, "InternalID": 0},
+        # A door carries its zone in `InternalID` (the server's own
+        # `DoorMgr.LoadDoor`): zone 165's mile gate sits in this rectangle.
+        {"Door_ID": "d-foreign", "Name": "Midgard Mile Gate", "X": 555250,
+         "Y": 536197, "Z": 4256, "Type": 1, "Heading": 1013,
+         "InternalID": 165102401},
     ],
     "path": [{"Path_ID": "p1-id", "PathID": "Patrol_One", "PathType": 3},
              {"Path_ID": "p2-id", "PathID": "Patrol_Two", "PathType": 3}],
@@ -79,7 +96,7 @@ def test_a_snapshot_round_trips_through_json(tmp_path):
     snapshot.save(path)
     again = Snapshot.load(path)
     assert again.rows["mob"] == ROWS["mob"]
-    assert again.counts() == {"mob": 3, "worldobject": 2, "door": 2, "path": 2,
+    assert again.counts() == {"mob": 4, "worldobject": 3, "door": 3, "path": 2,
                               "pathpoints": 5}
     assert again.source["database"] == "opendaoc"
 
@@ -100,32 +117,35 @@ def test_a_snapshot_without_its_rows_is_refused(tmp_path):
 
 
 def test_the_rect_filter_keeps_what_the_zone_holds():
-    """A zone's rows are the rows inside its world rectangle; the border
-    belongs to the zone whose rectangle starts there, not to both."""
-    got = Snapshot(ROWS).in_rect(*RECT)
+    """A zone's rows are its *region's* rows inside its world rectangle; the
+    border belongs to the zone whose rectangle starts there, not to both, and
+    a door belongs to the zone its `InternalID` names (the server's own rule)
+    whatever its coordinates."""
+    got = Snapshot(ROWS).in_rect(**WHERE)
     assert [row["Mob_ID"] for row in got["mob"]] == ["m-in"]
     assert [row["WorldObject_ID"] for row in got["worldobject"]] == ["o-in"]
-    assert [row["Door_ID"] for row in got["door"]] == ["d-in"]
+    assert [row["Door_ID"] for row in got["door"]] == ["d-in", "d-out"]
 
 
-def test_a_patrol_with_one_point_inside_is_kept_whole():
-    """Clipping a patrol line at the zone border would be an invention; the
-    client's mob walks the whole path, so the viewer draws it whole."""
-    got = Snapshot(ROWS).in_rect(*RECT)
+def test_only_the_patrols_the_zone_s_mobs_walk_are_kept():
+    """The rule is the server's: a patrolling mob walks its path, so a path
+    is zone content when a mob of the zone links it — kept *whole* (its
+    points beyond the rectangle included, the client walks the whole line).
+    Patrol_Two crosses the rectangle but nobody walks it: dropped."""
+    got = Snapshot(ROWS).in_rect(**WHERE)
     assert [row["PathID"] for row in got["path"]] == ["Patrol_One"]
     assert [row["Step"] for row in got["pathpoints"]] == [1, 2, 3]
     assert [row["X"] for row in got["pathpoints"]] == [500000, 575000, 700000]
 
 
-def test_a_patrol_its_mobs_walk_is_kept_even_when_no_point_is_inside():
-    """A mob inside the zone links its patrol by `mob.PathID`; the path's
-    points may all sit outside (a walk-in with a shared route)."""
+def test_a_patrol_reached_only_by_a_mob_outside_the_zone_is_not_kept():
+    """The link has to come from a mob the zone owns: another region's mob
+    pointing at the same path makes it that region's route, not ours."""
     rows = dict(ROWS)
-    rows["pathpoints"] = [point("Patrol_Two", 1, 1, 1), point("Patrol_Two", 2, 2, 2)]
-    rows["mob"] = [mob("m-in", 550000, 490000, PathID="Patrol_Two")]
-    got = Snapshot(rows).in_rect(*RECT)
-    assert [row["PathID"] for row in got["path"]] == ["Patrol_Two"]
-    assert [row["Step"] for row in got["pathpoints"]] == [1, 2]
+    rows["mob"] = [mob("m-in", 550000, 490000),
+                   mob("m-other", 550000, 490000, Region=165, PathID="Patrol_Two")]
+    got = Snapshot(rows).in_rect(**WHERE)
+    assert got["path"] == [] and got["pathpoints"] == []
 
 
 # --- the live half ------------------------------------------------------------
@@ -164,30 +184,31 @@ class FakeConnection:
         self.closed = True
 
 
-def test_the_live_reader_asks_for_the_zone_rectangle_and_maps_the_rows():
-    """The live half runs the same rule in SQL: the rectangle in every
-    `WHERE`, the patrol subquery selecting *whole* paths. The connection is
-    injected — the reader never opens one itself (tests must not need MySQL)."""
+def test_the_live_reader_asks_for_the_zone_region_and_rectangle():
+    """The live half runs the same rules in SQL: the rectangle *and* the
+    region for `mob`/`worldobject`, the `InternalID` zone for `door` (the
+    server's own `DoorMgr.LoadDoor`), and whole paths reached through the
+    zone's mobs. The connection is injected — tests never open MySQL."""
     connection = FakeConnection([
         [ROWS["mob"][0]], [ROWS["worldobject"][0]], [ROWS["door"][0]],
-        [point("Patrol_One", 2, 575000, 490000)],
-        [{"Mob_ID": "m-in", "PathID": "Patrol_Two"}],  # the walk-in link: no point inside
-        list(ROWS["pathpoints"]),
-        ROWS["path"],
+        [{"PathID": "Patrol_One"}],
+        ROWS["pathpoints"][:3], [ROWS["path"][0]],
     ])
-    got = serverrows.read_rows_in_rect(lambda: connection, *RECT)
+    got = serverrows.read_rows_in_rect(lambda: connection, **WHERE)
 
-    for sql, params in connection.statements[:3]:
+    for sql, params in connection.statements[:2]:
         assert "BETWEEN %s AND %s" not in sql  # `>=`/`<` keeps the border single-owner
-        assert sql.count("%s") == 4
-        assert params == (548864, 548864 + 65536, 483328, 483328 + 65536)
-    assert "SELECT PathID FROM pathpoints" in connection.statements[3][0]
-    assert "PathID IN" in connection.statements[5][0]
-    assert "ORDER BY PathID, Step" in connection.statements[5][0]
+        assert "Region = %s" in sql
+        assert params == (548864, 548864 + 65536, 483328, 483328 + 65536, REGION)
+    assert "DIV 1000000" in connection.statements[2][0]
+    assert connection.statements[2][1] == (ZONE,)
+    assert "PathID IS NOT NULL" in connection.statements[3][0]
+    assert "PathID IN" in connection.statements[4][0]
+    assert "ORDER BY PathID, Step" in connection.statements[4][0]
     assert connection.closed
     assert [row["Mob_ID"] for row in got["mob"]] == ["m-in"]
-    assert [row["Step"] for row in got["pathpoints"]] == [1, 2, 3, 1, 2]
-    assert {row["PathID"] for row in got["path"]} == {"Patrol_One", "Patrol_Two"}
+    assert [row["Step"] for row in got["pathpoints"]] == [1, 2, 3]
+    assert [row["PathID"] for row in got["path"]] == ["Patrol_One"]
 
 
 def test_an_export_writes_the_rows_and_never_the_password(tmp_path):
@@ -203,7 +224,7 @@ def test_an_export_writes_the_rows_and_never_the_password(tmp_path):
          "password": "s3cret", "database": "opendaoc"},
         path, connect_=lambda _connection: connection)
     assert next(sql for sql, _ in connection.statements).startswith("SELECT Mob_ID")
-    assert snapshot.counts()["mob"] == 3
+    assert snapshot.counts()["mob"] == 4
     document = json.loads(path.read_text())
     assert document["source"] == {"kind": "mysql", "host": "localhost",
                                   "database": "opendaoc"}

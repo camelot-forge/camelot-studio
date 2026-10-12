@@ -18,6 +18,9 @@ const fixtureName = process.argv[5] && focusX === null ? process.argv[5] : null;
 const width = Number(process.env.SHOT_WIDTH ?? 1280);
 const height = Number(process.env.SHOT_HEIGHT ?? 800);
 mkdirSync(outDir, { recursive: true });
+// Software WebGL: a full-frame capture takes tens of seconds, more than
+// Playwright's default patience.
+const SHOT = { timeout: 120000 };
 
 const browser = await chromium.launch({
 	args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--use-gl=angle']
@@ -55,14 +58,14 @@ if (focusX !== null && focusY !== null) {
 	}
 	await page.waitForTimeout(700);
 }
-await page.screenshot({ path: `${outDir}/${slug}.png` });
+await page.screenshot({ path: `${outDir}/${slug}.png`, ...SHOT });
 console.log(`shot -> ${outDir}/${slug}.png`);
 
 for (const layer of ['bounds', 'jumps']) {
 	await page.getByLabel(layer).check();
 }
 await page.waitForTimeout(500);
-await page.screenshot({ path: `${outDir}/${slug}-overlays.png` });
+await page.screenshot({ path: `${outDir}/${slug}-overlays.png`, ...SHOT });
 console.log(`shot -> ${outDir}/${slug}-overlays.png`);
 
 if (fixtureName) {
@@ -86,7 +89,7 @@ if (fixtureName) {
 	if (picked) {
 		await page.keyboard.press('f');
 		await page.waitForTimeout(700);
-		await page.screenshot({ path: `${outDir}/${slug}-selected.png` });
+		await page.screenshot({ path: `${outDir}/${slug}-selected.png`, ...SHOT });
 		console.log(`shot -> ${outDir}/${slug}-selected.png (${picked.name} #${picked.id})`);
 	} else {
 		console.log(`no fixture named ${fixtureName}`);

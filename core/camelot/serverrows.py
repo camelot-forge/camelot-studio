@@ -12,14 +12,22 @@ OpenDAoC (`notes/db-schema.py`): `mob` 97,737 rows, `worldobject` 799,
 viewer draws and the inspector shows — no column is renamed, none is
 invented, and everything else stays in the database where it lives.
 
-Two rules, both measured rather than chosen:
+Two rules, both measured rather than chosen — and the first one was learned
+the hard way (an operator saw mobs in the air, 2026-10-12):
 
-- a zone owns the rows inside its world rectangle (`zones.OffsetX/Y` × 8192,
-  65536 wide — spec §1.2); the filter is `>= left, < left + width`, so a row
-  on a border belongs to the zone that starts there and never to both;
-- a patrol is kept *whole* once one of its points is inside the rectangle, or
-  once a mob inside it links the path (`mob.PathID`): clipping the line at
-  the border would be an invention, and the client walks the whole path.
+- a zone owns the rows **of its own region** inside its world rectangle
+  (`zones.OffsetX/Y` × 8192, 65536 wide — spec §1.2). World coordinates are
+  *per region*: regions 51, 102, 163, 165, 202, 234–241 all have rows whose
+  X/Y fall inside Camelot Hills' rectangle, and drawing them there showed a
+  camp and a herd floating 2,500 units up that the game never shows. So
+  `mob`/`worldobject` rows require `Region == zone.Region`, the rectangle is
+  `>= left, < left + width` (a border row has one owner), and `door` rows
+  follow the server's own rule (`DoorMgr.LoadDoor`): the door's zone is
+  `InternalID / 1 000 000` (the doors are region-less in the schema);
+- a patrol is kept **when a mob of the zone walks it** (`mob.PathID`): the
+  server walks a patrolling mob along its path, and no mob anywhere links
+  the global `BT_*` travel routes (measured: 0 rows) — drawing those put
+  lines at z 7,879 across the whole map.
 """
 from __future__ import annotations
 
@@ -179,8 +187,9 @@ def read_rows(connect_: Callable[[], Any], *,
     return out
 
 
-def read_rows_in_rect(connect_: Callable[[], Any], x: float, y: float,
-                      width: float, height: float) -> dict[str, list[dict]]:
+def read_rows_in_rect(connect_: Callable[[], Any], *, region: int, zone_id: int,
+                      x: float, y: float, width: float,
+                      height: float) -> dict[str, list[dict]]:
     """The rows a zone holds: the same rule as `rows_in_rect`, in SQL.
 
     `connect_` is injected: the caller opens the connection, these readers
@@ -191,20 +200,22 @@ def read_rows_in_rect(connect_: Callable[[], Any], x: float, y: float,
     database = connect_()
     try:
         with database.cursor() as cursor:
-            for table in ("mob", "worldobject", "door"):
+            for table in ("mob", "worldobject"):
                 cursor.execute(
-                    f"{_select(table)} WHERE {_rect_clause()} ORDER BY {_ORDER[table]}",
-                    rect)
+                    f"{_select(table)} WHERE {_rect_clause()} AND Region = %s "
+                    f"ORDER BY {_ORDER[table]}", (*rect, region))
                 out[table] = list(cursor.fetchall())
 
+            # A door carries its zone in `InternalID` (DoorMgr.LoadDoor).
             cursor.execute(
-                f"SELECT PathID FROM pathpoints WHERE {_rect_clause()}", rect)
-            path_ids = {row["PathID"] for row in cursor.fetchall()}
+                f"{_select('door')} WHERE InternalID DIV 1000000 = %s "
+                f"ORDER BY {_ORDER['door']}", (zone_id,))
+            out["door"] = list(cursor.fetchall())
 
             cursor.execute(
                 f"SELECT PathID FROM mob WHERE {_rect_clause()} "
-                "AND PathID IS NOT NULL", rect)
-            path_ids |= {row["PathID"] for row in cursor.fetchall() if row["PathID"]}
+                "AND Region = %s AND PathID IS NOT NULL", (*rect, region))
+            path_ids = {row["PathID"] for row in cursor.fetchall() if row["PathID"]}
 
             ids = sorted(path_ids)
             holes = ", ".join(["%s"] * len(ids))
@@ -228,22 +239,26 @@ def read_rows_in_rect(connect_: Callable[[], Any], x: float, y: float,
 
 # --- the snapshot -------------------------------------------------------------
 
-def rows_in_rect(rows: dict[str, list[dict]], x: float, y: float,
-                 width: float, height: float) -> dict[str, list[dict]]:
-    """The rows a zone holds: inside its rectangle, patrols kept whole."""
+def rows_in_rect(rows: dict[str, list[dict]], *, region: int, zone_id: int,
+                 x: float, y: float, width: float,
+                 height: float) -> dict[str, list[dict]]:
+    """The rows a zone holds — its region's, inside its rectangle; patrols
+    are the ones its mobs walk (see the module docstring for the why)."""
 
     def inside(row: dict) -> bool:
         return x <= row.get("X", -1) < x + width and y <= row.get("Y", -1) < y + height
 
-    mobs = [row for row in rows.get("mob", []) if inside(row)]
-    objects = [row for row in rows.get("worldobject", []) if inside(row)]
-    doors = [row for row in rows.get("door", []) if inside(row)]
+    def mine(row: dict) -> bool:
+        return inside(row) and int(row.get("Region", -1)) == region
 
-    points = rows.get("pathpoints", [])
-    path_ids = {point["PathID"] for point in points if inside(point)}
-    path_ids |= {mob["PathID"] for mob in mobs if mob.get("PathID")}
+    mobs = [row for row in rows.get("mob", []) if mine(row)]
+    objects = [row for row in rows.get("worldobject", []) if mine(row)]
+    doors = [row for row in rows.get("door", [])
+             if int(row.get("InternalID", 0) or 0) // 1_000_000 == zone_id]
 
-    kept = sorted((point for point in points if point["PathID"] in path_ids),
+    path_ids = {mob["PathID"] for mob in mobs if mob.get("PathID")}
+    kept = sorted((point for point in rows.get("pathpoints", [])
+                   if point["PathID"] in path_ids),
                   key=lambda point: (point["PathID"], point["Step"]))
     paths = sorted((row for row in rows.get("path", []) if row["PathID"] in path_ids),
                    key=lambda row: row["PathID"])
@@ -292,8 +307,10 @@ class Snapshot:
     def counts(self) -> dict[str, int]:
         return {table: len(self.rows.get(table, [])) for table in TABLE_NAMES}
 
-    def in_rect(self, x: float, y: float, width: float, height: float) -> dict[str, list[dict]]:
-        return rows_in_rect(self.rows, x, y, width, height)
+    def in_rect(self, *, region: int, zone_id: int, x: float, y: float,
+                width: float, height: float) -> dict[str, list[dict]]:
+        return rows_in_rect(self.rows, region=region, zone_id=zone_id,
+                            x=x, y=y, width=width, height=height)
 
 
 def export_snapshot(connection: dict[str, Any], out: str | Path, *,
