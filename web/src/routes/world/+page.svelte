@@ -1038,9 +1038,10 @@
 							</section>
 						{:else}
 							<p class="hint controls">
-								left: click to select, drag a box for several · <b>middle: move</b> (shift+middle rotates,
-								alt+middle lifts, ctrl+middle scales) · right: orbit (shift+right pans) · wheel: zoom
-								· F: focus · Del: remove
+								left: click to select, drag a box for several — and a drag starting on the selection <b
+									>moves</b
+								> it (add ctrl to scale, alt to lift). The middle button does the same; right orbits,
+								shift+right pans, the wheel zooms. F focuses, Del removes, Escape lets go.
 							</p>
 						{/if}
 

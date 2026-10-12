@@ -48,19 +48,42 @@ console.log('standing over pine', pine);
 await page.waitForTimeout(1200);
 
 // 1. left click = selection (and nothing else)
-await page.mouse.click(middle.x, middle.y);
-await page.waitForTimeout(400);
+await page.mouse.move(middle.x, middle.y);
+await page.mouse.down({ button: 'left' });
+await page.waitForTimeout(120);
+await page.mouse.up({ button: 'left' });
+await page.waitForTimeout(500);
 console.log('click selects:', JSON.stringify((await state()).selection));
 
-// 2. middle drag = move
+// 2. a left drag that starts *on the selection* grabs it (the middle button may
+//    not exist); a left drag anywhere else is still a box
+await page.mouse.move(middle.x, middle.y);
+await page.mouse.down({ button: 'left' });
+await page.mouse.move(middle.x + 100, middle.y, { steps: 8 });
+await page.mouse.up({ button: 'left' });
+await page.waitForTimeout(900);
+console.log('left grab op:', JSON.stringify((await journal())[0]?.ops?.[0]?.values));
+
+// 3. middle drag = the same gesture, for mice that have one
 await page.mouse.move(middle.x, middle.y);
 await page.mouse.down({ button: 'middle' });
 await page.mouse.move(middle.x + 120, middle.y + 40, { steps: 8 });
 await page.mouse.up({ button: 'middle' });
 await page.waitForTimeout(900);
-console.log('move op:', JSON.stringify((await journal())[0]?.ops?.[0]?.values));
+console.log('middle move op:', JSON.stringify((await journal())[0]?.ops?.[1]?.values));
 
-// 3. shift + middle = rotate (15° steps)
+// 4. the scene never shows the browser's own menu
+await page.evaluate(
+	`window.addEventListener('contextmenu', (event) => { window.__ctx = event.defaultPrevented; })`
+);
+await page.mouse.move(middle.x, middle.y);
+await page.mouse.down({ button: 'right' });
+await page.mouse.move(middle.x + 40, middle.y + 20, { steps: 4 });
+await page.mouse.up({ button: 'right' });
+await page.waitForTimeout(400);
+console.log('context menu prevented:', await page.evaluate('window.__ctx'));
+
+// 5. shift + middle = rotate (15° steps)
 await page.keyboard.down('Shift');
 await page.mouse.move(middle.x, middle.y);
 await page.mouse.down({ button: 'middle' });
@@ -68,7 +91,7 @@ await page.mouse.move(middle.x, middle.y + 120, { steps: 8 });
 await page.mouse.up({ button: 'middle' });
 await page.keyboard.up('Shift');
 await page.waitForTimeout(900);
-console.log('rotate op:', JSON.stringify((await journal())[0]?.ops?.[1]?.values));
+console.log('rotate op:', JSON.stringify((await journal())[0]?.ops?.[2]?.values));
 
 // 4. alt + middle = lift (only a free-standing row has a z to lift: the pine is
 //    a ground row, so nothing may change — W-3)
@@ -121,11 +144,27 @@ console.log(
 );
 
 // 8. tidy: the journal goes; nothing was published anywhere
+const ops = await journal();
+console.log(
+	'ops:',
+	JSON.stringify(
+		ops.flatMap((zone) =>
+			zone.ops.map((op) => `${op.action}#${op.id} ${JSON.stringify(op.values)}`)
+		)
+	)
+);
 await page.getByRole('button', { name: 'revert' }).click();
-await page.waitForFunction('window.__worldEditor().status?.startsWith("journal cleared")', {
-	timeout: 60000
-});
+await page.waitForFunction(
+	'window.__worldEditor().mops === 0 && window.__worldEditor().rows === 0',
+	{
+		timeout: 60000
+	}
+);
 const done = await state();
+console.log(
+	'after revert:',
+	JSON.stringify({ ops: done.mops, rows: done.rows, dirty: done.dirty })
+);
 console.log(
 	'after revert:',
 	JSON.stringify({ ops: done.mops, rows: done.rows, dirty: done.dirty })

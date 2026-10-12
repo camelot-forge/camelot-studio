@@ -184,20 +184,29 @@ def test_apply_installs_the_edited_zone_and_the_client_reads_it_back(editing, tm
     assert (pine.x, pine.y) == (32768, 32768)
 
 
-def test_an_op_the_client_already_shows_is_already_applied(editing, tmp_path):
-    """`apply` writes the edit into the client; the journal then describes a
-    state the base already carries. Replaying it is a no-op, not a conflict
-    (the operator hit exactly this after their first in-game check) — while a
-    row that differs from both the expectation and the values still refuses."""
+def test_a_publish_commits_the_client_ops(editing, tmp_path):
+    """`apply` writes the edit into the client, so the journal **commits**: its
+    client ops go (the client carries them now) and the next edit starts from
+    what the client holds. The operator hit exactly this on 2026-10-12: an op
+    recorded before a publish no longer applied against the published base.
+    A row that differs from both the expectation and the values still refuses."""
     edits = tmp_path / "session"
     client = editor_client(editing, edits)
-    edit(client, {"kind": "move", "id": 2, "x": 30000, "y": 31000})
+    assert edit(client, {"kind": "move", "id": 2, "x": 30000,
+                         "y": 31000}).status_code == 200
     assert client.post("/api/v1/world/mod/apply").status_code == 200
-    # the client now carries the move, and the journal still holds the op
+
+    state = client.get("/api/v1/world/edit").json()
+    assert state["zones"] == []          # committed: the client holds the op
+    assert state["published"]["ops"] == 1
     zone = client.get("/api/v1/world/zone/0").json()
     pine = next(fixture for fixture in zone["fixtures"] if fixture["id"] == 2)
     assert (pine["x"], pine["y"]) == (30000, 31000)
-    assert zone["warnings"] == []
+    assert zone["warnings"] == []        # the journal applies again
+
+    # the next edit starts from the client's own row, and journals
+    again = edit(client, {"kind": "move", "id": 2, "x": 30500, "y": 31000})
+    assert again.status_code == 200, again.json()
     assert client.get("/api/v1/world/edit").json()["zones"][0]["ops"]
 
     # a real conflict (neither the expectation nor the target matches) refuses
@@ -465,6 +474,63 @@ def test_an_applied_patch_cannot_be_undone_away(editing, tmp_path, monkeypatch):
     response = client.delete("/api/v1/world/zone/0/edits")
     assert response.status_code == 400
     assert "revert" in response.json()["detail"]
+
+
+def test_a_publish_does_not_move_the_revert_target(editing, tmp_path, monkeypatch):
+    """Two rounds of row edits with a publish between them: `revert` puts the
+    *session's first* originals back, not the published ones — otherwise
+    `restore all` would leave the database on the last publish."""
+    fake = FakeConnection([
+        [door_row()],                      # round 1: the originals
+        [door_row()],                      # the existence check at apply
+        [],                                # the UPDATE
+        [door_row(X=LEFT + 19800)],        # round 2: the row as published
+        [door_row(X=LEFT + 19800)],        # the existence check at apply
+        [],                                # the UPDATE
+        [door_row(X=LEFT + 20000)],        # the existence check at revert
+        [],                                # the restoring UPDATE
+    ])
+    monkeypatch.setattr(serverrows, "connect", lambda _connection: fake)
+    client = db_client(editing, tmp_path, db_write=True)
+    for x in (19800, 20000):
+        assert edit(client, {"kind": "row-move", "table": "door", "key": "d1",
+                            "x": x, "y": 19660}).status_code == 200
+        assert client.post("/api/v1/world/mod/apply").status_code == 200
+    state = client.get("/api/v1/world/edit").json()
+    # the patches' own originals follow the database, round after round…
+    assert state["rows"][0]["patches"][0]["originals"]["X"] == str(LEFT + 19660)
+    assert state["rows"][0]["patches"][1]["originals"]["X"] == str(LEFT + 19800)
+
+    assert client.post("/api/v1/world/mod/revert").status_code == 200
+    updates = [params for sql, params in fake.statements if sql.startswith("UPDATE")]
+    assert updates[-1][0] == str(LEFT + 19660)  # the session's first original
+
+
+def test_a_journal_without_the_ledger_still_reverts(editing, tmp_path, monkeypatch):
+    """A session opened *before* the ledger existed (the operator's, 2026-10-12)
+    carries written patches and no originals map: revert falls back to what
+    each patch recorded, rather than leaving the database on the edit."""
+    fake = FakeConnection([
+        [door_row()],                 # the row op's read
+        [door_row()],                 # the existence check at apply
+        [],                           # the UPDATE
+        [door_row(X=LEFT + 24600)],   # the existence check at revert
+        [],                           # the restoring UPDATE
+    ])
+    monkeypatch.setattr(serverrows, "connect", lambda _connection: fake)
+    client = db_client(editing, tmp_path, db_write=True)
+    assert edit(client, {"kind": "row-move", "table": "door", "key": "d1",
+                         "x": 24600, "y": 46957}).status_code == 200
+    assert client.post("/api/v1/world/mod/apply").status_code == 200
+
+    path = tmp_path / "session" / "journal.json"
+    journal = json.loads(path.read_text())
+    journal.pop("originals", None)          # an older session's journal
+    path.write_text(json.dumps(journal))
+
+    assert client.post("/api/v1/world/mod/revert").status_code == 200
+    updates = [params for sql, params in fake.statements if sql.startswith("UPDATE")]
+    assert updates[-1][0] == str(LEFT + 19660)  # the patch's own original
 
 
 def test_the_zone_payload_shows_the_journal_patches(editing, tmp_path, monkeypatch):

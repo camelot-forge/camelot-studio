@@ -154,14 +154,16 @@ interface DraggedRow {
 
 type DragKind = EditKind;
 
-/** Did the drag actually change the item? A gesture that ends where it started
- * is not an edit (the operator hit exactly that with a stray row drag). */
+/** Did the drag change what the editor can *write*? A `Ground = 1` row has no
+ * `z` of its own — the client drops it on the terrain (W-3) — so its height is
+ * not something a gesture can change, and the phantom difference between the
+ * row's raw Z and the terrain's must not journal an op. */
 function changed(entry: DraggedFixture): boolean {
 	const fixture = entry.fixture;
 	return (
 		fixture.x !== entry.from.x ||
 		fixture.y !== entry.from.y ||
-		fixture.z !== entry.from.z ||
+		(!fixture.ground && fixture.z !== entry.from.z) ||
 		fixture.angle !== entry.from.angle ||
 		fixture.scale !== entry.from.scale
 	);
@@ -297,7 +299,16 @@ export class WorldViewer {
 		const canvas = this.canvas;
 		canvas.style.touchAction = 'none';
 		canvas.style.cursor = 'grab';
-		canvas.addEventListener('contextmenu', (event) => event.preventDefault(), { signal });
+		// the page's own menu has no business over the scene: right is the camera
+		window.addEventListener(
+			'contextmenu',
+			(event) => {
+				if (event.target instanceof Node && this.canvas.contains(event.target)) {
+					event.preventDefault();
+				}
+			},
+			{ signal }
+		);
 		canvas.addEventListener('wheel', (event) => this.zoomBy(event), {
 			signal,
 			passive: false
@@ -334,7 +345,29 @@ export class WorldViewer {
 			at: { x: event.clientX, y: event.clientY },
 			moved: false
 		};
-		if (event.button === 1) this.beginDrag(this.dragKindFor(event), ndc);
+		if (event.button === 1) {
+			this.beginDrag(this.dragKindFor(event), ndc);
+			return;
+		}
+		// a drag that starts *on the selection* grabs it: the middle button may
+		// not exist (the operator's does not), and this is the gesture every
+		// editor has. On anything else the left button still only selects.
+		if (event.button === 0 && !event.shiftKey && this.hitSelection(ndc)) {
+			this.beginDrag(this.dragKindFor(event), ndc);
+		}
+	}
+
+	/** Is the pointer over something that is already selected? (a left drag then
+	 * grabs the selection instead of drawing a box) */
+	private hitSelection(ndc: { x: number; y: number }): boolean {
+		const fixture = this.pick(ndc.x, ndc.y)?.fixture ?? null;
+		if (fixture && this.selection.fixtures.some((entry) => entry.id === fixture.id)) {
+			return true;
+		}
+		const row = this.pickRow(ndc.x, ndc.y);
+		return Boolean(
+			row && this.selection.rows.some((entry) => entry.table === row.table && entry.id === row.id)
+		);
 	}
 
 	private dragKindFor(event: PointerEvent): DragKind {
@@ -358,7 +391,7 @@ export class WorldViewer {
 			else this.orbitBy(dx, dy);
 			return;
 		}
-		if (pointer.button === 1 && this.drag) {
+		if (this.drag && (pointer.button === 0 || pointer.button === 1)) {
 			this.applyDrag(this.ndcOf(event), event.clientY - pointer.from.y);
 			return;
 		}
@@ -372,6 +405,11 @@ export class WorldViewer {
 		this.canvas.releasePointerCapture?.(event.pointerId);
 		if (pointer.button === 6) return;
 		if (pointer.button === 0) {
+			// a grab (the drag started on the selection) ends like any other drag
+			if (this.drag) {
+				this.finishDrag();
+				return;
+			}
 			if (pointer.moved) this.finishMarquee(pointer.from, { x: event.clientX, y: event.clientY });
 			else this.clickSelect(this.ndcOf(event), event.shiftKey);
 			return;

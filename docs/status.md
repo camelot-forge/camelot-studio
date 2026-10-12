@@ -497,6 +497,13 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
    land through the same journal: `apply` patches the database behind the
    explicit `--db-write`, recording every original it read, and `revert` puts
    them back exactly. Such an edit is server-only — no pack, no client half.
+   **A publish commits**: the client carries the journal's ops afterwards, so
+   they leave it and the next edit starts from what the client holds (an op
+   recorded before a publish could no longer apply against the published base
+   — the operator hit exactly that). The rows the session writes are recorded
+   in a per-session ledger the first time they are touched, so `revert` and
+   `restore` always mean *the state the session started from*, whatever was
+   published in between;
    **What the game shows is a fourth layer**: a running server reads its rows
    once, at startup, so a written patch is in the database but not on screen
    until the server's own `/reload doors`, `/reload mob`, `/reload object`
@@ -513,11 +520,12 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
 
 **The UX pass (2026-10-12, after B2's in-game check).** The editor moved out
 of the viewer's sidebar into its own floating, draggable panel, and the mouse
-grammar was rewritten: **left is selection** (click, box, shift adds) and the
-**middle button is the edit** (move, shift+middle rotate, alt+middle lift,
-ctrl+middle scale) — the left button was selecting, orbiting and moving at
-once. Right orbits, shift+right pans, the wheel zooms. The panel reads like a
-repository: the publish button carries the count of unpublished changes, and
+grammar was rewritten: **left is selection** (click, box, shift adds) — and a
+drag that starts *on the selection* grabs it, because the middle button is not
+guaranteed to exist; the **middle button** does the same (shift+middle rotate,
+alt+middle lift, ctrl+middle scale). Right orbits, shift+right pans, the wheel
+zooms, and the scene never shows the browser's own menu. The panel reads like
+a repository: the publish button carries the count of unpublished changes, and
 the client's own installed half, the journal and the written rows are named
 separately. Verified by `web/scripts/world_mouse_probe.mjs` (real pointer
 events through the page's own path).

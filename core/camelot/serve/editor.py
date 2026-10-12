@@ -206,7 +206,7 @@ class Editor:
                 self._journal = document
             else:
                 self._journal = {"schema": SCHEMA, "mod": self._mod(),
-                                 "zones": {}, "patches": {}}
+                                 "zones": {}, "patches": {}, "originals": {}}
         return self._journal
 
     def _save(self) -> None:
@@ -470,6 +470,7 @@ class Editor:
         if op.get("kind") in ROW_KINDS:
             patches = self._resolve_rows(zone, op)
             journal["patches"].setdefault(zone_key, []).extend(patches)
+            self._remember_originals(journal, patches)
             self._save()
             return {}, None, patches
 
@@ -483,6 +484,7 @@ class Editor:
         journal["zones"].setdefault(zone_key, []).append(resolved)
         if patches:
             journal["patches"].setdefault(zone_key, []).extend(patches)
+            self._remember_originals(journal, patches)
         self._save()
         row_id = resolved["id"]
         fixture = next((row for row in fixtures_from_table(zone.name, after)
@@ -552,6 +554,22 @@ class Editor:
             patch["originals"] = {name: str(held.get(name, ""))
                                   for name in patch["values"]}
         return patches
+
+    @staticmethod
+    def _remember_originals(journal: dict, patches: list[dict]) -> None:
+        """The values a row had when this *session* first touched it.
+
+        A patch's own `originals` are what the database held before that one
+        patch — which stops being the truth once a publish has written the
+        session's earlier edits. The ledger is what `revert` restores to, so
+        `restore all` means the state the session started from, not the state
+        of the last publish. Per column, first touch wins.
+        """
+        ledger = journal.setdefault("originals", {})
+        for patch in patches:
+            row = ledger.setdefault(f"{patch['table']}:{patch['key']}", {})
+            for column, value in patch["originals"].items():
+                row.setdefault(column, value)
 
     def _journal_rows(self, zone: Zone, rows: list[tuple[str, str, dict]]):
         """The rows as the zone's journal already leaves them.
@@ -682,7 +700,8 @@ class Editor:
         return written
 
     def _restore_patches(self, patches: list[dict]) -> None:
-        """Put recorded originals back: a patch's values, a removal's row."""
+        """Put recorded originals back: a patch's values, a removal's row —
+        the per-patch view of a revert, kept for the tests' own reach."""
         connect_ = self._write_connect()
         updates = [{"table": patch["table"], "key": patch["key"],
                     "values": patch["originals"]}
@@ -699,25 +718,63 @@ class Editor:
     def revert(self) -> int:
         """Undo everything: the journal empties, the originals stand again.
 
-        Server patches that were written are put back first (their recorded
-        originals; a removal re-inserts the whole row), then the client ops
-        go and the build outputs with them — a pack left behind by a reverted
-        journal would claim an edit that no longer exists. The *installed*
-        client half is untouched: uninstall reads the client's own state, and
-        `restore` is the call that does both. Returns the rows put back.
+        The rows the session wrote go back to what they held when the session
+        *first* touched them (the ledger — a publish in between does not move
+        the target), a removal re-inserts the whole row, then the client ops go
+        and the build outputs with them. The *installed* client half is
+        untouched: uninstall reads the client's own state, and `restore` is the
+        call that does both. Returns the rows put back.
         """
         if not self.available:
             raise EditorError("the daemon was started without --edits <dir>")
         journal = self._load()
-        applied = [patch for entries in journal["patches"].values() for patch in entries
-                   if patch.get("applied")]
-        if applied:
-            self._restore_patches(applied)
+        patches = [patch for entries in journal["patches"].values() for patch in entries]
+        ledger = journal.get("originals") or {}
+        written = len([patch for patch in patches if patch.get("applied")])
+        if written:
+            self._restore_originals(ledger, patches)
         journal["zones"] = {}
         journal["patches"] = {}
+        journal["originals"] = {}
         self._save()
         self._clear_build(str(journal["mod"].get("id", "world-edits")))
-        return len(applied)
+        return written
+
+    def _restore_originals(self, ledger: dict, patches: list[dict]) -> None:
+        """Put the session's first originals back, per row.
+
+        The ledger is the truth; a patch recorded before the ledger existed
+        falls back to its own `originals`, which is the best it knows. A row
+        removed and moved in the same session is re-inserted once.
+        """
+        connect_ = self._write_connect()
+        updates: list[dict] = []
+        inserts: dict[str, dict[str, dict]] = {}
+        for patch in patches:
+            if not patch.get("applied"):
+                continue
+            table, key = patch["table"], patch["key"]
+            values = dict(ledger.get(f"{table}:{key}") or patch["originals"])
+            if patch.get("deleted"):
+                inserts.setdefault(table, {})[key] = values
+                continue
+            values.pop(serverrows.KEY_COLUMNS.get(table), None)
+            if values:
+                updates.append({"table": table, "key": key, "values": values})
+        # one UPDATE per row, and the *first* patch of a row wins: without a
+        # ledger that is the oldest — closest to what the session started from
+        seen: set[tuple[str, str]] = set()
+        unique = []
+        for update in updates:
+            name = (update["table"], update["key"])
+            if name in seen:
+                continue
+            seen.add(name)
+            unique.append(update)
+        if unique:
+            serverrows.apply_patches(connect_, unique)
+        for table, rows in inserts.items():
+            serverrows.insert_rows(connect_, table, list(rows.values()))
 
     def mod_id(self) -> str:
         """The mod this session is: its own `mod.json`, else its directory."""
@@ -831,7 +888,14 @@ class Editor:
 
     def apply(self, world) -> dict[str, Any]:
         """Publish: the client half through the installer, the server rows
-        through the database — both recorded, both reversible."""
+        through the database — both recorded, both reversible.
+
+        A publish **commits**: the client now carries the journal's ops, so
+        they leave it (the next edit starts from what the client holds), and
+        the rows it wrote are marked written. Keeping them would make the next
+        edit fail against its own work — the operator hit exactly that on
+        2026-10-12.
+        """
         if not self.available:
             raise EditorError("the daemon was started without --edits <dir>")
         journal = self._load()
@@ -855,13 +919,14 @@ class Editor:
                 raise EditorError(f"install refused: {error}") from error
         written = self._write_patches(pending) if pending else 0
         if client_ops:
-            # What the client now holds: the panel reads this to tell a session
-            # that is ahead of its published half from one that is not.
+            # The commit: the client holds them now, and the marker tells the
+            # panel what the last publish covered.
             journal = self._load()
             journal["published"] = {
                 "ops": sum(len(ops) for ops in journal["zones"].values()),
                 "at": time.time(),
             }
+            journal["zones"] = {}
             self._save()
         return {**built, "install": install, "patches": written}
 
