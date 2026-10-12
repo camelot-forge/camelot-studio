@@ -20,6 +20,8 @@
 		WorldViewer,
 		type EditKind,
 		type EditMode,
+		type FixtureEdit,
+		type RowEdit,
 		type RowPick,
 		type RowProposal
 	} from '$lib/world/viewer';
@@ -52,12 +54,27 @@
 	let selected = $state<WorldFixture | null>(null);
 	let selectionCount = $state(0);
 
-	// The editor (6.3): select vs add, the snap, and the session's state.
+	// The editor (6.3): the mode a drag applies, the snap, and the session's state.
 	const modes = [
-		{ id: 'off', label: 'select', title: 'click to select, drag a box to select several' },
+		{
+			id: 'select',
+			label: 'select',
+			title: 'click to select, a box to select several; nothing moves'
+		},
+		{
+			id: 'move',
+			label: 'move',
+			title: 'a drag on the selection moves it (the middle button does it from anywhere)'
+		},
+		{
+			id: 'rotate',
+			label: 'rotate',
+			title: 'a drag on the selection turns it 15° about its own middle'
+		},
+		{ id: 'scale', label: 'scale', title: 'a drag on the selection resizes it 5%' },
 		{ id: 'add', label: 'add', title: 'click the ground, then pick a catalog entry' }
 	] as const;
-	let editMode = $state<EditMode>('off');
+	let editMode = $state<EditMode>('move');
 	let snap = $state(true);
 	let addPoint = $state<{ x: number; y: number; z: number } | null>(null);
 	let addQuery = $state('');
@@ -161,7 +178,7 @@
 		if (!canvasEl) return;
 		viewer = new WorldViewer(canvasEl);
 		viewer.start();
-		viewer.onEdit = (kind, fixtures) => void commitEdit(kind, fixtures);
+		viewer.onEdit = (kind, edits) => void commitEdit(kind, edits);
 		viewer.onRowEdit = (kind, rows) => void commitRows(kind, rows);
 		viewer.onSelect = (selection) => selectFrom(selection);
 		viewer.onPick = (point) => {
@@ -288,6 +305,7 @@
 			};
 			(window as unknown as { __worldEditor?: () => object }).__worldEditor = () => ({
 				mode: editMode,
+				busy: busyEdit,
 				mops: editOps,
 				rows: editRows,
 				written: writtenRows,
@@ -380,10 +398,26 @@
 		if (selected) proposals = viewer.carriedRows(selected.id);
 	}
 
+	/** One writer, in the user's own order: the gestures hand their ops over one
+	 * after the other. Two fire-and-forget commits used to race on `busyEdit`,
+	 * and the loser was dropped on the floor — a silent lost edit. */
+	let editChain: Promise<unknown> = Promise.resolve();
+	function queued<T>(work: () => Promise<T>): Promise<T> {
+		const next = editChain.then(work, work);
+		editChain = next.then(
+			() => undefined,
+			() => undefined
+		);
+		return next;
+	}
+
 	/** One edit, through the daemon (D2): the answer is the row as it stands,
 	 * plus whatever server rows the op carried (B2). */
 	async function applyEdit(op: Record<string, unknown>): Promise<boolean> {
-		if (zoneId === null || busyEdit) return false;
+		// the buttons and the gestures share one writer: wait for whatever runs,
+		// never drop an op on the floor
+		while (busyEdit) await new Promise((resolve) => setTimeout(resolve, 25));
+		if (zoneId === null) return false;
 		busyEdit = true;
 		editError = null;
 		try {
@@ -427,59 +461,84 @@
 		return `${op.kind} #${id}${rows}`;
 	}
 
-	/** A gesture ended (or a field was typed into): the viewer already wrote the
-	 * fields locally, the daemon journals them — one op per item, in order. */
-	async function commitEdit(kind: EditKind, fixtures: WorldFixture[]) {
-		// the daemon knows move/rotate/scale: a lift is a move with an explicit z
-		const op = kind === 'height' ? 'move' : kind;
-		for (const fixture of fixtures) {
-			// The pairs the user was shown when the fixture was picked: the rows of
-			// the structure as it stood, which is what a move has to carry. A scale
-			// moves nothing, so it carries nothing either.
-			const carried =
-				carry && op !== 'scale'
-					? (viewer?.carriedRows(fixture.id) ?? []).map((row) => ({
-							table: row.table,
-							key: row.key
-						}))
-					: [];
-			const ok = await applyEdit({
-				kind: op,
-				id: fixture.id,
-				x: fixture.x,
-				y: fixture.y,
-				z: fixture.z,
-				angle: fixture.angle,
-				scale: fixture.scale,
-				...(carried.length ? { rows: carried } : {})
-			});
-			if (!ok) break;
-		}
+	/** A gesture ended (or a field was typed into): the *values* the viewer left
+	 * travel with the report — the page never re-reads a payload the daemon may
+	 * have replaced under it (a fixture op reloads the row clouds, and a row op
+	 * that read them then would journal the position from before the gesture). */
+	async function commitEdit(kind: EditKind, edits: FixtureEdit[]) {
+		return queued(async () => {
+			// the daemon knows move/rotate/scale: a lift is a move with an explicit z
+			const op = kind === 'height' ? 'move' : kind;
+			for (const edit of edits) {
+				// A scale moves nothing, so it carries nothing either.
+				const pairs = carry && op !== 'scale' ? edit.carried.map((row) => ({ ...row })) : [];
+				const ok = await applyEdit({
+					kind: op,
+					id: edit.id,
+					x: edit.x,
+					y: edit.y,
+					z: edit.z,
+					angle: edit.angle,
+					scale: edit.scale,
+					...(pairs.length ? { rows: pairs } : {})
+				});
+				if (!ok) break;
+			}
+		});
+	}
+
+	/** The pairs a single fixture would carry as it stands, with the values it
+	 * holds (the panel's own edits go through the same op as a gesture). */
+	function carriedOf(fixture: WorldFixture): FixtureEdit {
+		return {
+			id: fixture.id,
+			x: fixture.x,
+			y: fixture.y,
+			z: fixture.z,
+			angle: fixture.angle,
+			scale: fixture.scale,
+			carried: (viewer?.carriedRows(fixture.id) ?? []).map((row) => ({
+				table: row.table,
+				key: row.key
+			}))
+		};
+	}
+
+	/** One row's own values, as the panel holds them. */
+	function rowEditOf(pick: RowPick, row: SpawnRowOf): RowEdit {
+		return {
+			table: pick.table,
+			key: pick.id,
+			x: row.x,
+			y: row.y,
+			z: row.z,
+			heading: 'heading' in row ? row.heading : undefined
+		};
 	}
 
 	/** A row gesture ended (or the panel placed one): the daemon journals the
-	 * patch — `row-move` carries the heading and the height when they changed. */
-	async function commitRows(kind: EditKind, picks: RowPick[]) {
-		if (!spawns) return;
-		for (const pick of picks) {
-			const row = rowOf(spawns, pick);
-			if (!row) continue;
-			const op =
-				kind === 'rotate' && 'heading' in row
-					? {
-							kind: 'row-move',
-							table: pick.table,
-							key: pick.id,
-							x: row.x,
-							y: row.y,
-							z: row.z,
-							heading: row.heading
-						}
-					: kind === 'height'
-						? { kind: 'row-move', table: pick.table, key: pick.id, x: row.x, y: row.y, z: row.z }
-						: { kind: 'row-move', table: pick.table, key: pick.id, x: row.x, y: row.y };
-			if (!(await applyEdit(op))) break;
-		}
+	 * patch with the values the gesture left — `row-move` carries the heading and
+	 * the height when they changed. */
+	async function commitRows(kind: EditKind, rows: RowEdit[]) {
+		return queued(async () => {
+			for (const row of rows) {
+				const op =
+					kind === 'rotate' && row.heading !== undefined
+						? {
+								kind: 'row-move',
+								table: row.table,
+								key: row.key,
+								x: row.x,
+								y: row.y,
+								z: row.z,
+								heading: row.heading
+							}
+						: kind === 'height'
+							? { kind: 'row-move', table: row.table, key: row.key, x: row.x, y: row.y, z: row.z }
+							: { kind: 'row-move', table: row.table, key: row.key, x: row.x, y: row.y };
+				if (!(await applyEdit(op))) break;
+			}
+		});
 	}
 
 	/** The whole selection goes (Delete, or the panel's button). */
@@ -610,8 +669,9 @@
 	/** A number the panel typed into: the field is the leading item's own, so
 	 * the op kind follows what changed. */
 	async function typed(kind: EditKind) {
-		if (selected) await commitEdit(kind, [selected]);
-		else if (selectedRow) await commitRows(kind, [selectedRow]);
+		if (selected) await commitEdit(kind, [carriedOf(selected)]);
+		else if (selectedRow && selectedSpawn)
+			await commitRows(kind, [rowEditOf(selectedRow, selectedSpawn)]);
 	}
 
 	function number(value: string): number | null {
@@ -636,6 +696,23 @@
 		else selectedSpawn[field] = parsed;
 		viewer?.updateRow(selectedRow, false);
 		void typed(field === 'heading' ? 'rotate' : 'move');
+	}
+
+	/** The keyboard-free turn: two buttons, because a mouse without a middle
+	 * button has no rotate gesture (the operator's does not). */
+	function nudgeAngle(degrees: number) {
+		if (selected) {
+			selected.angle = (((selected.angle + degrees) % 360) + 360) % 360;
+			viewer?.updateFixture(selected, false);
+			void typed('rotate');
+			return;
+		}
+		if (selectedRow && selectedSpawn && 'heading' in selectedSpawn) {
+			const units = Math.round((degrees * 4096) / 360);
+			selectedSpawn.heading = (((selectedSpawn.heading + units) % 4096) + 4096) % 4096;
+			viewer?.updateRow(selectedRow, false);
+			void typed('rotate');
+		}
 	}
 
 	/** The in-game commands the operator has to type: the client's clipboard, so
@@ -949,6 +1026,8 @@
 											onchange={(e) => setFixtureField('angle', e.currentTarget.value)}
 										/></label
 									>
+									<button type="button" title="−15°" onclick={() => nudgeAngle(-15)}>↺</button>
+									<button type="button" title="+15°" onclick={() => nudgeAngle(15)}>↻</button>
 									<label
 										>scale <input
 											type="number"
@@ -1027,6 +1106,8 @@
 											onchange={(e) => setRowField('heading', e.currentTarget.value)}
 										/></label
 									>
+									<button type="button" title="−15°" onclick={() => nudgeAngle(-15)}>↺</button>
+									<button type="button" title="+15°" onclick={() => nudgeAngle(15)}>↻</button>
 								</div>
 								<div class="row">
 									<button
@@ -1042,10 +1123,10 @@
 							</section>
 						{:else}
 							<p class="hint controls">
-								left: click to select, shift+click to add, drag a box for several — and a drag
-								starting on the selection <b>moves</b> it (add ctrl to scale, alt to lift).
-								<b>shift+drag moves the map</b>; right orbits, the wheel zooms. F focuses, Del
-								removes, Escape lets go.
+								left: a click selects, a box selects several (ctrl adds) — and a drag that starts
+								<b>on the selection</b> applies the mode above. middle: the same gesture from anywhere
+								— shift turns (15°), ctrl scales, alt lifts. shift+drag pans, right orbits, the wheel
+								zooms; F focuses, Del removes, Esc lets go.
 							</p>
 						{/if}
 

@@ -85,7 +85,7 @@ interface PickGroup {
 	local: THREE.Matrix4;
 }
 
-export type EditMode = 'off' | 'add';
+export type EditMode = 'select' | 'move' | 'rotate' | 'scale' | 'add';
 export type EditKind = 'move' | 'rotate' | 'scale' | 'height';
 
 /** Snap steps: the zone's own subtile (65536 / 256, measured from the
@@ -139,39 +139,116 @@ interface RowCloud {
 	size: number;
 }
 
-/** One item being dragged, with the fields it started from. */
-interface DraggedFixture {
+/** One item a gesture holds, with the fields it started from. Every pointer
+ * move recomputes the whole transform *from these origins* and applies it to
+ * every item: a group never loses its shape, and no delta ever accumulates. */
+interface GrabFixture {
+	tag: 'fixture';
 	fixture: WorldFixture;
 	from: { x: number; y: number; z: number; angle: number; scale: number };
-	rows: Array<{ table: SpawnTable; row: SpawnRow; from: CarryFrame & { heading?: number } }>;
+	/** the server rows this fixture carries (B2), with their own origins */
+	carried: Array<{
+		table: SpawnTable;
+		row: SpawnRow;
+		from: { x: number; y: number; z: number; heading?: number };
+	}>;
 }
 
-interface DraggedRow {
+interface GrabRow {
+	tag: 'row';
 	table: SpawnTable;
 	row: SpawnRow;
 	from: { x: number; y: number; z: number; heading?: number };
 }
 
-type DragKind = EditKind;
+type GrabItem = GrabFixture | GrabRow;
 
-/** Did the drag change what the editor can *write*? A `Ground = 1` row has no
- * `z` of its own — the client drops it on the terrain (W-3) — so its height is
- * not something a gesture can change, and the phantom difference between the
- * row's raw Z and the terrain's must not journal an op. */
-function changed(entry: DraggedFixture): boolean {
-	const fixture = entry.fixture;
-	return (
-		fixture.x !== entry.from.x ||
-		fixture.y !== entry.from.y ||
-		(!fixture.ground && fixture.z !== entry.from.z) ||
-		fixture.angle !== entry.from.angle ||
-		fixture.scale !== entry.from.scale
-	);
+/** A gesture's own parameters, in zone-local units: one transform for the whole
+ * selection, computed from the origins on every move, quantized once. */
+type Transform =
+	| { kind: 'move'; dx: number; dy: number }
+	| { kind: 'rotate'; degrees: number; pivot: { x: number; y: number } }
+	| { kind: 'scale'; percent: number }
+	| { kind: 'height'; dz: number };
+
+/** What a finished gesture hands the page: the values the gesture left — not
+ * the objects it left them in. A commit that re-reads a payload the daemon has
+ * since replaced would journal the values from *before* the gesture (the rows
+ * a move is carrying are re-read the moment the first op lands). */
+export interface FixtureEdit {
+	id: number;
+	x: number;
+	y: number;
+	z: number;
+	angle: number;
+	scale: number;
+	carried: Array<{ table: SpawnTable; key: string }>;
 }
 
-function changedRow(entry: DraggedRow): boolean {
-	const row = entry.row;
-	return row.x !== entry.from.x || row.y !== entry.from.y || row.z !== entry.from.z;
+/** One server row a gesture moved, with the values it left. */
+export interface RowEdit {
+	table: SpawnTable;
+	key: string;
+	x: number;
+	y: number;
+	z: number;
+	heading?: number;
+}
+
+/** A point turned about a pivot by `degrees` of the client's own `A` (measured:
+ * degrees clockwise on the map, whose `y` grows south). +90° takes a point due
+ * east of the pivot to due south, exactly as the fixture frame does. */
+export function rotateAbout(
+	x: number,
+	y: number,
+	pivot: { x: number; y: number },
+	degrees: number
+): { x: number; y: number } {
+	const radians = (degrees * Math.PI) / 180;
+	const dx = x - pivot.x;
+	const dy = y - pivot.y;
+	const cos = Math.cos(radians);
+	const sin = Math.sin(radians);
+	return { x: pivot.x + dx * cos - dy * sin, y: pivot.y + dx * sin + dy * cos };
+}
+
+/** A gesture in flight. `from`/`at` are screen points — what tells a click from
+ * a drag and what drives the vertical gestures; the grab's own frame lives
+ * below. One gesture is no other gesture's business. */
+interface GestureBase {
+	pointerId: number;
+	button: number;
+	from: { x: number; y: number };
+	at: { x: number; y: number };
+	moved: boolean;
+}
+
+interface Grab extends GestureBase {
+	kind: EditKind;
+	/** the ground point the gesture grabbed (zone-local; its `z` is the height
+	 * of the plane the pointer slides on) */
+	anchor: { x: number; y: number; z: number };
+	/** the items' own middle: what a rotation turns about */
+	pivot: { x: number; y: number };
+	/** the pointer's angle about the pivot when the grab began, radians */
+	startAngle: number;
+	items: GrabItem[];
+}
+
+type Gesture =
+	| (GestureBase & { kind: 'marquee'; add: boolean })
+	| (GestureBase & { kind: 'pan' })
+	| (GestureBase & { kind: 'orbit' })
+	| Grab;
+
+function isGrab(gesture: Gesture | null): gesture is Grab {
+	return (
+		gesture !== null &&
+		(gesture.kind === 'move' ||
+			gesture.kind === 'rotate' ||
+			gesture.kind === 'scale' ||
+			gesture.kind === 'height')
+	);
 }
 
 export class WorldViewer {
@@ -209,23 +286,10 @@ export class WorldViewer {
 	 * payload as it stood when it was selected: the drag that follows carries
 	 * the pairs the user was shown, never a re-proposal of a moved structure. */
 	private carried = new Map<number, RowProposal[]>();
-	private dragged: DraggedFixture[] = [];
-	private draggedRows: DraggedRow[] = [];
-	private drag: {
-		kind: DragKind;
-		ground: THREE.Vector3;
-		pivot: THREE.Vector3;
-		angle: number;
-	} | null = null;
-	private pointer: {
-		id: number;
-		button: number;
-		from: { x: number; y: number };
-		at: { x: number; y: number };
-		moved: boolean;
-	} | null = null;
-	/** A shift+left drag moves the camera; the same gesture *without* movement\n	 * is still "add to the selection". */
-	private panning = false;
+	/** The one gesture in flight — a box, the camera, or a grab of the selection.
+	 * Decided at pointer down, done at pointer up; nothing else writes the items
+	 * while it lives, and each move recomputes the transform from the origins. */
+	private gesture: Gesture | null = null;
 	private marquee: HTMLDivElement;
 	private abort = new AbortController();
 
@@ -252,13 +316,13 @@ export class WorldViewer {
 		depthTest: false
 	});
 	private grid: THREE.GridHelper | null = null;
-	private editMode: EditMode = 'off';
+	private editMode: EditMode = 'select';
 	private snap = true;
 
 	/** The page's hooks. All of them are *reports*: the viewer owns the gesture,
 	 * the page journals the operations it implies (D2). */
-	onEdit: ((kind: EditKind, fixtures: WorldFixture[]) => void) | null = null;
-	onRowEdit: ((kind: EditKind, rows: RowPick[]) => void) | null = null;
+	onEdit: ((kind: EditKind, edits: FixtureEdit[]) => void) | null = null;
+	onRowEdit: ((kind: EditKind, rows: RowEdit[]) => void) | null = null;
 	onSelect: ((selection: Selection) => void) | null = null;
 	onPick: ((point: { x: number; y: number; z: number }) => void) | null = null;
 	private token = 0;
@@ -350,108 +414,152 @@ export class WorldViewer {
 		// the middle button must never start the browser's autoscroll
 		event.preventDefault();
 		this.canvas.setPointerCapture(event.pointerId);
-		this.pointer = {
-			id: event.pointerId,
+		const base = {
+			pointerId: event.pointerId,
 			button: event.button,
 			from: { x: event.clientX, y: event.clientY },
 			at: { x: event.clientX, y: event.clientY },
 			moved: false
 		};
-		if (event.button === 1) {
-			this.beginDrag(this.dragKindFor(event), ndc);
+		if (event.button === 2) {
+			this.gesture = { ...base, kind: event.shiftKey ? 'pan' : 'orbit' };
 			return;
 		}
 		// shift+left drags the map (a shift+left *click* still adds to the
 		// selection: the threshold decides, see `onUp`)
 		if (event.button === 0 && event.shiftKey) {
-			this.panning = true;
+			this.gesture = { ...base, kind: 'pan' };
 			return;
 		}
-		// a drag that starts *on the selection* grabs it: the middle button may
-		// not exist (the operator's does not), and this is the gesture every
-		// editor has. On anything else the left button still only selects.
-		if (event.button === 0 && this.hitSelection(ndc)) {
-			this.beginDrag(this.dragKindFor(event), ndc);
+		if (event.button === 0 || event.button === 1) {
+			const kind = event.button === 1 ? this.dragKindFor(event) : this.leftKind(event);
+			if (kind) {
+				const under = this.underPointer(ndc);
+				if (event.button === 1) {
+					// the middle button moves the *selection* — what the user chose, not
+					// what the pointer happens to stand on; with nothing selected it takes
+					// the item under it, so a lone object is still one drag away
+					const target =
+						this.selection.fixtures.length || this.selection.rows.length
+							? this.selectionView
+							: under
+								? this.targetFor(under)
+								: null;
+					if (target && this.beginGrab(base, kind, ndc, target)) return;
+				} else if (under) {
+					// the left button grabs the *selection* and nothing else: a drag that
+					// starts anywhere else is the box every editor's left button draws
+					const target = this.targetFor(under);
+					if (
+						this.sameSelection(target, this.selection) &&
+						this.beginGrab(base, kind, ndc, target)
+					) {
+						return;
+					}
+				}
+			}
+		}
+		if (event.button === 0) {
+			this.gesture = { ...base, kind: 'marquee', add: event.ctrlKey || event.metaKey };
 		}
 	}
 
-	/** Is the pointer over something that is already selected? (a left drag then
-	 * grabs the selection instead of drawing a box) */
-	private hitSelection(ndc: { x: number; y: number }): boolean {
-		const fixture = this.pick(ndc.x, ndc.y)?.fixture ?? null;
-		if (fixture && this.selection.fixtures.some((entry) => entry.id === fixture.id)) {
-			return true;
+	/** What a left drag applies: the mode, with ctrl and alt as the shortcuts they
+	 * were (`ctrl` scales whatever the mode says, `alt` lifts). `select` leaves
+	 * the left button to the box alone. */
+	private leftKind(event: PointerEvent): EditKind | null {
+		if (event.ctrlKey || event.metaKey) return 'scale';
+		if (event.altKey) return 'height';
+		if (this.editMode === 'move' || this.editMode === 'rotate' || this.editMode === 'scale') {
+			return this.editMode;
 		}
-		const row = this.pickRow(ndc.x, ndc.y);
-		return Boolean(
-			row && this.selection.rows.some((entry) => entry.table === row.table && entry.id === row.id)
-		);
+		return null;
 	}
 
-	private dragKindFor(event: PointerEvent): DragKind {
+	/** What the middle button applies — the mode's own gestures, plus the three
+	 * `A`/`Scale`/lift steps shift, ctrl and alt have always meant. */
+	private dragKindFor(event: PointerEvent): EditKind {
 		if (event.shiftKey) return 'rotate';
 		if (event.ctrlKey || event.metaKey) return 'scale';
 		if (event.altKey) return 'height';
+		if (this.editMode === 'rotate' || this.editMode === 'scale') return this.editMode;
 		return 'move';
 	}
 
+	/** The one item the pointer stands on (a fixture wins over a row under it). */
+	private underPointer(ndc: {
+		x: number;
+		y: number;
+	}): { fixture: WorldFixture } | { row: RowPick } | null {
+		const fixture = this.pick(ndc.x, ndc.y)?.fixture ?? null;
+		if (fixture) return { fixture };
+		const row = this.pickRow(ndc.x, ndc.y);
+		return row ? { row } : null;
+	}
+
+	/** The selection a gesture grabs: what is already selected stays whole, an
+	 * unselected item becomes the selection on its own (what every editor does). */
+	private targetFor(under: { fixture: WorldFixture } | { row: RowPick }): Selection {
+		if ('fixture' in under) {
+			const { fixture } = under;
+			const selected = this.selection.fixtures.some((entry) => entry.id === fixture.id);
+			return selected ? this.selectionView : { fixtures: [fixture], rows: [] };
+		}
+		const { row } = under;
+		const selected = this.selection.rows.some(
+			(entry) => entry.table === row.table && entry.id === row.id
+		);
+		return selected ? this.selectionView : { fixtures: [], rows: [row] };
+	}
+
 	private onMove(event: PointerEvent): void {
-		const pointer = this.pointer;
-		if (!pointer || pointer.id !== event.pointerId) return;
-		const dx = event.clientX - pointer.at.x;
-		const dy = event.clientY - pointer.at.y;
-		pointer.at = { x: event.clientX, y: event.clientY };
+		const gesture = this.gesture;
+		if (!gesture || gesture.pointerId !== event.pointerId) return;
+		const dx = event.clientX - gesture.at.x;
+		const dy = event.clientY - gesture.at.y;
+		gesture.at = { x: event.clientX, y: event.clientY };
 		const total =
-			Math.abs(event.clientX - pointer.from.x) + Math.abs(event.clientY - pointer.from.y);
-		if (total > 3) pointer.moved = true;
-		if (this.panning) {
-			this.pan(dx, dy);
+			Math.abs(event.clientX - gesture.from.x) + Math.abs(event.clientY - gesture.from.y);
+		if (total > 3) gesture.moved = true;
+		if (gesture.kind === 'pan') return this.pan(dx, dy);
+		if (gesture.kind === 'orbit') return this.orbitBy(dx, dy);
+		if (gesture.kind === 'marquee') {
+			if (gesture.moved) this.drawMarquee(gesture.from, event);
 			return;
 		}
-		if (pointer.button === 2) {
-			if (event.shiftKey) this.pan(dx, dy);
-			else this.orbitBy(dx, dy);
-			return;
-		}
-		if (this.drag && (pointer.button === 0 || pointer.button === 1)) {
-			this.applyDrag(this.ndcOf(event), event.clientY - pointer.from.y);
-			return;
-		}
-		if (pointer.button === 0 && pointer.moved) this.drawMarquee(event);
+		this.applyGrab(gesture, this.ndcOf(event));
 	}
 
 	private onUp(event: PointerEvent): void {
-		const pointer = this.pointer;
-		if (!pointer || pointer.id !== event.pointerId) return;
-		this.pointer = null;
-		this.canvas.releasePointerCapture?.(event.pointerId);
-		if (pointer.button === 6) return;
-		if (pointer.button === 0) {
-			if (this.panning) {
-				this.panning = false;
-				// a shift+left *click* never moves the camera: it adds to the selection
-				if (!pointer.moved) this.clickSelect(this.ndcOf(event), true);
-				return;
-			}
-			// a grab (the drag started on the selection) ends like any other drag
-			if (this.drag) {
-				this.finishDrag();
-				return;
-			}
-			if (pointer.moved) this.finishMarquee(pointer.from, { x: event.clientX, y: event.clientY });
-			else this.clickSelect(this.ndcOf(event), false);
+		const gesture = this.gesture;
+		if (!gesture || gesture.pointerId !== event.pointerId) {
+			this.canvas.releasePointerCapture?.(event.pointerId);
 			return;
 		}
-		if (pointer.button === 1 && this.drag) this.finishDrag();
+		this.gesture = null;
+		this.canvas.releasePointerCapture?.(event.pointerId);
+		this.canvas.style.cursor = 'grab';
+		if (gesture.kind === 'marquee') {
+			if (gesture.moved) {
+				this.finishMarquee(gesture.from, { x: event.clientX, y: event.clientY }, gesture.add);
+			} else {
+				// a shift+left *click* adds to the selection rather than replacing it
+				this.clickSelect(this.ndcOf(event), event.shiftKey || gesture.add);
+			}
+			return;
+		}
+		if (gesture.kind === 'pan' || gesture.kind === 'orbit') return;
+		this.finishGrab(gesture);
 	}
 
+	/** A cancelled pointer is not a gesture: everything goes back where it was. */
 	private endPointer(): void {
-		this.pointer = null;
-		this.panning = false;
+		const gesture = this.gesture;
+		this.gesture = null;
 		this.hideMarquee();
-		this.drag = null;
-		this.dragged = [];
-		this.draggedRows = [];
+		this.canvas.style.cursor = 'grab';
+		if (isGrab(gesture)) for (const item of gesture.items) this.resetItem(item);
+		this.refreshSelection();
 	}
 
 	private onDoubleClick(event: MouseEvent): void {
@@ -604,20 +712,18 @@ export class WorldViewer {
 
 	// -- the marquee ------------------------------------------------------------
 
-	private drawMarquee(event: PointerEvent): void {
-		const pointer = this.pointer;
-		if (!pointer) return;
+	private drawMarquee(from: { x: number; y: number }, event: PointerEvent): void {
 		const parent = this.canvas.parentElement;
 		if (!parent) return;
 		if (!this.marquee.parentElement) parent.appendChild(this.marquee);
 		const rect = parent.getBoundingClientRect();
-		const left = Math.min(pointer.from.x, event.clientX) - rect.left;
-		const top = Math.min(pointer.from.y, event.clientY) - rect.top;
+		const left = Math.min(from.x, event.clientX) - rect.left;
+		const top = Math.min(from.y, event.clientY) - rect.top;
 		this.marquee.style.display = 'block';
 		this.marquee.style.left = `${left}px`;
 		this.marquee.style.top = `${top}px`;
-		this.marquee.style.width = `${Math.abs(event.clientX - pointer.from.x)}px`;
-		this.marquee.style.height = `${Math.abs(event.clientY - pointer.from.y)}px`;
+		this.marquee.style.width = `${Math.abs(event.clientX - from.x)}px`;
+		this.marquee.style.height = `${Math.abs(event.clientY - from.y)}px`;
 	}
 
 	private hideMarquee(): void {
@@ -625,8 +731,13 @@ export class WorldViewer {
 	}
 
 	/** Everything the marquee covers: a fixture by its own anchor, a row by its
-	 * point (what is drawn is what is caught), hidden layers left out. */
-	private finishMarquee(from: { x: number; y: number }, to: { x: number; y: number }): void {
+	 * point (what is drawn is what is caught), hidden layers left out. With `add`
+	 * (ctrl) the box adds to the selection instead of replacing it. */
+	private finishMarquee(
+		from: { x: number; y: number },
+		to: { x: number; y: number },
+		add: boolean
+	): void {
 		this.hideMarquee();
 		if (!this.terrain) return;
 		const box = this.marqueeBox(from, to);
@@ -649,9 +760,18 @@ export class WorldViewer {
 				}
 			}
 		}
+		const kept = add ? this.selection : { fixtures: [], rows: [] };
+		const keptFixtures = new Set(kept.fixtures.map((fixture) => fixture.id));
+		const keptRows = new Set(kept.rows.map((row) => `${row.table}:${row.id}`));
 		this.setSelection({
-			fixtures: this.uniqueFixtures(fixtures),
-			rows: rows.slice(0, 600)
+			fixtures: [
+				...kept.fixtures,
+				...this.uniqueFixtures(fixtures).filter((fixture) => !keptFixtures.has(fixture.id))
+			],
+			rows: [
+				...kept.rows,
+				...rows.filter((row) => !keptRows.has(`${row.table}:${row.id}`)).slice(0, 600)
+			]
 		});
 	}
 
@@ -699,302 +819,465 @@ export class WorldViewer {
 		this.showGrid(mode === 'add');
 	}
 
-	private beginDrag(kind: DragKind, ndc: { x: number; y: number }): void {
-		if (!this.terrain) return;
-		const ground = this.pickGroundZone(ndc.x, ndc.y);
-		if (!ground) return;
-		const fixtures = this.selection.fixtures;
-		const rows = this.selection.rows;
-		if (!fixtures.length && !rows.length) return;
-		this.dragged = fixtures.map((fixture) => ({
-			fixture,
-			from: {
-				x: fixture.x,
-				y: fixture.y,
-				z: fixturePlacement(this.terrain!, fixture).position[1],
-				angle: fixture.angle,
-				scale: fixture.scale
-			},
-			rows: (this.carried.get(fixture.id) ?? []).flatMap((proposal) => {
-				const row = this.rowAt({ table: proposal.table, id: proposal.key });
-				return row
-					? [
-							{
-								table: proposal.table,
-								row,
-								from: { x: row.x, y: row.y, z: row.z, angle: 0, heading: row.heading }
-							}
-						]
-					: [];
-			})
-		}));
-		this.draggedRows = rows.flatMap((pick) => {
-			const row = this.rowAt(pick);
-			return row
-				? [
-						{
-							table: pick.table,
-							row,
-							from: { x: row.x, y: row.y, z: row.z, heading: row.heading }
-						}
-					]
-				: [];
-		});
-		const pivot = this.pivotOf();
-		this.drag = {
-			kind,
-			ground,
-			pivot,
-			angle: Math.atan2(ground.z - pivot.z, ground.x - pivot.x)
-		};
-	}
-
-	private pivotOf(): THREE.Vector3 {
-		const points: THREE.Vector3[] = [];
-		for (const entry of this.dragged) {
-			points.push(new THREE.Vector3(entry.from.x, entry.from.z, entry.from.y));
-		}
-		for (const entry of this.draggedRows) {
-			points.push(new THREE.Vector3(entry.from.x, entry.from.z, entry.from.y));
-		}
-		const pivot = new THREE.Vector3();
-		for (const point of points) pivot.add(point);
-		return points.length ? pivot.divideScalar(points.length) : pivot;
-	}
-
-	private applyDrag(ndc: { x: number; y: number }, dy: number): void {
-		const drag = this.drag;
-		if (!drag || !this.terrain) return;
-		const ground = this.pickGroundZone(ndc.x, ndc.y) ?? drag.ground;
-		if (drag.kind === 'move') return this.moveTo(ground.sub(drag.ground));
-		if (drag.kind === 'rotate') {
-			const angle = Math.atan2(ground.z - drag.pivot.z, ground.x - drag.pivot.x);
-			return this.rotateBy(((angle - drag.angle) * 180) / Math.PI);
-		}
-		// up is up: dragging the pointer up raises, and the step follows the
-		// camera's distance so it feels the same at any zoom
-		const units = (this.orbit.distance * 0.0016 + 1) * -dy;
-		if (drag.kind === 'height') return this.liftBy(units);
-		if (drag.kind === 'scale') return this.scaleBy(units / 40);
-	}
-
-	/** The height gesture: "that gate is a storey too low" is a real edit, and
-	 * `row-move` takes an explicit `z` for exactly this. */
-	private liftBy(units: number): void {
-		for (const entry of this.dragged) {
-			const fixture = entry.fixture;
-			if (fixture.ground) continue; // W-3: the client drops a ground row
-			fixture.z = this.snapTo(entry.from.z + units, SNAP_HEIGHT);
-			this.previewCarried(entry);
-			this.updateFixture(fixture, false);
-		}
-		for (const entry of this.draggedRows) {
-			const row = entry.row;
-			row.z = this.snapTo(entry.from.z + units, SNAP_HEIGHT);
-			this.updateRow({ table: entry.table, id: row.id }, false);
-		}
-		this.refreshSelection();
-	}
-
-	private scaleBy(percent: number): void {
-		for (const entry of this.dragged) {
-			const fixture = entry.fixture;
-			fixture.scale = THREE.MathUtils.clamp(
-				this.snapTo(entry.from.scale * (1 + percent / 100), SNAP_SCALE),
-				5,
-				400
-			);
-			this.updateFixture(fixture, false);
-		}
-		this.refreshSelection();
-	}
-
-	private snapTo(value: number, step: number): number {
+	/** Quantize a transform's own parameter — once, for the whole selection.
+	 * Snapping each item's *position* would silently deform the group: two
+	 * objects 40 units apart would leave the gesture 300 apart. */
+	private quantize(value: number, step: number): number {
 		return this.snap ? Math.round(value / step) * step : Math.round(value);
 	}
 
-	private moveTo(delta: THREE.Vector3): void {
-		if (!this.terrain) return;
-		const dx = delta.x;
-		const dy = delta.z;
-		for (const entry of this.dragged) {
-			const fixture = entry.fixture;
-			fixture.x = this.snapTo(entry.from.x + dx, SNAP_POSITION);
-			fixture.y = this.snapTo(entry.from.y + dy, SNAP_POSITION);
-			this.previewCarried(entry);
-			this.updateFixture(fixture, false);
-		}
-		for (const entry of this.draggedRows) {
-			const row = entry.row;
-			row.x = this.snapTo(entry.from.x + dx, SNAP_POSITION);
-			row.y = this.snapTo(entry.from.y + dy, SNAP_POSITION);
-			const offset = entry.from.z - this.terrain.heightAt(entry.from.x, entry.from.y);
-			row.z = Math.round(this.terrain.heightAt(row.x, row.y) + offset);
-			this.updateRow({ table: entry.table, id: row.id }, false);
-		}
-		this.refreshSelection();
-	}
-
-	private rotateBy(deltaDegrees: number): void {
-		const step = this.snap ? SNAP_ANGLE : 1;
-		const delta = Math.round(deltaDegrees / step) * step;
-		const pivot = this.drag?.pivot;
-		for (const entry of this.dragged) {
-			const fixture = entry.fixture;
-			fixture.angle = (((entry.from.angle + delta) % 360) + 360) % 360;
-			if (pivot) this.orbitPoint(fixture, entry.from, pivot, delta);
-			this.previewCarried(entry, delta);
-			this.updateFixture(fixture, false);
-		}
-		for (const entry of this.draggedRows) {
-			const row = entry.row;
-			if (entry.from.heading !== undefined) {
-				row.heading =
-					Math.round(entry.from.heading + (delta * HEADING_UNITS) / 360) % HEADING_UNITS;
-			}
-			if (pivot) this.orbitRowPoint(row, entry.from, pivot, delta);
-			this.updateRow({ table: entry.table, id: row.id }, false);
-		}
-		this.refreshSelection();
-	}
-
-	/** A rotation of the selection turns each item *about the pivot* as well as
-	 * about itself — what an editor does, and what a keep's row of doors wants. */
-	private orbitPoint(
-		fixture: WorldFixture,
-		from: { x: number; y: number },
-		pivot: THREE.Vector3,
-		deltaDegrees: number
-	): void {
-		const radians = (deltaDegrees * Math.PI) / 180;
-		const dx = from.x - pivot.x;
-		const dy = from.y - pivot.z;
-		const cos = Math.cos(radians);
-		const sin = Math.sin(radians);
-		fixture.x = this.snapTo(pivot.x + dx * cos + dy * sin, SNAP_POSITION);
-		fixture.y = this.snapTo(pivot.z - dx * sin + dy * cos, SNAP_POSITION);
-	}
-
-	private orbitRowPoint(
-		row: SpawnRow,
-		from: { x: number; y: number },
-		pivot: THREE.Vector3,
-		deltaDegrees: number
-	): void {
-		const radians = (deltaDegrees * Math.PI) / 180;
-		const dx = from.x - pivot.x;
-		const dy = from.y - pivot.z;
-		const cos = Math.cos(radians);
-		const sin = Math.sin(radians);
-		row.x = this.snapTo(pivot.x + dx * cos + dy * sin, SNAP_POSITION);
-		row.y = this.snapTo(pivot.z - dx * sin + dy * cos, SNAP_POSITION);
-	}
-
-	private previewCarried(entry: DraggedFixture, deltaDegrees = 0): void {
-		if (!entry.rows.length || !this.terrain) return;
-		const after: CarryFrame = {
-			x: entry.fixture.x,
-			y: entry.fixture.y,
-			z: fixturePlacement(this.terrain, entry.fixture).position[1],
-			angle: entry.from.angle + deltaDegrees
+	/** A grab begins: the selection is snapshotted — every item's origins and the
+	 * rows it carries — and the ground point under the pointer becomes the anchor
+	 * every move is measured from. One state, for the whole gesture. */
+	private beginGrab(
+		base: Omit<Grab, 'kind' | 'anchor' | 'pivot' | 'startAngle' | 'items'>,
+		kind: EditKind,
+		ndc: { x: number; y: number },
+		target: Selection
+	): boolean {
+		if (!this.terrain) return false;
+		if (!this.sameSelection(target, this.selection)) this.setSelection(target);
+		const items = this.grabItems(target);
+		if (!items.length) return false;
+		const pivot = this.pivotOf(items);
+		// the anchor: the terrain under the pointer, or — over the sky — the
+		// horizontal plane through the items themselves
+		const hit = this.pickGround(ndc.x, ndc.y);
+		const flat = hit ? null : this.planePoint(ndc, pivot.z);
+		if (!hit && !flat) return false;
+		const anchor = hit ?? { x: flat!.x, y: flat!.y, z: pivot.z };
+		this.gesture = {
+			...base,
+			kind,
+			anchor,
+			pivot: { x: pivot.x, y: pivot.y },
+			startAngle: Math.atan2(anchor.y - pivot.y, anchor.x - pivot.x),
+			items
 		};
-		const from: CarryFrame = {
-			x: entry.from.x,
-			y: entry.from.y,
-			z: entry.from.z,
-			angle: entry.from.angle
-		};
-		for (const carriedRow of entry.rows) {
-			const moved = carryRow(from, after, {
-				x: carriedRow.from.x,
-				y: carriedRow.from.y,
-				z: carriedRow.from.z,
-				heading: carriedRow.from.heading
+		this.canvas.style.cursor = 'grabbing';
+		return true;
+	}
+
+	/** The same selection, by id — never by object identity (the page's `$state`
+	 * proxies and the payload's plain rows are two views of the same row). */
+	private sameSelection(a: Selection, b: Selection): boolean {
+		const fixtures = new Set(b.fixtures.map((fixture) => fixture.id));
+		const rows = new Set(b.rows.map((row) => `${row.table}:${row.id}`));
+		return (
+			a.fixtures.length === b.fixtures.length &&
+			a.rows.length === b.rows.length &&
+			a.fixtures.every((fixture) => fixtures.has(fixture.id)) &&
+			a.rows.every((row) => rows.has(`${row.table}:${row.id}`))
+		);
+	}
+
+	private pivotOf(items: GrabItem[]): { x: number; y: number; z: number } {
+		let x = 0;
+		let y = 0;
+		let z = 0;
+		for (const item of items) {
+			x += item.from.x;
+			y += item.from.y;
+			z += item.from.z;
+		}
+		const count = items.length || 1;
+		return { x: x / count, y: y / count, z: z / count };
+	}
+
+	/** The items a gesture holds, with their origins: the selection's fixtures and
+	 * rows, plus the rows the fixtures carry (B2) — each carried by its *nearest*
+	 * fixture, and never one the user grabbed in its own right: one gesture writes
+	 * a row once. */
+	private grabItems(target: Selection): GrabItem[] {
+		const rows: GrabRow[] = [];
+		const taken = new Set<string>();
+		for (const pick of target.rows) {
+			const row = this.rowAt(pick);
+			if (!row) continue;
+			taken.add(`${pick.table}:${pick.id}`);
+			rows.push({
+				tag: 'row',
+				table: pick.table,
+				row,
+				from: { x: row.x, y: row.y, z: row.z, heading: row.heading }
 			});
-			carriedRow.row.x = moved.x;
-			carriedRow.row.y = moved.y;
-			carriedRow.row.z = moved.z;
-			if (moved.heading !== undefined) carriedRow.row.heading = moved.heading;
-			this.updateRow({ table: carriedRow.table, id: carriedRow.row.id }, false);
 		}
-	}
-
-	/** The drag ended: the page journals what the gesture implies — and only
-	 * when it implies something. A drag that ends where it started is not an
-	 * edit, and the journal should not have to say so. */
-	private finishDrag(): void {
-		const drag = this.drag;
-		this.drag = null;
-		const fixtures = this.dragged.filter((entry) => changed(entry)).map((entry) => entry.fixture);
-		const rows: RowPick[] = this.draggedRows
-			.filter((entry) => changedRow(entry))
-			.map((entry) => ({ table: entry.table, id: entry.row.id }));
-		this.dragged = [];
-		this.draggedRows = [];
-		if (!drag) return;
-		if (fixtures.length) this.onEdit?.(drag.kind, fixtures);
-		if (rows.length) this.onRowEdit?.(drag.kind, rows);
-	}
-
-	/** Drop the selection at a zone-local point (a click, or the panel). */
-	moveSelectionTo(point: { x: number; y: number }): void {
-		const fixtures = this.selection.fixtures;
-		const rows = this.selection.rows;
-		if (!this.terrain || (!fixtures.length && !rows.length)) return;
-		const anchor = fixtures[0] ?? rows[0];
-		const from =
-			fixtures.length && anchor === fixtures[0]
-				? new THREE.Vector3(fixtures[0].x, 0, fixtures[0].y)
-				: (() => {
-						const row = this.rowAt(rows[0]);
-						return new THREE.Vector3(row?.x ?? point.x, 0, row?.y ?? point.y);
-					})();
-		// every selected item takes the same delta as the one under the click
-		const dx = point.x - from.x;
-		const dy = point.y - from.z;
-		this.dragged = fixtures.map((fixture) => ({
+		const carriers = new Map<string, { proposal: RowProposal; fixture: WorldFixture }>();
+		for (const fixture of target.fixtures) {
+			for (const proposal of this.carriedRows(fixture.id)) {
+				const key = `${proposal.table}:${proposal.key}`;
+				if (taken.has(key)) continue;
+				const seen = carriers.get(key);
+				if (!seen || proposal.distance < seen.proposal.distance) {
+					carriers.set(key, { proposal, fixture });
+				}
+			}
+		}
+		const fixtures: GrabFixture[] = target.fixtures.map((fixture) => ({
+			tag: 'fixture',
 			fixture,
 			from: {
 				x: fixture.x,
 				y: fixture.y,
-				z: fixturePlacement(this.terrain!, fixture).position[1],
+				z: this.drawnZ(fixture),
 				angle: fixture.angle,
 				scale: fixture.scale
 			},
-			rows: (this.carried.get(fixture.id) ?? []).flatMap((proposal) => {
-				const row = this.rowAt({ table: proposal.table, id: proposal.key });
-				return row
-					? [
-							{
-								table: proposal.table,
-								row,
-								from: { x: row.x, y: row.y, z: row.z, angle: 0, heading: row.heading }
-							}
-						]
-					: [];
-			})
+			carried: []
 		}));
-		this.draggedRows = rows.flatMap((pick) => {
-			const row = this.rowAt(pick);
-			return row
-				? [{ table: pick.table, row, from: { x: row.x, y: row.y, z: row.z, heading: row.heading } }]
-				: [];
-		});
-		this.moveTo(new THREE.Vector3(dx, 0, dy));
-		const movedFixtures = this.dragged.map((entry) => entry.fixture);
-		const movedRows = this.draggedRows.map((entry) => ({
-			table: entry.table,
-			id: entry.row.id
-		}));
-		this.dragged = [];
-		this.draggedRows = [];
-		if (movedFixtures.length) this.onEdit?.('move', movedFixtures);
-		if (movedRows.length) this.onRowEdit?.('move', movedRows);
+		const byId = new Map(fixtures.map((item) => [item.fixture.id, item]));
+		for (const { proposal, fixture } of carriers.values()) {
+			const item = byId.get(fixture.id);
+			const row = this.rowAt({ table: proposal.table, id: proposal.key });
+			if (!item || !row) continue;
+			item.carried.push({
+				table: proposal.table,
+				row,
+				from: { x: row.x, y: row.y, z: row.z, heading: row.heading }
+			});
+		}
+		return [...fixtures, ...rows];
 	}
 
-	private pickGroundZone(ndcX: number, ndcY: number): THREE.Vector3 | null {
-		const point = this.pickGround(ndcX, ndcY);
-		return point ? new THREE.Vector3(point.x, point.z, point.y) : null;
+	/** The `z` a fixture stands at as the client and the daemon draw it: the
+	 * terrain for a ground-placed row (W-3), the stored `Z` otherwise. */
+	private drawnZ(fixture: WorldFixture): number {
+		return this.terrain ? fixturePlacement(this.terrain, fixture).position[1] : fixture.z;
+	}
+
+	/** The gesture's transform, recomputed from the origins on every move: the
+	 * pointer's own ground point (through the anchor's plane), never a chain of
+	 * small deltas — the two disagree the moment the terrain, or the zoom, does. */
+	private transformOf(grab: Grab, ndc: { x: number; y: number }): Transform | null {
+		if (grab.kind === 'move' || grab.kind === 'rotate') {
+			const point = this.planePoint(ndc, grab.anchor.z);
+			if (!point) return null;
+			if (grab.kind === 'move') {
+				return {
+					kind: 'move',
+					dx: this.quantize(point.x - grab.anchor.x, SNAP_POSITION),
+					dy: this.quantize(point.y - grab.anchor.y, SNAP_POSITION)
+				};
+			}
+			const angle = Math.atan2(point.y - grab.pivot.y, point.x - grab.pivot.x);
+			let degrees = ((angle - grab.startAngle) * 180) / Math.PI;
+			// the shortest way round, so a turn past ±180° never flips the group
+			degrees = ((((degrees + 180) % 360) + 360) % 360) - 180;
+			return { kind: 'rotate', degrees: this.quantize(degrees, SNAP_ANGLE), pivot: grab.pivot };
+		}
+		// up is up: dragging the pointer up raises, and the step follows the
+		// camera's distance so it feels the same at any zoom
+		const units = (this.orbit.distance * 0.0016 + 1) * -(grab.at.y - grab.from.y);
+		if (grab.kind === 'height') {
+			return { kind: 'height', dz: this.quantize(units, SNAP_HEIGHT) };
+		}
+		return { kind: 'scale', percent: this.quantize(units / 40, SNAP_SCALE) };
+	}
+
+	/** Where a screen point meets the horizontal plane at `height`, in zone-local
+	 * map coordinates: the gesture never re-reads the terrain *under* the pointer,
+	 * so a ridge cannot make the selection jump. */
+	private planePoint(
+		ndc: { x: number; y: number },
+		height: number
+	): { x: number; y: number } | null {
+		const ray = new THREE.Raycaster();
+		ray.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.camera);
+		const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -height);
+		const point = new THREE.Vector3();
+		return ray.ray.intersectPlane(plane, point) ? { x: point.x, y: point.z } : null;
+	}
+
+	/** One pointer move: one transform, computed from the origins and applied to
+	 * every item by the same numbers — the shape of a selection never changes. */
+	private applyGrab(grab: Grab, ndc: { x: number; y: number }): void {
+		const transform = this.transformOf(grab, ndc);
+		if (!transform) return;
+		this.applyTransform(grab.items, transform);
+	}
+
+	private applyTransform(items: GrabItem[], transform: Transform): void {
+		for (const item of items) {
+			if (item.tag === 'fixture') {
+				this.transformFixture(item, transform);
+				this.updateFixture(item.fixture, false);
+				for (const carried of item.carried) {
+					this.updateRow({ table: carried.table, id: carried.row.id }, false);
+				}
+			} else {
+				this.transformRow(item, transform);
+				this.updateRow({ table: item.table, id: item.row.id }, false);
+			}
+		}
+		this.refreshSelection();
+	}
+
+	private transformFixture(item: GrabFixture, transform: Transform): void {
+		const fixture = item.fixture;
+		const from = item.from;
+		if (transform.kind === 'move') {
+			fixture.x = from.x + transform.dx;
+			fixture.y = from.y + transform.dy;
+		} else if (transform.kind === 'rotate') {
+			fixture.angle = (((from.angle + transform.degrees) % 360) + 360) % 360;
+			const turned = rotateAbout(from.x, from.y, transform.pivot, transform.degrees);
+			fixture.x = Math.round(turned.x);
+			fixture.y = Math.round(turned.y);
+		} else if (transform.kind === 'scale') {
+			fixture.scale = THREE.MathUtils.clamp(
+				Math.round(from.scale * (1 + transform.percent / 100)),
+				5,
+				400
+			);
+		} else if (!fixture.ground) {
+			// W-3: a ground row has no z of its own — the client drops it on the terrain
+			fixture.z = from.z + transform.dz;
+		}
+		if (!item.carried.length) return;
+		// The rows this fixture carries follow its frame — the daemon's own
+		// arithmetic (B2), which `carryRow` matches and its test holds to it.
+		const before: CarryFrame = { x: from.x, y: from.y, z: from.z, angle: from.angle };
+		const after: CarryFrame = {
+			x: fixture.x,
+			y: fixture.y,
+			z: this.drawnZ(fixture),
+			angle: fixture.angle
+		};
+		for (const carried of item.carried) {
+			const moved = carryRow(before, after, carried.from);
+			carried.row.x = Math.round(moved.x);
+			carried.row.y = Math.round(moved.y);
+			carried.row.z = moved.z;
+			if (moved.heading !== undefined) carried.row.heading = moved.heading;
+		}
+	}
+
+	private transformRow(item: GrabRow, transform: Transform): void {
+		const row = item.row;
+		const from = item.from;
+		if (transform.kind === 'scale') return; // a server row has no scale to turn
+		if (transform.kind === 'height') {
+			row.z = from.z + transform.dz;
+			return;
+		}
+		if (transform.kind === 'move') {
+			row.x = from.x + transform.dx;
+			row.y = from.y + transform.dy;
+		} else {
+			const turned = rotateAbout(from.x, from.y, transform.pivot, transform.degrees);
+			row.x = Math.round(turned.x);
+			row.y = Math.round(turned.y);
+			if (from.heading !== undefined) {
+				const turn = Math.round((transform.degrees * HEADING_UNITS) / 360);
+				row.heading = (((from.heading + turn) % HEADING_UNITS) + HEADING_UNITS) % HEADING_UNITS;
+			}
+		}
+		// The daemon keeps a moved row's height *above the terrain* when the op
+		// names no `z` — the preview keeps the same rule, or the row jumps on the
+		// next reload (the two are the same arithmetic, by construction).
+		if (this.terrain) {
+			const offset = from.z - this.terrain.heightAt(from.x, from.y);
+			row.z = Math.round(this.terrain.heightAt(row.x, row.y) + offset);
+		}
+	}
+
+	/** The gesture ended: the page journals what it changed — and only that. An
+	 * item the gesture did not change goes back to its origin, so what stands on
+	 * the screen is exactly what the journal holds. The rows go first: their ops
+	 * reload the row clouds, and a fixture op that landed before them would have
+	 * the daemon re-read rows the gesture is about to move. */
+	private finishGrab(grab: Grab): void {
+		const edits: FixtureEdit[] = [];
+		const rows: RowEdit[] = [];
+		for (const item of grab.items) {
+			if (item.tag === 'fixture') {
+				if (this.fixtureChanged(item)) {
+					edits.push({
+						id: item.fixture.id,
+						x: item.fixture.x,
+						y: item.fixture.y,
+						z: item.fixture.z,
+						angle: item.fixture.angle,
+						scale: item.fixture.scale,
+						carried: item.carried.map((carried) => ({
+							table: carried.table,
+							key: carried.row.id
+						}))
+					});
+				} else {
+					this.resetItem(item);
+				}
+				continue;
+			}
+			if (this.rowChanged(item)) {
+				rows.push({
+					table: item.table,
+					key: item.row.id,
+					x: item.row.x,
+					y: item.row.y,
+					z: item.row.z,
+					heading: item.from.heading !== undefined ? item.row.heading : undefined
+				});
+			} else {
+				this.resetItem(item);
+			}
+		}
+		this.refreshSelection();
+		if (rows.length) this.onRowEdit?.(grab.kind, rows);
+		if (edits.length) this.onEdit?.(grab.kind, edits);
+	}
+
+	/** Did the gesture change what the editor can *write*? A `Ground = 1` row has
+	 * no `z` of its own (W-3), so a phantom height difference must not journal. */
+	private fixtureChanged(item: GrabFixture): boolean {
+		const fixture = item.fixture;
+		const from = item.from;
+		return (
+			fixture.x !== from.x ||
+			fixture.y !== from.y ||
+			fixture.angle !== from.angle ||
+			fixture.scale !== from.scale ||
+			(!fixture.ground && fixture.z !== from.z)
+		);
+	}
+
+	private rowChanged(item: GrabRow): boolean {
+		const row = item.row;
+		const from = item.from;
+		return (
+			row.x !== from.x ||
+			row.y !== from.y ||
+			row.z !== from.z ||
+			(row.heading ?? 0) !== (from.heading ?? 0)
+		);
+	}
+
+	/** Put one item back exactly where the gesture found it (its carried rows
+	 * with it): a cancelled pointer, or a change the journal will not hear about. */
+	private resetItem(item: GrabItem): void {
+		if (item.tag === 'fixture') {
+			const fixture = item.fixture;
+			fixture.x = item.from.x;
+			fixture.y = item.from.y;
+			fixture.angle = item.from.angle;
+			fixture.scale = item.from.scale;
+			if (!fixture.ground) fixture.z = item.from.z;
+			this.updateFixture(fixture, false);
+			for (const carried of item.carried) {
+				carried.row.x = carried.from.x;
+				carried.row.y = carried.from.y;
+				carried.row.z = carried.from.z;
+				if (carried.from.heading !== undefined) carried.row.heading = carried.from.heading;
+				this.updateRow({ table: carried.table, id: carried.row.id }, false);
+			}
+			return;
+		}
+		item.row.x = item.from.x;
+		item.row.y = item.from.y;
+		item.row.z = item.from.z;
+		if (item.from.heading !== undefined) item.row.heading = item.from.heading;
+		this.updateRow({ table: item.table, id: item.row.id }, false);
+	}
+
+	/** Drop the selection at a zone-local point (the panel's "move here"): an
+	 * explicit destination, so the *leading* item lands on the point exactly and
+	 * every other item takes the same vector — no snapping in between. */
+	moveSelectionTo(point: { x: number; y: number }): void {
+		if (!this.terrain) return;
+		const items = this.grabItems(this.selection);
+		if (!items.length) return;
+		const pivot = this.pivotOf(items);
+		const grab: Grab = {
+			kind: 'move',
+			pointerId: -1,
+			button: 0,
+			from: { x: 0, y: 0 },
+			at: { x: 0, y: 0 },
+			moved: true,
+			anchor: { x: items[0].from.x, y: items[0].from.y, z: pivot.z },
+			pivot: { x: pivot.x, y: pivot.y },
+			startAngle: 0,
+			items
+		};
+		this.applyTransform(items, {
+			kind: 'move',
+			dx: Math.round(point.x - grab.anchor.x),
+			dy: Math.round(point.y - grab.anchor.y)
+		});
+		this.finishGrab(grab);
+	}
+
+	/** Every item the scene holds, with the fields a measured test reads */
+	items(): {
+		fixtures: Array<{
+			id: number;
+			x: number;
+			y: number;
+			z: number;
+			angle: number;
+			scale: number;
+			ground: boolean;
+		}>;
+		rows: Array<{
+			table: SpawnTable;
+			id: string;
+			x: number;
+			y: number;
+			z: number;
+			heading?: number;
+		}>;
+	} {
+		return {
+			fixtures: this.picks.flatMap((group) =>
+				group.fixtures
+					.filter((fixture) => fixture.nif_id)
+					.map((fixture) => ({
+						id: fixture.id,
+						x: fixture.x,
+						y: fixture.y,
+						z: fixture.z,
+						angle: fixture.angle,
+						scale: fixture.scale,
+						ground: fixture.ground
+					}))
+			),
+			rows: this.rowClouds.flatMap((cloud) =>
+				cloud.rows.map((row) => ({
+					table: cloud.table,
+					id: row.id,
+					x: row.x,
+					y: row.y,
+					z: row.z,
+					heading: row.heading
+				}))
+			)
+		};
+	}
+
+	/** The ground under a screen point, zone-local (a test's own probe: the
+	 * gestures measure the same surface the `add` click does). */
+	groundAt(clientX: number, clientY: number): { x: number; y: number; z: number } | null {
+		const ndc = this.ndcOf({ clientX, clientY } as MouseEvent);
+		return this.pickGround(ndc.x, ndc.y);
+	}
+
+	/** The screen point a zone-local map point projects to (a test's own probe, for
+	 * gestures that need a pointer exactly there); `height` defaults to the
+	 * terrain under the point. */
+	screenAt(x: number, y: number, height?: number): { x: number; y: number } {
+		const at = height ?? (this.terrain ? this.terrain.heightAt(x, y) : 0);
+		const point = new THREE.Vector3(x, at, y).project(this.camera);
+		const rect = this.canvas.getBoundingClientRect();
+		return {
+			x: rect.left + ((point.x + 1) / 2) * rect.width,
+			y: rect.top + ((1 - point.y) / 2) * rect.height
+		};
+	}
+
+	/** Where a screen point meets the plane at `height` (a test's own probe: the
+	 * same plane a move measures its vector on). */
+	planeAt(clientX: number, clientY: number, height: number): { x: number; y: number } | null {
+		return this.planePoint(this.ndcOf({ clientX, clientY } as MouseEvent), height);
 	}
 
 	/** Write one row back into its cloud (the drag's live preview). Found by
@@ -1032,6 +1315,11 @@ export class WorldViewer {
 		for (const group of this.picks) {
 			const index = group.fixtures.findIndex((row) => row.id === fixture.id);
 			if (index < 0) continue;
+			// The caller may hold another view of the row (the page's `$state`
+			// proxy, a payload that was replaced): the pick's own row takes the
+			// fields, so the scene's data and its instances never disagree — a
+			// gesture after a typed edit must start from what the user sees.
+			if (group.fixtures[index] !== fixture) Object.assign(group.fixtures[index], fixture);
 			matrix.compose(
 				new THREE.Vector3(...placement.position),
 				new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), placement.yaw),
@@ -1071,14 +1359,31 @@ export class WorldViewer {
 	}
 
 	/** The fixtures group, rebuilt (an add or a removal changed the row set).
-	 * Meshes stay cached; only the instancing is redone. */
+	 * Meshes stay cached; only the instancing is redone — and the selection
+	 * re-resolves by id, because the payload's rows are new objects: a fixture
+	 * edited after a reload would otherwise write into a ghost. */
 	async rebuildFixtures(zoneId: number, zone: WorldZone): Promise<void> {
 		if (!this.terrain) return;
 		this.clearFixtures();
 		await this.buildFixtures(zoneId, zone, this.terrain, this.token);
+		this.setSelection(this.resolveSelection());
+	}
+
+	/** The selection's fixtures, re-found by id among the picks as they stand. */
+	private resolveSelection(): Selection {
+		const fixtures = this.picks.flatMap((group) => group.fixtures);
+		return {
+			fixtures: this.selection.fixtures
+				.map((fixture) => fixtures.find((row) => row.id === fixture.id))
+				.filter((row): row is WorldFixture => Boolean(row)),
+			rows: [...this.selection.rows]
+		};
 	}
 
 	private clearFixtures(): void {
+		// the instances are about to be rebuilt: a gesture holding them would move
+		// rows nothing draws any more
+		this.gesture = null;
 		this.picks = [];
 		for (const child of [...this.groups.fixtures.children]) {
 			this.groups.fixtures.remove(child);
@@ -1322,9 +1627,7 @@ export class WorldViewer {
 		this.rowClouds = [];
 		this.selection = { fixtures: [], rows: [] };
 		this.carried.clear();
-		this.dragged = [];
-		this.draggedRows = [];
-		this.drag = null;
+		this.gesture = null;
 		this.marker.visible = false;
 		for (const child of [...this.rings.children]) this.rings.remove(child);
 		this.texturedPatches = 0;
@@ -1405,6 +1708,9 @@ export class WorldViewer {
 	}
 
 	private clearSpawns(): void {
+		// the rows are about to be replaced: a gesture holding them would move
+		// objects nothing shows any more (a commit landing mid-drag is enough)
+		this.gesture = null;
 		this.rowClouds = [];
 		this.carried.clear();
 		this.spawnCounts = { mobs: 0, statics: 0, doors: 0, patrols: 0, patrolPoints: 0 };
