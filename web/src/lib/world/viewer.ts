@@ -5,8 +5,6 @@
 // the DDS→PNG ground sheets. Nothing parses a client file in the browser.
 
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import {
 	api,
 	type SpawnRow,
@@ -24,7 +22,6 @@ import {
 	ZONE_SIZE,
 	ZONE_UNIT,
 	fixturePlacement,
-	fixtureZ,
 	parseTerrain,
 	patchGeometry,
 	zoneNormals,
@@ -88,30 +85,21 @@ interface PickGroup {
 	local: THREE.Matrix4;
 }
 
-export type EditMode = 'off' | 'translate' | 'rotate' | 'scale' | 'add';
-export type EditKind = 'move' | 'rotate' | 'scale';
+export type EditMode = 'off' | 'add';
+export type EditKind = 'move' | 'rotate' | 'scale' | 'height';
 
 /** Snap steps: the zone's own subtile (65536 / 256, measured from the
  * terrain grid), 15 degrees and 5 percent — editor conveniences, named. */
-//: the zone's own subtile (65536 / 256, measured from the
-//: terrain grid), 15 degrees and 5 percent — editor conveniences, named.
 const SNAP_POSITION = 256;
-const SNAP_ANGLE = (15 * Math.PI) / 180;
-const SNAP_SCALE = 0.05;
+const SNAP_ANGLE = 15;
+const SNAP_SCALE = 5;
+/** Heights get a finer step than the ground plane: a door sits 30 units above
+ * its threshold, and 256 would be a storey. */
+const SNAP_HEIGHT = 16;
 
 /** The server's `Heading` is a 12-bit compass (measured): 4096 steps to the
  * turn, clockwise from north — the same way `fixtures.csv`'s `A` runs. */
 const HEADING_UNITS = 4096;
-
-function readAngle(yaw: number): number {
-	const degrees = (-yaw * 360) / (Math.PI * 2);
-	return ((degrees % 360) + 360) % 360;
-}
-
-/** A row's 12-bit heading as the scene's yaw (the fixtures' own convention). */
-function headingYaw(heading: number): number {
-	return -(heading * Math.PI * 2) / HEADING_UNITS;
-}
 
 export interface Picked {
 	fixture: WorldFixture;
@@ -134,6 +122,13 @@ export interface RowProposal {
 	distance: number;
 }
 
+/** What is selected: the fixtures and the server rows, together — a marquee
+ * and a click both speak this language, and a drag moves all of it. */
+export interface Selection {
+	fixtures: WorldFixture[];
+	rows: RowPick[];
+}
+
 /** One row cloud: the points drawn, the rows behind them (in buffer order —
  * what a click raycasts against), and the layer the toggle governs. */
 interface RowCloud {
@@ -144,12 +139,44 @@ interface RowCloud {
 	size: number;
 }
 
+/** One item being dragged, with the fields it started from. */
+interface DraggedFixture {
+	fixture: WorldFixture;
+	from: { x: number; y: number; z: number; angle: number; scale: number };
+	rows: Array<{ table: SpawnTable; row: SpawnRow; from: CarryFrame & { heading?: number } }>;
+}
+
+interface DraggedRow {
+	table: SpawnTable;
+	row: SpawnRow;
+	from: { x: number; y: number; z: number; heading?: number };
+}
+
+type DragKind = EditKind;
+
+/** Did the drag actually change the item? A gesture that ends where it started
+ * is not an edit (the operator hit exactly that with a stray row drag). */
+function changed(entry: DraggedFixture): boolean {
+	const fixture = entry.fixture;
+	return (
+		fixture.x !== entry.from.x ||
+		fixture.y !== entry.from.y ||
+		fixture.z !== entry.from.z ||
+		fixture.angle !== entry.from.angle ||
+		fixture.scale !== entry.from.scale
+	);
+}
+
+function changedRow(entry: DraggedRow): boolean {
+	const row = entry.row;
+	return row.x !== entry.from.x || row.y !== entry.from.y || row.z !== entry.from.z;
+}
+
 export class WorldViewer {
 	private canvas: HTMLCanvasElement;
 	private renderer: THREE.WebGLRenderer;
 	private scene = new THREE.Scene();
 	private camera: THREE.PerspectiveCamera;
-	private controls: OrbitControls;
 	private groups = {
 		ground: new THREE.Group(),
 		fixtures: new THREE.Group(),
@@ -170,37 +197,66 @@ export class WorldViewer {
 	private composedPatches = 0;
 	private picks: PickGroup[] = [];
 	private rowClouds: RowCloud[] = [];
-	private selectedRow: RowPick | null = null;
-	/** The height a row keeps *above the ground* while it is dragged: the same
-	 * rule the daemon applies to a `row-move` (a spawn on the ground stays on
-	 * it, a gate keeps sitting on its wall). */
-	private rowOffset = 0;
-	/** The rows a selected fixture carries: proposed against the payload as it
-	 * stood when it was selected, so the drag that follows uses the pairs the
-	 * user was shown (a moved fixture has left its doors behind). */
-	private carried: RowProposal[] = [];
-	private carriedFor: number | null = null;
-	/** A drag's own start: the fixture placement and the carried rows as they
-	 * stood, so every frame re-projects them from there — the daemon's own
-	 * arithmetic, never an accumulation of deltas. */
-	private dragFrom: CarryFrame | null = null;
-	private dragRows: Array<{
-		table: SpawnTable;
-		row: SpawnRow;
-		from: { x: number; y: number; z: number; heading?: number };
-	}> = [];
+
+	// -- selection and gestures -------------------------------------------------
+
+	/** What is selected — the fixtures and the server rows together. The viewer
+	 * owns it: a click, a marquee and the page's lists all settle it here. */
+	private selection: Selection = { fixtures: [], rows: [] };
+	/** The rows a selected fixture carries, per fixture, proposed against the
+	 * payload as it stood when it was selected: the drag that follows carries
+	 * the pairs the user was shown, never a re-proposal of a moved structure. */
+	private carried = new Map<number, RowProposal[]>();
+	private dragged: DraggedFixture[] = [];
+	private draggedRows: DraggedRow[] = [];
+	private drag: {
+		kind: DragKind;
+		ground: THREE.Vector3;
+		pivot: THREE.Vector3;
+		angle: number;
+	} | null = null;
+	private pointer: {
+		id: number;
+		button: number;
+		from: { x: number; y: number };
+		at: { x: number; y: number };
+		moved: boolean;
+	} | null = null;
+	private marquee: HTMLDivElement;
+	private abort = new AbortController();
+
+	// -- the camera (right-drag orbits, shift+right pans, the wheel zooms) -------
+
+	private target = new THREE.Vector3();
+	private orbit = { azimuth: 0.6, elevation: 0.45, distance: 60000 };
+
 	private marker = new THREE.Group();
-	private transform: TransformControls | null = null;
-	private proxy = new THREE.Object3D();
+	private rings = new THREE.Group();
+	private ringGeometry = new THREE.RingGeometry(150, 210, 40);
+	private ringMaterial = new THREE.MeshBasicMaterial({
+		color: 0x67e8f9,
+		side: THREE.DoubleSide,
+		transparent: true,
+		opacity: 0.9,
+		depthTest: false
+	});
+	private rowRingMaterial = new THREE.MeshBasicMaterial({
+		color: 0xe0b23e,
+		side: THREE.DoubleSide,
+		transparent: true,
+		opacity: 0.95,
+		depthTest: false
+	});
 	private grid: THREE.GridHelper | null = null;
 	private editMode: EditMode = 'off';
-	private dragging = false;
-	/** The page's hooks: a finished drag, an add-mode ground click, and a
-	 * finished row drag (the page journals the `row-move`). */
-	onEdit: ((kind: EditKind, fixture: WorldFixture) => void) | null = null;
+	private snap = true;
+
+	/** The page's hooks. All of them are *reports*: the viewer owns the gesture,
+	 * the page journals the operations it implies (D2). */
+	onEdit: ((kind: EditKind, fixtures: WorldFixture[]) => void) | null = null;
+	onRowEdit: ((kind: EditKind, rows: RowPick[]) => void) | null = null;
+	onSelect: ((selection: Selection) => void) | null = null;
 	onPick: ((point: { x: number; y: number; z: number }) => void) | null = null;
-	onRowMove: ((pick: RowPick) => void) | null = null;
-	private selected: WorldFixture | null = null;
 	private token = 0;
 	private frame = 0;
 
@@ -211,10 +267,6 @@ export class WorldViewer {
 		this.scene.fog = new THREE.Fog(0x0f1418, 60000, 160000);
 		this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 		this.camera = new THREE.PerspectiveCamera(50, 1, 10, 400000);
-		this.controls = new OrbitControls(this.camera, canvas);
-		this.controls.enableDamping = true;
-		this.controls.dampingFactor = 0.08;
-		this.controls.maxPolarAngle = Math.PI / 2 - 0.02;
 		this.scene.add(
 			new THREE.HemisphereLight(0xdfeaff, 0x3a3f35, 1.0),
 			new THREE.DirectionalLight(0xffffff, 1.6)
@@ -222,183 +274,666 @@ export class WorldViewer {
 		const sun = this.scene.children[this.scene.children.length - 1] as THREE.DirectionalLight;
 		sun.position.set(0.55, 1, 0.35).multiplyScalar(50000);
 		for (const group of Object.values(this.groups)) this.scene.add(group);
-		this.scene.add(this.proxy); // TransformControls refuses an unattached object
 		this.marker.visible = false;
 		this.buildMarker();
-		this.scene.add(this.marker);
+		this.scene.add(this.marker, this.rings);
+		this.marquee = document.createElement('div');
+		Object.assign(this.marquee.style, {
+			position: 'absolute',
+			border: '1px solid #67e8f9',
+			background: 'rgba(103, 232, 249, 0.12)',
+			pointerEvents: 'none',
+			display: 'none',
+			zIndex: '5'
+		} satisfies Partial<CSSStyleDeclaration>);
+		this.attachInput();
 		this.resize();
 	}
 
-	/** True while a gizmo handle is under the pointer or being dragged — a
-	 * click then belongs to the gizmo, not to selection. */
-	get editing(): boolean {
-		return this.dragging || (this.transform?.axis ?? null) !== null;
+	// -- input: the whole mouse grammar in one place -----------------------------
+
+	private attachInput(): void {
+		const signal = this.abort.signal;
+		const canvas = this.canvas;
+		canvas.style.touchAction = 'none';
+		canvas.style.cursor = 'grab';
+		canvas.addEventListener('contextmenu', (event) => event.preventDefault(), { signal });
+		canvas.addEventListener('wheel', (event) => this.zoomBy(event), {
+			signal,
+			passive: false
+		});
+		canvas.addEventListener('pointerdown', (event) => this.onDown(event), { signal });
+		canvas.addEventListener('pointermove', (event) => this.onMove(event), { signal });
+		canvas.addEventListener('pointerup', (event) => this.onUp(event), { signal });
+		canvas.addEventListener('pointercancel', () => this.endPointer(), { signal });
+		canvas.addEventListener('dblclick', (event) => this.onDoubleClick(event), { signal });
 	}
 
-	/** Arm the editing tools (6.3). `translate`/`rotate`/`scale` attach a gizmo
-	 * to the selected fixture; `add` only arms the ground click. */
-	setEditMode(mode: EditMode, snap = true): void {
-		this.editMode = mode;
-		if (mode === 'translate' || mode === 'rotate' || mode === 'scale') {
-			if (!this.transform) {
-				this.transform = new TransformControls(this.camera, this.canvas);
-				this.transform.addEventListener('dragging-changed', (event) => {
-					this.dragging = Boolean((event as { value: unknown }).value);
-					this.controls.enabled = !this.dragging;
-					if (this.dragging) {
-						this.beginDrag();
-						return;
-					}
-					if (this.selectedRow) this.onRowMove?.(this.selectedRow);
-					else if (this.selected) this.onEdit?.(this.editKind(), this.selected);
-				});
-				this.transform.addEventListener('objectChange', () => this.dragApply());
-				this.scene.add(this.transform.getHelper());
-			}
-			this.transform.setMode(mode);
-			this.transform.setTranslationSnap(snap ? SNAP_POSITION : null);
-			this.transform.setRotationSnap(snap ? SNAP_ANGLE : null);
-			this.transform.setScaleSnap(snap ? SNAP_SCALE : null);
-			this.attachProxy();
-			this.showGrid(true);
+	private ndcOf(event: MouseEvent | PointerEvent): { x: number; y: number } {
+		const rect = this.canvas.getBoundingClientRect();
+		return {
+			x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
+			y: -(((event.clientY - rect.top) / rect.height) * 2 - 1)
+		};
+	}
+
+	private onDown(event: PointerEvent): void {
+		const ndc = this.ndcOf(event);
+		if (event.button === 0 && this.editMode === 'add') {
+			const point = this.pickGround(ndc.x, ndc.y);
+			if (point) this.onPick?.(point);
 			return;
 		}
-		this.transform?.detach();
+		// the middle button must never start the browser's autoscroll
+		event.preventDefault();
+		this.canvas.setPointerCapture(event.pointerId);
+		this.pointer = {
+			id: event.pointerId,
+			button: event.button,
+			from: { x: event.clientX, y: event.clientY },
+			at: { x: event.clientX, y: event.clientY },
+			moved: false
+		};
+		if (event.button === 1) this.beginDrag(this.dragKindFor(event), ndc);
+	}
+
+	private dragKindFor(event: PointerEvent): DragKind {
+		if (event.shiftKey) return 'rotate';
+		if (event.ctrlKey || event.metaKey) return 'scale';
+		if (event.altKey) return 'height';
+		return 'move';
+	}
+
+	private onMove(event: PointerEvent): void {
+		const pointer = this.pointer;
+		if (!pointer || pointer.id !== event.pointerId) return;
+		const dx = event.clientX - pointer.at.x;
+		const dy = event.clientY - pointer.at.y;
+		pointer.at = { x: event.clientX, y: event.clientY };
+		const total =
+			Math.abs(event.clientX - pointer.from.x) + Math.abs(event.clientY - pointer.from.y);
+		if (total > 3) pointer.moved = true;
+		if (pointer.button === 2) {
+			if (event.shiftKey) this.pan(dx, dy);
+			else this.orbitBy(dx, dy);
+			return;
+		}
+		if (pointer.button === 1 && this.drag) {
+			this.applyDrag(this.ndcOf(event), event.clientY - pointer.from.y);
+			return;
+		}
+		if (pointer.button === 0 && pointer.moved) this.drawMarquee(event);
+	}
+
+	private onUp(event: PointerEvent): void {
+		const pointer = this.pointer;
+		if (!pointer || pointer.id !== event.pointerId) return;
+		this.pointer = null;
+		this.canvas.releasePointerCapture?.(event.pointerId);
+		if (pointer.button === 6) return;
+		if (pointer.button === 0) {
+			if (pointer.moved) this.finishMarquee(pointer.from, { x: event.clientX, y: event.clientY });
+			else this.clickSelect(this.ndcOf(event), event.shiftKey);
+			return;
+		}
+		if (pointer.button === 1 && this.drag) this.finishDrag();
+	}
+
+	private endPointer(): void {
+		this.pointer = null;
+		this.hideMarquee();
+		this.drag = null;
+		this.dragged = [];
+		this.draggedRows = [];
+	}
+
+	private onDoubleClick(event: MouseEvent): void {
+		const ndc = this.ndcOf(event);
+		const fixture = this.pick(ndc.x, ndc.y)?.fixture ?? null;
+		if (fixture) this.focusFixture(fixture);
+	}
+
+	// -- the camera -------------------------------------------------------------
+
+	/** The camera's own state as three numbers about its target, so an orbit is
+	 * a change of two of them and nothing else has to know. */
+	private syncOrbit(): void {
+		const offset = this.camera.position.clone().sub(this.target);
+		this.orbit.distance = Math.max(offset.length(), 1);
+		this.orbit.elevation = Math.asin(THREE.MathUtils.clamp(offset.y / this.orbit.distance, -1, 1));
+		this.orbit.azimuth = Math.atan2(offset.x, offset.z);
+	}
+
+	private applyOrbit(): void {
+		const { azimuth, elevation, distance } = this.orbit;
+		this.camera.position.set(
+			this.target.x + Math.sin(azimuth) * Math.cos(elevation) * distance,
+			this.target.y + Math.sin(elevation) * distance,
+			this.target.z + Math.cos(azimuth) * Math.cos(elevation) * distance
+		);
+		this.camera.lookAt(this.target);
+	}
+
+	private orbitBy(dx: number, dy: number): void {
+		this.orbit.azimuth -= dx * 0.006;
+		// never below the horizon: the ground is single-sided, and from below the
+		// zone would read as a hole
+		this.orbit.elevation = THREE.MathUtils.clamp(this.orbit.elevation + dy * 0.005, 0.02, 1.5);
+		this.applyOrbit();
+	}
+
+	private pan(dx: number, dy: number): void {
+		const scale = this.orbit.distance * 0.0016;
+		const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0);
+		const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 1);
+		this.target.addScaledVector(right, -dx * scale).addScaledVector(up, dy * scale);
+		this.applyOrbit();
+	}
+
+	private zoomBy(event: WheelEvent): void {
+		event.preventDefault();
+		this.orbit.distance = THREE.MathUtils.clamp(
+			this.orbit.distance * Math.exp(event.deltaY * 0.0012),
+			200,
+			300000
+		);
+		this.applyOrbit();
+	}
+
+	// -- selection --------------------------------------------------------------
+
+	/** Hand the selection over (the page's lists, a script, a click): the single
+	 * door every path goes through, so the rings and the page always agree. */
+	setSelection(selection: Selection, notify = true): void {
+		this.selection = { fixtures: [...selection.fixtures], rows: [...selection.rows] };
+		this.carried.clear();
+		for (const fixture of this.selection.fixtures) {
+			this.carried.set(fixture.id, this.proposalsFor(fixture.id));
+		}
+		this.refreshSelection();
+		if (notify) this.onSelect?.(this.selectionView);
+	}
+
+	get selectionView(): Selection {
+		return { fixtures: [...this.selection.fixtures], rows: [...this.selection.rows] };
+	}
+
+	/** Update the selection's own fields (a drag, the panel's number inputs) and
+	 * let the page hear about it: the items are the payload's rows themselves. */
+	notifySelection(): void {
+		this.refreshSelection();
+		this.onSelect?.(this.selectionView);
+	}
+
+	/** The rings under the selected items and the pin over the leading one: a
+	 * small object has to stay findable from a zone-wide camera. */
+	private refreshSelection(): void {
+		for (const child of [...this.rings.children]) this.rings.remove(child);
+		const fixtures = this.selection.fixtures;
+		const rows = this.selection.rows;
+		const primaryFixture = fixtures.length ? fixtures[fixtures.length - 1] : null;
+		const primaryRow = !primaryFixture && rows.length ? rows[rows.length - 1] : null;
+		for (const fixture of fixtures) {
+			if (!this.terrain || fixture === primaryFixture) continue;
+			this.addRing(fixturePlacement(this.terrain, fixture).position, this.ringMaterial);
+		}
+		for (const pick of rows) {
+			const row = this.rowAt(pick);
+			if (!row || (primaryRow && pick.table === primaryRow.table && pick.id === primaryRow.id)) {
+				continue;
+			}
+			this.addRing([row.x, row.z, row.y], this.rowRingMaterial);
+		}
+		this.pointMarker(primaryFixture ?? primaryRow);
+	}
+
+	private addRing(position: [number, number, number], material: THREE.Material): void {
+		const ring = new THREE.Mesh(this.ringGeometry, material);
+		ring.rotation.x = -Math.PI / 2;
+		ring.position.set(position[0], position[1] + 12, position[2]);
+		this.rings.add(ring);
+	}
+
+	/** The pin and its ring stand over the leading selection (or nowhere). */
+	private pointMarker(primary: WorldFixture | RowPick | null): void {
+		const position = this.positionOf(primary);
+		if (!position) {
+			this.marker.visible = false;
+			return;
+		}
+		this.marker.position.set(position[0], position[1], position[2]);
+		this.marker.visible = true;
+	}
+
+	private positionOf(item: WorldFixture | RowPick | null): [number, number, number] | null {
+		if (!item || !this.terrain) return null;
+		if ('nif_id' in item) return fixturePlacement(this.terrain, item).position;
+		const row = this.rowAt(item);
+		return row ? [row.x, row.z, row.y] : null;
+	}
+
+	/** A click: the fixture under the pointer, else a server row, else nothing.
+	 * Shift keeps what was selected (the marquee's own language). */
+	private clickSelect(ndc: { x: number; y: number }, add: boolean): void {
+		const fixture = this.pick(ndc.x, ndc.y)?.fixture ?? null;
+		const row = fixture ? null : this.pickRow(ndc.x, ndc.y);
+		if (!fixture && !row) {
+			if (!add) this.setSelection({ fixtures: [], rows: [] });
+			return;
+		}
+		const fixtures = add ? [...this.selection.fixtures] : [];
+		const rows = add ? [...this.selection.rows] : [];
+		if (fixture) {
+			const index = fixtures.findIndex((entry) => entry.id === fixture.id);
+			if (index >= 0) fixtures.splice(index, 1);
+			else fixtures.push(fixture);
+		} else if (row) {
+			const index = rows.findIndex((entry) => entry.table === row.table && entry.id === row.id);
+			if (index >= 0) rows.splice(index, 1);
+			else rows.push(row);
+		}
+		this.setSelection({ fixtures, rows });
+	}
+
+	// -- the marquee ------------------------------------------------------------
+
+	private drawMarquee(event: PointerEvent): void {
+		const pointer = this.pointer;
+		if (!pointer) return;
+		const parent = this.canvas.parentElement;
+		if (!parent) return;
+		if (!this.marquee.parentElement) parent.appendChild(this.marquee);
+		const rect = parent.getBoundingClientRect();
+		const left = Math.min(pointer.from.x, event.clientX) - rect.left;
+		const top = Math.min(pointer.from.y, event.clientY) - rect.top;
+		this.marquee.style.display = 'block';
+		this.marquee.style.left = `${left}px`;
+		this.marquee.style.top = `${top}px`;
+		this.marquee.style.width = `${Math.abs(event.clientX - pointer.from.x)}px`;
+		this.marquee.style.height = `${Math.abs(event.clientY - pointer.from.y)}px`;
+	}
+
+	private hideMarquee(): void {
+		this.marquee.style.display = 'none';
+	}
+
+	/** Everything the marquee covers: a fixture by its own anchor, a row by its
+	 * point (what is drawn is what is caught), hidden layers left out. */
+	private finishMarquee(from: { x: number; y: number }, to: { x: number; y: number }): void {
+		this.hideMarquee();
+		if (!this.terrain) return;
+		const box = this.marqueeBox(from, to);
+		const fixtures: WorldFixture[] = [];
+		const rows: RowPick[] = [];
+		if (this.groups.fixtures.visible) {
+			for (const group of this.picks) {
+				for (const fixture of group.fixtures) {
+					if (!fixture.nif_id) continue;
+					const position = fixturePlacement(this.terrain, fixture).position;
+					if (this.inBox(position, box)) fixtures.push(fixture);
+				}
+			}
+		}
+		for (const cloud of this.rowClouds) {
+			if (!cloud.cloud.visible || !cloud.group.visible) continue;
+			for (const row of cloud.rows) {
+				if (this.inBox([row.x, row.z, row.y], box)) {
+					rows.push({ table: cloud.table, id: row.id });
+				}
+			}
+		}
+		this.setSelection({
+			fixtures: this.uniqueFixtures(fixtures),
+			rows: rows.slice(0, 600)
+		});
+	}
+
+	private uniqueFixtures(fixtures: WorldFixture[]): WorldFixture[] {
+		const seen = new Map<number, WorldFixture>();
+		for (const fixture of fixtures) seen.set(fixture.id, fixture);
+		return [...seen.values()];
+	}
+
+	private marqueeBox(
+		from: { x: number; y: number },
+		to: { x: number; y: number }
+	): { x0: number; y0: number; x1: number; y1: number } {
+		return {
+			x0: Math.min(from.x, to.x),
+			y0: Math.min(from.y, to.y),
+			x1: Math.max(from.x, to.x),
+			y1: Math.max(from.y, to.y)
+		};
+	}
+
+	/** A zone-local point, in or out of the drawn rectangle. Points behind the
+	 * camera are out (their projection mirrors), which is what the row check
+	 * below is for. */
+	private inBox(
+		position: [number, number, number],
+		box: { x0: number; y0: number; x1: number; y1: number }
+	): boolean {
+		const point = new THREE.Vector3(...position);
+		const view = point.clone().applyMatrix4(this.camera.matrixWorldInverse);
+		if (view.z > -1) return false;
+		const rect = this.canvas.getBoundingClientRect();
+		const projected = point.clone().project(this.camera);
+		const x = rect.left + ((projected.x + 1) / 2) * rect.width;
+		const y = rect.top + ((1 - projected.y) / 2) * rect.height;
+		return x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1;
+	}
+
+	// -- the gestures -----------------------------------------------------------
+
+	/** Arm the ground click (`add`): every other gesture is a mouse button. */
+	setEditMode(mode: EditMode, snap = true): void {
+		this.editMode = mode;
+		this.snap = snap;
 		this.showGrid(mode === 'add');
 	}
 
-	private editKind(): EditKind {
-		return this.editMode === 'rotate' ? 'rotate' : this.editMode === 'scale' ? 'scale' : 'move';
-	}
-
-	private attachProxy(): void {
-		if (!this.transform || !this.terrain) return;
-		if (this.selectedRow) {
-			const row = this.rowAt(this.selectedRow);
-			// a server row is a position, not a size: the scale gizmo would lie
-			if (!row || this.editMode === 'scale') {
-				this.transform.detach();
-				return;
-			}
-			this.proxy.position.set(row.x, row.z, row.y);
-			this.proxy.rotation.set(0, row.heading === undefined ? 0 : headingYaw(row.heading), 0);
-			this.proxy.scale.setScalar(1);
-			this.transform.attach(this.proxy);
-			return;
-		}
-		if (!this.selected) {
-			this.transform.detach();
-			return;
-		}
-		const placement = fixturePlacement(this.terrain, this.selected);
-		this.proxy.position.set(...placement.position);
-		this.proxy.rotation.set(0, placement.yaw, 0);
-		this.proxy.scale.setScalar(placement.scale);
-		this.transform.attach(this.proxy);
-	}
-
-	/** The gizmo moved: write it back onto the fixture (and its instance) live.
-	 * A `Ground = 1` row follows the terrain — the client discards its Z
-	 * (W-3), so the gizmo must not pretend otherwise. */
-	private dragApply(): void {
+	private beginDrag(kind: DragKind, ndc: { x: number; y: number }): void {
 		if (!this.terrain) return;
-		if (this.selectedRow) {
-			this.dragRow(this.selectedRow);
-			return;
-		}
-		if (!this.selected) return;
-		const fixture = this.selected;
-		fixture.x = this.proxy.position.x;
-		fixture.y = this.proxy.position.z;
-		fixture.z = this.proxy.position.y;
-		if (this.editMode === 'rotate') fixture.angle = readAngle(this.proxy.rotation.y);
-		if (this.editMode === 'scale') fixture.scale = Math.round(this.proxy.scale.x * 100);
-		if (fixture.ground || this.editMode === 'scale') {
-			this.proxy.position.y = fixtureZ(this.terrain, fixture);
-			fixture.z = this.proxy.position.y;
-		}
-		this.previewRows(fixture);
-		this.updateFixture(fixture);
-	}
-
-	private beginDrag(): void {
-		this.dragFrom = null;
-		this.dragRows = [];
-		if (!this.selected || !this.terrain) return;
-		const fixture = this.selected;
-		this.dragFrom = {
-			x: fixture.x,
-			y: fixture.y,
-			z: fixturePlacement(this.terrain, fixture).position[1],
-			angle: fixture.angle
+		const ground = this.pickGroundZone(ndc.x, ndc.y);
+		if (!ground) return;
+		const fixtures = this.selection.fixtures;
+		const rows = this.selection.rows;
+		if (!fixtures.length && !rows.length) return;
+		this.dragged = fixtures.map((fixture) => ({
+			fixture,
+			from: {
+				x: fixture.x,
+				y: fixture.y,
+				z: fixturePlacement(this.terrain!, fixture).position[1],
+				angle: fixture.angle,
+				scale: fixture.scale
+			},
+			rows: (this.carried.get(fixture.id) ?? []).flatMap((proposal) => {
+				const row = this.rowAt({ table: proposal.table, id: proposal.key });
+				return row
+					? [
+							{
+								table: proposal.table,
+								row,
+								from: { x: row.x, y: row.y, z: row.z, angle: 0, heading: row.heading }
+							}
+						]
+					: [];
+			})
+		}));
+		this.draggedRows = rows.flatMap((pick) => {
+			const row = this.rowAt(pick);
+			return row
+				? [
+						{
+							table: pick.table,
+							row,
+							from: { x: row.x, y: row.y, z: row.z, heading: row.heading }
+						}
+					]
+				: [];
+		});
+		const pivot = this.pivotOf();
+		this.drag = {
+			kind,
+			ground,
+			pivot,
+			angle: Math.atan2(ground.z - pivot.z, ground.x - pivot.x)
 		};
-		for (const proposal of this.carried) {
-			const row = this.rowAt({ table: proposal.table, id: proposal.key });
-			if (row) {
-				this.dragRows.push({
-					table: proposal.table,
-					row,
-					from: { x: row.x, y: row.y, z: row.z, heading: row.heading }
-				});
-			}
-		}
 	}
 
-	/** The rows a fixture move carries, re-projected live through the fixture's
-	 * frame — `carryRow` is the daemon's own arithmetic (`_move_with_fixture`),
-	 * so the drag shows what the server will hold: a row keeps its height
-	 * relative to the fixture, and a rotation turns it about the fixture,
-	 * heading included. */
-	private previewRows(fixture: WorldFixture): void {
-		const from = this.dragFrom;
-		if (!from || !this.dragRows.length || !this.terrain) return;
-		const after: CarryFrame = {
-			x: fixture.x,
-			y: fixture.y,
-			z: fixturePlacement(this.terrain, fixture).position[1],
-			angle: fixture.angle
-		};
-		for (const entry of this.dragRows) {
-			const moved = carryRow(from, after, entry.from);
-			entry.row.x = moved.x;
-			entry.row.y = moved.y;
-			entry.row.z = moved.z;
-			if (moved.heading !== undefined) entry.row.heading = moved.heading;
-			this.updateRow({ table: entry.table, id: entry.row.id });
+	private pivotOf(): THREE.Vector3 {
+		const points: THREE.Vector3[] = [];
+		for (const entry of this.dragged) {
+			points.push(new THREE.Vector3(entry.from.x, entry.from.z, entry.from.y));
 		}
+		for (const entry of this.draggedRows) {
+			points.push(new THREE.Vector3(entry.from.x, entry.from.z, entry.from.y));
+		}
+		const pivot = new THREE.Vector3();
+		for (const point of points) pivot.add(point);
+		return points.length ? pivot.divideScalar(points.length) : pivot;
 	}
 
-	/** A server row moved by the gizmo — or by a ground click. The row keeps
-	 * its height above the terrain (the daemon's own `row-move` rule), so what
-	 * the user drags is what the server will hold. */
-	private dragRow(pick: RowPick, point?: { x: number; y: number }): void {
-		const row = this.rowAt(pick);
-		if (!row || !this.terrain) return;
-		if (point) {
-			row.x = point.x;
-			row.y = point.y;
-		} else {
-			row.x = this.proxy.position.x;
-			row.y = this.proxy.position.z;
-			if (this.editMode === 'rotate' && row.heading !== undefined) {
+	private applyDrag(ndc: { x: number; y: number }, dy: number): void {
+		const drag = this.drag;
+		if (!drag || !this.terrain) return;
+		const ground = this.pickGroundZone(ndc.x, ndc.y) ?? drag.ground;
+		if (drag.kind === 'move') return this.moveTo(ground.sub(drag.ground));
+		if (drag.kind === 'rotate') {
+			const angle = Math.atan2(ground.z - drag.pivot.z, ground.x - drag.pivot.x);
+			return this.rotateBy(((angle - drag.angle) * 180) / Math.PI);
+		}
+		// up is up: dragging the pointer up raises, and the step follows the
+		// camera's distance so it feels the same at any zoom
+		const units = (this.orbit.distance * 0.0016 + 1) * -dy;
+		if (drag.kind === 'height') return this.liftBy(units);
+		if (drag.kind === 'scale') return this.scaleBy(units / 40);
+	}
+
+	/** The height gesture: "that gate is a storey too low" is a real edit, and
+	 * `row-move` takes an explicit `z` for exactly this. */
+	private liftBy(units: number): void {
+		for (const entry of this.dragged) {
+			const fixture = entry.fixture;
+			if (fixture.ground) continue; // W-3: the client drops a ground row
+			fixture.z = this.snapTo(entry.from.z + units, SNAP_HEIGHT);
+			this.previewCarried(entry);
+			this.updateFixture(fixture, false);
+		}
+		for (const entry of this.draggedRows) {
+			const row = entry.row;
+			row.z = this.snapTo(entry.from.z + units, SNAP_HEIGHT);
+			this.updateRow({ table: entry.table, id: row.id }, false);
+		}
+		this.refreshSelection();
+	}
+
+	private scaleBy(percent: number): void {
+		for (const entry of this.dragged) {
+			const fixture = entry.fixture;
+			fixture.scale = THREE.MathUtils.clamp(
+				this.snapTo(entry.from.scale * (1 + percent / 100), SNAP_SCALE),
+				5,
+				400
+			);
+			this.updateFixture(fixture, false);
+		}
+		this.refreshSelection();
+	}
+
+	private snapTo(value: number, step: number): number {
+		return this.snap ? Math.round(value / step) * step : Math.round(value);
+	}
+
+	private moveTo(delta: THREE.Vector3): void {
+		if (!this.terrain) return;
+		const dx = delta.x;
+		const dy = delta.z;
+		for (const entry of this.dragged) {
+			const fixture = entry.fixture;
+			fixture.x = this.snapTo(entry.from.x + dx, SNAP_POSITION);
+			fixture.y = this.snapTo(entry.from.y + dy, SNAP_POSITION);
+			this.previewCarried(entry);
+			this.updateFixture(fixture, false);
+		}
+		for (const entry of this.draggedRows) {
+			const row = entry.row;
+			row.x = this.snapTo(entry.from.x + dx, SNAP_POSITION);
+			row.y = this.snapTo(entry.from.y + dy, SNAP_POSITION);
+			const offset = entry.from.z - this.terrain.heightAt(entry.from.x, entry.from.y);
+			row.z = Math.round(this.terrain.heightAt(row.x, row.y) + offset);
+			this.updateRow({ table: entry.table, id: row.id }, false);
+		}
+		this.refreshSelection();
+	}
+
+	private rotateBy(deltaDegrees: number): void {
+		const step = this.snap ? SNAP_ANGLE : 1;
+		const delta = Math.round(deltaDegrees / step) * step;
+		const pivot = this.drag?.pivot;
+		for (const entry of this.dragged) {
+			const fixture = entry.fixture;
+			fixture.angle = (((entry.from.angle + delta) % 360) + 360) % 360;
+			if (pivot) this.orbitPoint(fixture, entry.from, pivot, delta);
+			this.previewCarried(entry, delta);
+			this.updateFixture(fixture, false);
+		}
+		for (const entry of this.draggedRows) {
+			const row = entry.row;
+			if (entry.from.heading !== undefined) {
 				row.heading =
-					Math.round((readAngle(this.proxy.rotation.y) * HEADING_UNITS) / 360) % HEADING_UNITS;
+					Math.round(entry.from.heading + (delta * HEADING_UNITS) / 360) % HEADING_UNITS;
 			}
+			if (pivot) this.orbitRowPoint(row, entry.from, pivot, delta);
+			this.updateRow({ table: entry.table, id: row.id }, false);
 		}
-		row.z = this.terrain.heightAt(row.x, row.y) + this.rowOffset;
-		this.proxy.position.set(row.x, row.z, row.y);
-		this.updateRow(pick);
+		this.refreshSelection();
 	}
 
-	/** Drop a row at a zone-local point (the click-to-place path). */
-	moveRow(pick: RowPick, point: { x: number; y: number }): void {
-		this.dragRow(pick, point);
+	/** A rotation of the selection turns each item *about the pivot* as well as
+	 * about itself — what an editor does, and what a keep's row of doors wants. */
+	private orbitPoint(
+		fixture: WorldFixture,
+		from: { x: number; y: number },
+		pivot: THREE.Vector3,
+		deltaDegrees: number
+	): void {
+		const radians = (deltaDegrees * Math.PI) / 180;
+		const dx = from.x - pivot.x;
+		const dy = from.y - pivot.z;
+		const cos = Math.cos(radians);
+		const sin = Math.sin(radians);
+		fixture.x = this.snapTo(pivot.x + dx * cos + dy * sin, SNAP_POSITION);
+		fixture.y = this.snapTo(pivot.z - dx * sin + dy * cos, SNAP_POSITION);
+	}
+
+	private orbitRowPoint(
+		row: SpawnRow,
+		from: { x: number; y: number },
+		pivot: THREE.Vector3,
+		deltaDegrees: number
+	): void {
+		const radians = (deltaDegrees * Math.PI) / 180;
+		const dx = from.x - pivot.x;
+		const dy = from.y - pivot.z;
+		const cos = Math.cos(radians);
+		const sin = Math.sin(radians);
+		row.x = this.snapTo(pivot.x + dx * cos + dy * sin, SNAP_POSITION);
+		row.y = this.snapTo(pivot.z - dx * sin + dy * cos, SNAP_POSITION);
+	}
+
+	private previewCarried(entry: DraggedFixture, deltaDegrees = 0): void {
+		if (!entry.rows.length || !this.terrain) return;
+		const after: CarryFrame = {
+			x: entry.fixture.x,
+			y: entry.fixture.y,
+			z: fixturePlacement(this.terrain, entry.fixture).position[1],
+			angle: entry.from.angle + deltaDegrees
+		};
+		const from: CarryFrame = {
+			x: entry.from.x,
+			y: entry.from.y,
+			z: entry.from.z,
+			angle: entry.from.angle
+		};
+		for (const carriedRow of entry.rows) {
+			const moved = carryRow(from, after, {
+				x: carriedRow.from.x,
+				y: carriedRow.from.y,
+				z: carriedRow.from.z,
+				heading: carriedRow.from.heading
+			});
+			carriedRow.row.x = moved.x;
+			carriedRow.row.y = moved.y;
+			carriedRow.row.z = moved.z;
+			if (moved.heading !== undefined) carriedRow.row.heading = moved.heading;
+			this.updateRow({ table: carriedRow.table, id: carriedRow.row.id }, false);
+		}
+	}
+
+	/** The drag ended: the page journals what the gesture implies — and only
+	 * when it implies something. A drag that ends where it started is not an
+	 * edit, and the journal should not have to say so. */
+	private finishDrag(): void {
+		const drag = this.drag;
+		this.drag = null;
+		const fixtures = this.dragged.filter((entry) => changed(entry)).map((entry) => entry.fixture);
+		const rows: RowPick[] = this.draggedRows
+			.filter((entry) => changedRow(entry))
+			.map((entry) => ({ table: entry.table, id: entry.row.id }));
+		this.dragged = [];
+		this.draggedRows = [];
+		if (!drag) return;
+		if (fixtures.length) this.onEdit?.(drag.kind, fixtures);
+		if (rows.length) this.onRowEdit?.(drag.kind, rows);
+	}
+
+	/** Drop the selection at a zone-local point (a click, or the panel). */
+	moveSelectionTo(point: { x: number; y: number }): void {
+		const fixtures = this.selection.fixtures;
+		const rows = this.selection.rows;
+		if (!this.terrain || (!fixtures.length && !rows.length)) return;
+		const anchor = fixtures[0] ?? rows[0];
+		const from =
+			fixtures.length && anchor === fixtures[0]
+				? new THREE.Vector3(fixtures[0].x, 0, fixtures[0].y)
+				: (() => {
+						const row = this.rowAt(rows[0]);
+						return new THREE.Vector3(row?.x ?? point.x, 0, row?.y ?? point.y);
+					})();
+		// every selected item takes the same delta as the one under the click
+		const dx = point.x - from.x;
+		const dy = point.y - from.z;
+		this.dragged = fixtures.map((fixture) => ({
+			fixture,
+			from: {
+				x: fixture.x,
+				y: fixture.y,
+				z: fixturePlacement(this.terrain!, fixture).position[1],
+				angle: fixture.angle,
+				scale: fixture.scale
+			},
+			rows: (this.carried.get(fixture.id) ?? []).flatMap((proposal) => {
+				const row = this.rowAt({ table: proposal.table, id: proposal.key });
+				return row
+					? [
+							{
+								table: proposal.table,
+								row,
+								from: { x: row.x, y: row.y, z: row.z, angle: 0, heading: row.heading }
+							}
+						]
+					: [];
+			})
+		}));
+		this.draggedRows = rows.flatMap((pick) => {
+			const row = this.rowAt(pick);
+			return row
+				? [{ table: pick.table, row, from: { x: row.x, y: row.y, z: row.z, heading: row.heading } }]
+				: [];
+		});
+		this.moveTo(new THREE.Vector3(dx, 0, dy));
+		const movedFixtures = this.dragged.map((entry) => entry.fixture);
+		const movedRows = this.draggedRows.map((entry) => ({
+			table: entry.table,
+			id: entry.row.id
+		}));
+		this.dragged = [];
+		this.draggedRows = [];
+		if (movedFixtures.length) this.onEdit?.('move', movedFixtures);
+		if (movedRows.length) this.onRowEdit?.('move', movedRows);
+	}
+
+	private pickGroundZone(ndcX: number, ndcY: number): THREE.Vector3 | null {
+		const point = this.pickGround(ndcX, ndcY);
+		return point ? new THREE.Vector3(point.x, point.z, point.y) : null;
 	}
 
 	/** Write one row back into its cloud (the drag's live preview). Found by
 	 * id, never by object identity: the page's `$state` proxies and the
 	 * payload's plain rows are two views of the same row. */
-	updateRow(pick: RowPick): void {
+	updateRow(pick: RowPick, moveMarker = true): void {
 		const entry = this.rowClouds.find((cloud) => cloud.table === pick.table);
 		const index = entry ? entry.rows.findIndex((row) => row.id === pick.id) : -1;
 		if (!entry || index < 0) return;
@@ -406,12 +941,11 @@ export class WorldViewer {
 		const attribute = entry.cloud.geometry.getAttribute('position') as THREE.BufferAttribute;
 		attribute.setXYZ(index, row.x, row.z, row.y);
 		attribute.needsUpdate = true;
-		if (
-			this.selectedRow &&
-			this.selectedRow.table === pick.table &&
-			this.selectedRow.id === pick.id
-		) {
-			this.marker.position.set(row.x, row.z, row.y);
+		const selected = this.selection.rows.some(
+			(entry) => entry.table === pick.table && entry.id === pick.id
+		);
+		if (moveMarker && selected && !this.selection.fixtures.length) {
+			this.pointMarker(pick);
 		}
 	}
 
@@ -424,7 +958,7 @@ export class WorldViewer {
 	/** Recompose one fixture's instance from its fields (move/rotate/scale).
 	 * Found by id, never by object identity: the page's `$state` proxies and
 	 * the payload's plain objects are two views of the same row. */
-	updateFixture(fixture: WorldFixture): void {
+	updateFixture(fixture: WorldFixture, notify = true): void {
 		if (!this.terrain) return;
 		const placement = fixturePlacement(this.terrain, fixture);
 		const matrix = new THREE.Matrix4();
@@ -440,8 +974,10 @@ export class WorldViewer {
 			group.mesh.setMatrixAt(index, matrix);
 			group.mesh.instanceMatrix.needsUpdate = true;
 		}
-		if (this.selected && this.selected.id === fixture.id) this.select(fixture);
-		if (!this.dragging) this.attachProxy();
+		if (notify) {
+			this.refreshSelection();
+			this.onSelect?.(this.selectionView);
+		}
 	}
 
 	/** The ground under a pointer, zone-local (the add-mode click). */
@@ -580,51 +1116,28 @@ export class WorldViewer {
 		return best?.pick ?? null;
 	}
 
-	/** Mark a fixture: a ring at its feet and a pin above it, so a small
-	 * object stays findable from a zone-wide camera. */
+	/** Mark one fixture (the page's lists, a script): the single-item shorthand
+	 * for `setSelection`. */
 	select(fixture: WorldFixture | null): void {
-		this.selected = fixture;
-		this.selectedRow = null;
-		if (this.carriedFor !== (fixture?.id ?? null)) {
-			// The pairs are proposed against the rows as they stand now: a fixture
-			// that has just been dragged has left its doors behind, and those are
-			// exactly the rows the next drag carries.
-			this.carried = fixture ? this.proposalsFor(fixture.id) : [];
-			this.carriedFor = fixture ? fixture.id : null;
-		}
-		if (!fixture || !this.terrain) {
-			this.marker.visible = false;
-			this.transform?.detach();
-			return;
-		}
-		const placement = fixturePlacement(this.terrain, fixture);
-		this.marker.position.set(...placement.position);
-		this.marker.visible = true;
-		this.attachProxy();
+		this.setSelection({ fixtures: fixture ? [fixture] : [], rows: [] });
 	}
 
-	/** Mark a server row, the way a fixture is marked (same ring and pin). */
+	/** Mark one server row, the way a fixture is marked (same ring and pin). */
 	selectRow(pick: RowPick | null): void {
-		const row = pick ? this.rowAt(pick) : undefined;
-		const terrain = this.terrain;
-		if (pick && (!row || !terrain)) return;
-		this.selectedRow = pick;
-		if (pick && row && terrain) {
-			this.selected = null;
-			this.rowOffset = row.z - terrain.heightAt(row.x, row.y);
-			this.marker.position.set(row.x, row.z, row.y);
-			this.marker.visible = true;
-		} else if (!this.selected) {
-			this.marker.visible = false;
-		}
-		this.attachProxy();
+		if (pick && !this.rowAt(pick)) return;
+		this.setSelection({ fixtures: [], rows: pick ? [pick] : [] });
 	}
 
 	/** The server rows a fixture would carry if it moved now (B2): the pairs
 	 * the page sends with the op, and the ones the daemon validates live. */
 	carriedRows(fixtureId: number): RowProposal[] {
-		if (this.carriedFor === fixtureId) return this.carried;
-		return this.proposalsFor(fixtureId);
+		return this.carried.get(fixtureId) ?? this.proposalsFor(fixtureId);
+	}
+
+	/** Drop the selection at a zone-local point: what the page's "move here"
+	 * does, and what a click on the ground with something selected means. */
+	moveSelection(point: { x: number; y: number }): void {
+		this.moveSelectionTo(point);
 	}
 
 	/** A fixture's own rows: every row that stands *inside one of its meshes'
@@ -675,22 +1188,35 @@ export class WorldViewer {
 		return [...found.values()].sort((a, b) => a.distance - b.distance);
 	}
 
-	get selection(): WorldFixture | null {
-		return this.selected;
-	}
-
-	/** Recentre the camera on a fixture (Unity's F): close, slightly above. */
+	/** Recentre the camera on a fixture (F, or a double click): close, above. */
 	focusFixture(fixture: WorldFixture, distance = 1400): void {
 		if (!this.terrain) return;
-		const placement = fixturePlacement(this.terrain, fixture);
-		const target = new THREE.Vector3(...placement.position);
-		this.controls.target.copy(target);
-		this.camera.position.set(
-			target.x + distance * 0.8,
-			target.y + distance * 0.55,
-			target.z + distance
+		this.lookAtPoint(fixturePlacement(this.terrain, fixture).position, distance);
+	}
+
+	/** Recentre on the selection's own middle (the panel's Focus button). */
+	focusSelection(distance = 2400): void {
+		if (!this.terrain) return;
+		const points = this.selection.fixtures.map(
+			(fixture) => fixturePlacement(this.terrain!, fixture).position
 		);
-		this.controls.update();
+		for (const pick of this.selection.rows) {
+			const row = this.rowAt(pick);
+			if (row) points.push([row.x, row.z, row.y]);
+		}
+		if (!points.length) return;
+		const middle = points
+			.reduce((sum, point) => [sum[0] + point[0], sum[1] + point[1], sum[2] + point[2]], [0, 0, 0])
+			.map((value) => value / points.length) as [number, number, number];
+		this.lookAtPoint(middle, Math.max(distance, points.length * 40));
+	}
+
+	private lookAtPoint(position: [number, number, number], distance: number): void {
+		this.target.set(position[0], position[1], position[2]);
+		this.orbit.azimuth = 0.6;
+		this.orbit.elevation = 0.55;
+		this.orbit.distance = distance;
+		this.applyOrbit();
 	}
 
 	resize(): void {
@@ -707,7 +1233,6 @@ export class WorldViewer {
 	start(): void {
 		const loop = () => {
 			this.frame = requestAnimationFrame(loop);
-			this.controls.update();
 			this.renderer.render(this.scene, this.camera);
 		};
 		loop();
@@ -715,25 +1240,26 @@ export class WorldViewer {
 
 	dispose(): void {
 		cancelAnimationFrame(this.frame);
+		this.abort.abort();
+		this.marquee.remove();
 		this.clear();
-		this.transform?.dispose();
+		this.ringGeometry.dispose();
+		this.ringMaterial.dispose();
+		this.rowRingMaterial.dispose();
 		this.grid?.geometry.dispose();
-		this.controls.dispose();
 		this.renderer.dispose();
 	}
 
 	private clear(): void {
 		this.picks = [];
 		this.rowClouds = [];
-		this.selected = null;
-		this.selectedRow = null;
-		this.carried = [];
-		this.carriedFor = null;
-		this.dragFrom = null;
-		this.dragRows = [];
+		this.selection = { fixtures: [], rows: [] };
+		this.carried.clear();
+		this.dragged = [];
+		this.draggedRows = [];
+		this.drag = null;
 		this.marker.visible = false;
-		this.transform?.detach();
-		this.dragging = false;
+		for (const child of [...this.rings.children]) this.rings.remove(child);
 		this.texturedPatches = 0;
 		this.composedPatches = 0;
 		this.spawnCounts = { mobs: 0, statics: 0, doors: 0, patrols: 0, patrolPoints: 0 };
@@ -813,10 +1339,7 @@ export class WorldViewer {
 
 	private clearSpawns(): void {
 		this.rowClouds = [];
-		this.carried = [];
-		this.carriedFor = null;
-		this.dragFrom = null;
-		this.dragRows = [];
+		this.carried.clear();
 		this.spawnCounts = { mobs: 0, statics: 0, doors: 0, patrols: 0, patrolPoints: 0 };
 		for (const key of ['spawns', 'statics', 'doors', 'patrols'] as const) {
 			const group = this.groups[key];
@@ -1149,9 +1672,7 @@ export class WorldViewer {
 	/** Move the camera to a zone-local point (the screenshot harness). */
 	focus(x: number, y: number, distance = ZONE_UNIT * 1.5): void {
 		const z = this.terrain ? this.terrain.heightAt(x, y) : 0;
-		this.controls.target.set(x, z, y);
-		this.camera.position.set(x + distance * 0.7, z + distance * 0.55, y + distance);
-		this.controls.update();
+		this.lookAtPoint([x, z, y], distance);
 	}
 
 	/** Stand on a circle around a zone-local point and look at it: azimuth 0 is
@@ -1161,14 +1682,11 @@ export class WorldViewer {
 	lookFrom(x: number, y: number, azimuthDeg: number, distance = ZONE_UNIT * 0.45): void {
 		if (!this.terrain) return;
 		const z = this.terrain.heightAt(x, y);
-		const radians = (azimuthDeg * Math.PI) / 180;
-		this.controls.target.set(x, z, y);
-		this.camera.position.set(
-			x + Math.sin(radians) * distance,
-			z + distance * 0.4,
-			y + Math.cos(radians) * distance
-		);
-		this.controls.update();
+		this.target.set(x, z, y);
+		this.orbit.distance = distance;
+		this.orbit.azimuth = (azimuthDeg * Math.PI) / 180;
+		this.orbit.elevation = 0.38;
+		this.applyOrbit();
 	}
 
 	private frameZone(data: TerrainData): void {
@@ -1185,8 +1703,10 @@ export class WorldViewer {
 		// North up, east right: the camera stands south of the zone centre
 		// (scene +Z is the client's south) and looks north.
 		const center = new THREE.Vector3(ZONE_SIZE / 2, mid, ZONE_SIZE / 2);
-		this.controls.target.copy(center);
-		this.camera.position.set(center.x, mid + ZONE_SIZE * 0.55, center.z + ZONE_SIZE * 0.75);
-		this.controls.update();
+		this.target.copy(center);
+		this.orbit.distance = ZONE_SIZE * 0.95;
+		this.orbit.azimuth = 0;
+		this.orbit.elevation = 0.62;
+		this.applyOrbit();
 	}
 }

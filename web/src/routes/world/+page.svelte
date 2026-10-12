@@ -48,18 +48,13 @@
 	});
 	let query = $state('');
 	let fixtureQuery = $state('');
+	/** The leading fixture of the selection (the panel edits it), and the count. */
 	let selected = $state<WorldFixture | null>(null);
+	let selectionCount = $state(0);
 
-	// The editor (6.3): the mode, the snap, and the authoring session's state.
+	// The editor (6.3): select vs add, the snap, and the session's state.
 	const modes = [
-		{ id: 'off', label: 'select', title: 'click to select; no gizmo' },
-		{
-			id: 'translate',
-			label: 'move',
-			title: 'drag the handles (a ground row follows the terrain)'
-		},
-		{ id: 'rotate', label: 'rotate', title: 'A, degrees, about the vertical axis' },
-		{ id: 'scale', label: 'scale', title: 'Scale, percent' },
+		{ id: 'off', label: 'select', title: 'click to select, drag a box to select several' },
 		{ id: 'add', label: 'add', title: 'click the ground, then pick a catalog entry' }
 	] as const;
 	let editMode = $state<EditMode>('off');
@@ -70,9 +65,12 @@
 	let editStatus = $state<string | null>(null);
 	let editError = $state<string | null>(null);
 	let busyEdit = $state(false);
+	/** The floating panel: closed until something is selected or the panel is
+	 * asked for, and it remembers where the operator put it. */
+	let panel = $state({ open: false, x: 0, y: 0, dragging: false });
 
-	// The server rows (B2/W-4's first half): one row selected for editing, the
-	// rows the selected fixture would carry, and whether to carry them.
+	// The server rows (B2/W-4's first half): the leading row, the rows the
+	// selected fixture would carry, and whether to carry them.
 	type SpawnRowOf = WorldSpawnMob | WorldSpawnObject | WorldSpawnDoor;
 	let selectedRow = $state<RowPick | null>(null);
 	let proposals = $state<RowProposal[]>([]);
@@ -84,6 +82,14 @@
 	// Written = in the server's database; the rest is the journal's promise.
 	const writtenRows = $derived(editPatches.filter((patch) => patch.applied === true).length);
 	const editClient = $derived(edit?.client ?? null);
+	/** Everything the journal holds, across the session's zones. */
+	const sessionOps = $derived((edit?.zones ?? []).reduce((sum, zone) => sum + zone.ops.length, 0));
+	const changes = $derived(sessionOps + editRows);
+	/** Like a repository: the session is ahead of what was published (the op
+	 * count at the last apply), or it has server rows nothing wrote yet. */
+	const dirty = $derived(
+		sessionOps !== ((edit?.published?.ops as number | undefined) ?? 0) || editRows > writtenRows
+	);
 	// The client's half is the client's own authority: `revert` cannot touch it.
 	const clientNote = $derived.by(() => {
 		const client = edit?.client;
@@ -153,18 +159,33 @@
 		if (!canvasEl) return;
 		viewer = new WorldViewer(canvasEl);
 		viewer.start();
-		viewer.onEdit = (kind, fixture) => void commitDrag(kind, fixture);
-		viewer.onRowMove = (pick) => void commitRow(pick);
+		viewer.onEdit = (kind, fixtures) => void commitEdit(kind, fixtures);
+		viewer.onRowEdit = (kind, rows) => void commitRows(kind, rows);
+		viewer.onSelect = (selection) => selectFrom(selection);
 		viewer.onPick = (point) => {
 			addPoint = point;
 		};
 		const observer = new ResizeObserver(() => viewer?.resize());
 		observer.observe(canvasEl.parentElement!);
 		const onKey = (event: KeyboardEvent) => {
-			if (event.key === 'f' && selected) focusFixture(selected);
-			if (event.key === 'Escape') selectFixture(null);
+			const target = event.target as HTMLElement | null;
+			if (target && /input|select|textarea/i.test(target.tagName)) return;
+			if (event.key === 'f') viewer?.focusSelection();
+			if (event.key === 'Escape') selectFrom({ fixtures: [], rows: [] });
+			if (event.key === 'Delete' || event.key === 'Backspace') void removeSelection();
 		};
 		window.addEventListener('keydown', onKey);
+		const saved = window.localStorage.getItem('camelot.editorPanel');
+		const parent = canvasEl.parentElement;
+		if (saved) {
+			const parsed = JSON.parse(saved) as { x: number; y: number };
+			panel.x = parsed.x;
+			panel.y = parsed.y;
+		} else {
+			// top right, out of the way of the zone's own middle
+			panel.x = Math.max(12, (parent?.clientWidth ?? 900) - 372);
+			panel.y = 12;
+		}
 		api
 			.worldIndex()
 			.then((loaded) => {
@@ -210,6 +231,7 @@
 		zoneId = zoneRow.id;
 		selected = null;
 		selectedRow = null;
+		selectionCount = 0;
 		proposals = [];
 		spawns = null;
 		try {
@@ -237,6 +259,7 @@
 				spawnSource: rows?.source ?? null,
 				...viewer.stats()
 			};
+			(window as unknown as { __worldViewer?: WorldViewer }).__worldViewer = viewer;
 			(window as unknown as { __worldStats?: () => object }).__worldStats = () => ({
 				...viewer!.stats()
 			});
@@ -275,6 +298,12 @@
 					distance: Math.round(row.distance)
 				})),
 				carry,
+				selection: {
+					fixtures: viewer?.selectionView.fixtures.map((fixture) => fixture.id) ?? [],
+					rows: viewer?.selectionView.rows.map((row) => row.id) ?? []
+				},
+				dirty,
+				changes,
 				status: editStatus,
 				error: editError,
 				pack: edit?.pack ?? null,
@@ -296,23 +325,26 @@
 		}
 	}
 
-	function selectFixture(fixture: WorldFixture | null) {
-		// One row, one object: a pick hands back the viewer's plain object, the
-		// lists hand back the `$state` proxy — settle on the page's own row so
-		// the inspector, the viewer and every later edit talk about the same one.
-		const known =
-			fixture && zone ? (zone.fixtures.find((row) => row.id === fixture.id) ?? fixture) : fixture;
+	/** The viewer's selection, mirrored for the panel: the leading fixture is
+	 * what the fields edit, and its carried rows are what a move would take. */
+	function selectFrom(selection: { fixtures: WorldFixture[]; rows: RowPick[] }) {
+		const last = selection.fixtures[selection.fixtures.length - 1] ?? null;
+		const known = last && zone ? (zone.fixtures.find((row) => row.id === last.id) ?? last) : last;
 		selected = known;
-		selectedRow = null;
-		viewer?.select(known);
-		// The rows this fixture would take with it (B2): proposed from its own
-		// meshes' boxes, shown before anything is dragged, sent with the op.
+		selectedRow =
+			!known && selection.rows.length ? selection.rows[selection.rows.length - 1] : null;
+		selectionCount = selection.fixtures.length + selection.rows.length;
 		proposals = known ? (viewer?.carriedRows(known.id) ?? []) : [];
+		if (selectionCount) panel.open = true;
+	}
+
+	/** The page's own selection paths (the lists) go through the viewer, so
+	 * there is exactly one selection and one place that settles it. */
+	function selectFixture(fixture: WorldFixture | null) {
+		viewer?.select(fixture);
 	}
 
 	function selectRow(pick: RowPick | null) {
-		selectedRow = pick;
-		if (pick) selected = null;
 		viewer?.selectRow(pick);
 	}
 
@@ -348,8 +380,8 @@
 
 	/** One edit, through the daemon (D2): the answer is the row as it stands,
 	 * plus whatever server rows the op carried (B2). */
-	async function applyEdit(op: Record<string, unknown>) {
-		if (zoneId === null || busyEdit) return;
+	async function applyEdit(op: Record<string, unknown>): Promise<boolean> {
+		if (zoneId === null || busyEdit) return false;
 		busyEdit = true;
 		editError = null;
 		try {
@@ -361,7 +393,7 @@
 				const shown = zone?.fixtures.find((fixture) => fixture.id === row.id);
 				if (shown) {
 					Object.assign(shown, row);
-					viewer?.updateFixture(shown);
+					viewer?.updateFixture(shown, false);
 				}
 			}
 			// A patch is part of what the zone is now: the viewer must show the
@@ -369,10 +401,12 @@
 			if (result.patches.length) await reloadSpawns();
 			editStatus = describe(op, result);
 			edit = await api.worldEdit();
+			return true;
 		} catch (e) {
 			editError = e instanceof Error ? e.message : String(e);
 			await reloadFixtures(); // the daemon's state wins after a refusal
 			await reloadSpawns();
+			return false;
 		} finally {
 			busyEdit = false;
 		}
@@ -391,49 +425,76 @@
 		return `${op.kind} #${id}${rows}`;
 	}
 
-	/** A gizmo drag ended: the viewer already wrote the fields locally; the
-	 * daemon journals them (it fills `expect` from the row it holds). */
-	async function commitDrag(kind: EditKind, fixture: WorldFixture) {
-		// The pairs the user was shown when the fixture was picked: the rows of
-		// the structure as it stood, which is what a move has to carry. A scale
-		// moves nothing, so it carries nothing either.
-		const rows =
-			carry && kind !== 'scale' ? proposals.map((row) => ({ table: row.table, key: row.key })) : [];
-		await applyEdit({
-			kind,
-			id: fixture.id,
-			x: fixture.x,
-			y: fixture.y,
-			z: fixture.z,
-			angle: fixture.angle,
-			scale: fixture.scale,
-			...(rows.length ? { rows } : {})
-		});
+	/** A gesture ended (or a field was typed into): the viewer already wrote the
+	 * fields locally, the daemon journals them — one op per item, in order. */
+	async function commitEdit(kind: EditKind, fixtures: WorldFixture[]) {
+		// the daemon knows move/rotate/scale: a lift is a move with an explicit z
+		const op = kind === 'height' ? 'move' : kind;
+		for (const fixture of fixtures) {
+			// The pairs the user was shown when the fixture was picked: the rows of
+			// the structure as it stood, which is what a move has to carry. A scale
+			// moves nothing, so it carries nothing either.
+			const carried =
+				carry && op !== 'scale'
+					? (viewer?.carriedRows(fixture.id) ?? []).map((row) => ({
+							table: row.table,
+							key: row.key
+						}))
+					: [];
+			const ok = await applyEdit({
+				kind: op,
+				id: fixture.id,
+				x: fixture.x,
+				y: fixture.y,
+				z: fixture.z,
+				angle: fixture.angle,
+				scale: fixture.scale,
+				...(carried.length ? { rows: carried } : {})
+			});
+			if (!ok) break;
+		}
 	}
 
-	/** A gizmo drag on a server row ended, or a ground click placed one: the
-	 * viewer already moved the point locally; the daemon journals the patch. */
-	async function commitRow(pick: RowPick) {
+	/** A row gesture ended (or the panel placed one): the daemon journals the
+	 * patch — `row-move` carries the heading and the height when they changed. */
+	async function commitRows(kind: EditKind, picks: RowPick[]) {
 		if (!spawns) return;
-		const row = rowOf(spawns, pick);
-		if (!row) return;
-		await applyEdit({
-			kind: 'row-move',
-			table: pick.table,
-			key: pick.id,
-			x: row.x,
-			y: row.y,
-			heading: row.heading
-		});
+		for (const pick of picks) {
+			const row = rowOf(spawns, pick);
+			if (!row) continue;
+			const op =
+				kind === 'rotate' && 'heading' in row
+					? {
+							kind: 'row-move',
+							table: pick.table,
+							key: pick.id,
+							x: row.x,
+							y: row.y,
+							z: row.z,
+							heading: row.heading
+						}
+					: kind === 'height'
+						? { kind: 'row-move', table: pick.table, key: pick.id, x: row.x, y: row.y, z: row.z }
+						: { kind: 'row-move', table: pick.table, key: pick.id, x: row.x, y: row.y };
+			if (!(await applyEdit(op))) break;
+		}
 	}
 
-	async function removeRow() {
-		if (!selectedRow) return;
-		const pick = selectedRow;
-		await applyEdit({ kind: 'row-remove', table: pick.table, key: pick.id });
-		selectRow(null);
+	/** The whole selection goes (Delete, or the panel's button). */
+	async function removeSelection() {
+		const fixtures = [...(viewer?.selectionView.fixtures ?? [])];
+		const rows = [...(viewer?.selectionView.rows ?? [])];
+		if (!fixtures.length && !rows.length) return;
+		selectFrom({ fixtures: [], rows: [] });
+		for (const fixture of fixtures) {
+			if (!(await applyEdit({ kind: 'remove', id: fixture.id }))) return;
+		}
+		for (const pick of rows) {
+			if (!(await applyEdit({ kind: 'row-remove', table: pick.table, key: pick.id }))) return;
+		}
 	}
 
+	/** The whole selection goes (Delete, or the panel's button). */
 	async function undo() {
 		if (zoneId === null || busyEdit) return;
 		busyEdit = true;
@@ -451,13 +512,6 @@
 		} finally {
 			busyEdit = false;
 		}
-	}
-
-	async function removeSelected() {
-		if (!selected) return;
-		const id = selected.id;
-		selectFixture(null);
-		await applyEdit({ kind: 'remove', id });
 	}
 
 	async function addCatalog(entry: { id: number; name: string; filename: string }) {
@@ -541,8 +595,7 @@
 				: '';
 			editStatus = `restored: ${half}${rows}`;
 			edit = result.state;
-			selectFixture(null);
-			selectRow(null);
+			selectFrom({ fixtures: [], rows: [] });
 			await reloadFixtures();
 			await reloadSpawns();
 		} catch (e) {
@@ -552,51 +605,79 @@
 		}
 	}
 
-	function onCanvasClick(event: MouseEvent) {
-		if (!viewer || !canvasEl) return;
-		if (viewer.editing) return; // the gizmo owns this click
-		const rect = canvasEl.getBoundingClientRect();
-		const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-		const ndcY = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
-		if (editMode === 'add') {
-			addPoint = viewer.pickGround(ndcX, ndcY);
-			return;
-		}
-		const picked = viewer.pick(ndcX, ndcY);
-		if (picked) {
-			selectFixture(picked.fixture);
-			return;
-		}
-		const row = viewer.pickRow(ndcX, ndcY);
-		if (row) {
-			selectRow(row);
-			return;
-		}
-		if (selectedRow) {
-			// a ground click with a row in hand places it (the daemon's own rule
-			// keeps its height above the terrain; the gizmo refines it after)
-			const point = viewer.pickGround(ndcX, ndcY);
-			if (point) {
-				const pick = selectedRow;
-				viewer.moveRow(pick, point);
-				void commitRow(pick);
-				return;
-			}
-		}
-		selectFixture(null);
-		selectRow(null);
+	/** A number the panel typed into: the field is the leading item's own, so
+	 * the op kind follows what changed. */
+	async function typed(kind: EditKind) {
+		if (selected) await commitEdit(kind, [selected]);
+		else if (selectedRow) await commitRows(kind, [selectedRow]);
 	}
 
-	function onCanvasDoubleClick(event: MouseEvent) {
-		if (!viewer || !canvasEl) return;
-		const rect = canvasEl.getBoundingClientRect();
-		const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-		const ndcY = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
-		const picked = viewer.pick(ndcX, ndcY);
-		if (picked) {
-			selectFixture(picked.fixture);
-			focusFixture(picked.fixture);
+	function number(value: string): number | null {
+		const parsed = Number(value);
+		return Number.isFinite(parsed) ? parsed : null;
+	}
+
+	/** The panel's fixture fields: write the field, recompose the instance, then
+	 * journal the op — a typed edit is an edit like a gesture. */
+	function setFixtureField(field: 'x' | 'y' | 'z' | 'angle' | 'scale', value: string) {
+		const parsed = number(value);
+		if (!selected || parsed === null) return;
+		selected[field] = parsed;
+		viewer?.updateFixture(selected, false);
+		void typed(field === 'angle' ? 'rotate' : field === 'scale' ? 'scale' : 'move');
+	}
+
+	function setRowField(field: 'x' | 'y' | 'z' | 'heading', value: string) {
+		const parsed = number(value);
+		if (!selectedRow || !selectedSpawn || parsed === null) return;
+		if (field === 'heading') selectedSpawn.heading = Math.round(parsed) % 4096;
+		else selectedSpawn[field] = parsed;
+		viewer?.updateRow(selectedRow, false);
+		void typed(field === 'heading' ? 'rotate' : 'move');
+	}
+
+	/** The in-game commands the operator has to type: the client's clipboard, so
+	 * a reload is a paste away (the bridge will make it a button). */
+	async function copyCommands() {
+		const region = zone?.info.region ?? '';
+		const text = ['/reload doors', `/reload mob`, `/reload object`].join('\n');
+		try {
+			await navigator.clipboard.writeText(text);
+			editStatus = `copied the reload commands (region ${region})`;
+		} catch {
+			editStatus = text.replace(/\n/g, ' · ');
 		}
+	}
+
+	/** Drop the selection where the ground was last clicked (the add flow's own
+	 * point, kept as the panel's "move here"). */
+	function moveHere() {
+		if (!addPoint || !viewer) return;
+		viewer.moveSelection(addPoint);
+	}
+
+	// -- the floating panel: drag it by its header, remember where ---------------
+
+	function panelDown(event: PointerEvent) {
+		const target = event.target as HTMLElement;
+		if (target.closest('button') || target.closest('input')) return;
+		panel.dragging = true;
+		const from = { x: event.clientX, y: event.clientY, px: panel.x, py: panel.y };
+		const move = (moveEvent: PointerEvent) => {
+			panel.x = from.px + (moveEvent.clientX - from.x);
+			panel.y = from.py + (moveEvent.clientY - from.y);
+		};
+		const up = () => {
+			panel.dragging = false;
+			window.removeEventListener('pointermove', move);
+			window.removeEventListener('pointerup', up);
+			window.localStorage.setItem(
+				'camelot.editorPanel',
+				JSON.stringify({ x: panel.x, y: panel.y })
+			);
+		};
+		window.addEventListener('pointermove', move);
+		window.addEventListener('pointerup', up);
 	}
 
 	function kindLabel(kind: string): string {
@@ -684,212 +765,6 @@
 				<label><input type="checkbox" bind:checked={toggles.jumps} /> jumps</label>
 			</section>
 
-			{#if edit?.available}
-				<section class="editor">
-					<h2>Editor <span class="dim">{edit.mod.id}</span></h2>
-					<div class="modes">
-						{#each modes as mode (mode.id)}
-							<button
-								type="button"
-								class:active={editMode === mode.id}
-								title={mode.title}
-								onclick={() => (editMode = mode.id)}
-							>
-								{mode.label}
-							</button>
-						{/each}
-					</div>
-					<label class="snap">
-						<input type="checkbox" bind:checked={snap} /> snap — 256 units, 15°, 5%
-					</label>
-					{#if selected}
-						<button class="danger" type="button" onclick={removeSelected}>
-							remove #{selected.id}
-						</button>
-					{/if}
-					<div class="modes">
-						<button
-							type="button"
-							onclick={undo}
-							disabled={(!editOps && !editRows) || busyEdit}
-							title="drop the journal's last op (server rows first)"
-						>
-							undo ({editOps}{editRows ? ` +${editRows} rows` : ''})
-						</button>
-						<button
-							type="button"
-							onclick={build}
-							disabled={busyEdit}
-							title="assemble the authoring directory and run mod build"
-						>
-							build
-						</button>
-						<button
-							type="button"
-							onclick={apply}
-							disabled={busyEdit}
-							title="build, then install the client half"
-						>
-							apply
-						</button>
-						<button
-							type="button"
-							onclick={revert}
-							disabled={busyEdit}
-							title="empty the journal and put the server rows back (the installed client half stays)"
-						>
-							revert
-						</button>
-						<button
-							class="danger"
-							type="button"
-							onclick={restore}
-							disabled={busyEdit || (!editOps && !editRows && !editClient?.installed)}
-							title="put everything back: uninstall the client half, put the server rows back, empty the journal"
-						>
-							restore all
-						</button>
-					</div>
-					{#if editMode === 'add'}
-						<p class="hint">
-							{addPoint
-								? `add at ${addPoint.x.toFixed(0)}, ${addPoint.y.toFixed(0)}`
-								: 'click the ground to aim'}
-						</p>
-						<input type="search" bind:value={addQuery} placeholder="catalog: file or name" />
-						<ul class="addlist">
-							{#each catalogRows as entry (entry.id)}
-								<li>
-									<button
-										type="button"
-										disabled={!addPoint || busyEdit}
-										onclick={() => addCatalog(entry)}
-									>
-										<span class="zname">{entry.filename}</span>
-										<span class="zmeta">{entry.name}</span>
-									</button>
-								</li>
-							{/each}
-						</ul>
-					{/if}
-					{#if edit.pack}
-						<p class="hint">
-							pack {(edit.pack.size / 1000).toFixed(0)} kB · {new Date(
-								edit.pack.modified * 1000
-							).toLocaleTimeString()}
-						</p>
-					{/if}
-					{#if editClient}
-						<p class="hint">{clientNote}</p>
-					{/if}
-					{#if editRows}
-						<p class="hint">
-							{editRows} server row patch{editRows === 1 ? '' : 'es'} in the journal{writtenRows
-								? ` · ${writtenRows} written to the database`
-								: ''}{editRows > writtenRows ? ` · ${editRows - writtenRows} pending` : ''}
-						</p>
-					{/if}
-					{#if writtenRows || editClient?.installed}
-						<p class="hint">
-							the running game reads these at startup: in game, <code>/reload doors</code>,
-							<code>/reload mob</code> and <code>/reload object</code> reread them (region {zone
-								.info.region})
-						</p>
-					{/if}
-					{#if editStatus}<p class="hint">{editStatus}</p>{/if}
-					{#if editError}<p class="warn">{editError}</p>{/if}
-				</section>
-			{/if}
-
-			<section class="picked">
-				<h2>Selected</h2>
-				{#if selected}
-					<dl>
-						<dt>name</dt>
-						<dd>{selected.name || '(unnamed)'} <span class="dim">#{selected.id}</span></dd>
-						<dt>mesh</dt>
-						<dd>{catalogOf.get(selected.nif_id)?.filename ?? `nif ${selected.nif_id}`}</dd>
-						<dt>at</dt>
-						<dd>{selected.x.toFixed(0)}, {selected.y.toFixed(0)}, {selected.z.toFixed(0)}</dd>
-						<dt>angle</dt>
-						<dd>{selected.angle.toFixed(0)}° · scale {selected.scale.toFixed(0)}%</dd>
-						<dt>flags</dt>
-						<dd>
-							{selected.ground ? 'ground ' : ''}{selected.animate ? 'animate ' : ''}{selected.flip
-								? 'flip '
-								: ''}{selected.cave ? 'cave' : ''}
-						</dd>
-					</dl>
-					<button class="focus" type="button" onclick={() => focusFixture(selected!)}>
-						<Crosshair size={13} /> Focus (F)
-					</button>
-					{#if proposals.length}
-						<label class="snap">
-							<input type="checkbox" bind:checked={carry} /> carry {proposals.length} server row{proposals.length >
-							1
-								? 's'
-								: ''}
-						</label>
-						<p class="hint">
-							rows inside this object's own meshes: {carriedNote} — they move with it (B2)
-						</p>
-						<ul class="addlist">
-							{#each proposals as row (row.table + ':' + row.key)}
-								<li>
-									<button
-										type="button"
-										onclick={() => selectRow({ table: row.table, id: row.key })}
-										title="inspect this server row"
-									>
-										<span class="zname">{row.name || '(unnamed)'}</span>
-										<span class="zmeta">{row.table} {row.key}</span>
-									</button>
-								</li>
-							{/each}
-						</ul>
-					{/if}
-				{:else}
-					<p class="hint">
-						click an object in the scene, or a row below — a coloured dot is a server row,
-						double-click recentres
-					</p>
-				{/if}
-			</section>
-
-			{#if selectedRow && selectedSpawn}
-				<section class="picked">
-					<h2>Server row</h2>
-					<dl>
-						<dt>table</dt>
-						<dd>{selectedRow.table} <span class="dim">{selectedRow.id}</span></dd>
-						<dt>name</dt>
-						<dd>{selectedSpawn.name || '(unnamed)'}</dd>
-						<dt>at</dt>
-						<dd>
-							{selectedSpawn.x.toFixed(0)}, {selectedSpawn.y.toFixed(0)}, {selectedSpawn.z.toFixed(
-								0
-							)}
-						</dd>
-						<dt>heading</dt>
-						<dd>{selectedSpawn.heading} <span class="dim">of 4096</span></dd>
-					</dl>
-					<div class="modes">
-						<button
-							class="danger"
-							type="button"
-							onclick={removeRow}
-							disabled={busyEdit}
-							title="the row is dropped on apply; revert puts it back whole"
-						>
-							remove row
-						</button>
-					</div>
-					<p class="hint">
-						drag the gizmo, or click the ground, to move it — it keeps its height above the terrain
-					</p>
-				</section>
-			{/if}
-
 			<section class="fixtures">
 				<label class="field">
 					<span>Fixtures</span>
@@ -918,12 +793,284 @@
 	<div class="stage">
 		<canvas
 			bind:this={canvasEl}
-			onclick={onCanvasClick}
-			ondblclick={onCanvasDoubleClick}
-			aria-label="the zone, rendered; click to select an object"
+			aria-label="the zone, rendered; click to select, drag a box to select several"
 		></canvas>
 		{#if busy}
 			<div class="busy"><LoaderCircle class="spin" size={20} /> loading…</div>
+		{/if}
+
+		{#if edit?.available}
+			<section class="panel" class:dirty style="left: {panel.x}px; top: {panel.y}px">
+				<header
+					role="toolbar"
+					tabindex="-1"
+					onpointerdown={panelDown}
+					title="drag to move the panel"
+				>
+					<h2>Editor <span class="dim">{edit.mod.id}</span></h2>
+					<span class="state" class:on={dirty}>
+						{dirty ? `${changes} unpublished` : 'published'}
+					</span>
+					<button
+						type="button"
+						onclick={() => (panel.open = !panel.open)}
+						title={panel.open ? 'collapse' : 'expand'}
+					>
+						{panel.open ? '–' : '+'}
+					</button>
+				</header>
+				{#if panel.open}
+					<div class="body">
+						<div class="row modes">
+							{#each modes as mode (mode.id)}
+								<button
+									type="button"
+									class:active={editMode === mode.id}
+									title={mode.title}
+									onclick={() => (editMode = mode.id)}
+								>
+									{mode.label}
+								</button>
+							{/each}
+							<label class="snap" title="256 units, 15°, 5%, 16 up">
+								<input type="checkbox" bind:checked={snap} /> snap
+							</label>
+						</div>
+						<div class="row">
+							<button
+								type="button"
+								onclick={undo}
+								disabled={(!editOps && !editRows) || busyEdit}
+								title="drop the journal's last op (server rows first)"
+							>
+								undo
+							</button>
+							<button
+								type="button"
+								onclick={build}
+								disabled={busyEdit || !changes}
+								title="assemble the authoring directory and run mod build"
+							>
+								build
+							</button>
+							<button
+								type="button"
+								class="publish"
+								class:on={dirty}
+								onclick={apply}
+								disabled={busyEdit || !changes}
+								title="write the edits: the client's files and the server's rows"
+							>
+								publish{dirty ? ` (${changes})` : ''}
+							</button>
+							<button
+								type="button"
+								onclick={revert}
+								disabled={busyEdit}
+								title="empty the journal (the client half, if installed, stays — restore all takes it too)"
+							>
+								revert
+							</button>
+							<button
+								class="danger"
+								type="button"
+								onclick={restore}
+								disabled={busyEdit || (!changes && !editClient?.installed)}
+								title="put everything back: the client half, the server rows, the journal"
+							>
+								restore all
+							</button>
+						</div>
+						<p class="hint">
+							{clientNote} · journal: {editOps} fixture op{editOps === 1 ? '' : 's'},
+							{editRows} row patch{editRows === 1 ? '' : 'es'}{writtenRows
+								? ` (${writtenRows} written)`
+								: ''}
+						</p>
+						{#if writtenRows || editClient?.installed}
+							<p class="hint">
+								the running game reads the database at startup: in game <code>/reload doors</code>,
+								<code>/reload mob</code>, <code>/reload object</code> (region {zone?.info.region})
+								<button type="button" class="link" onclick={copyCommands}>copy</button>
+							</p>
+						{/if}
+						{#if edit.pack}
+							<p class="hint">
+								pack {(edit.pack.size / 1000).toFixed(0)} kB · {new Date(
+									edit.pack.modified * 1000
+								).toLocaleTimeString()}
+							</p>
+						{/if}
+						{#if editStatus}<p class="hint">{editStatus}</p>{/if}
+						{#if editError}<p class="warn">{editError}</p>{/if}
+
+						{#if selected}
+							<section class="context">
+								<h3>
+									Fixture <span class="dim">#{selected.id}</span>
+									{selectionCount > 1 ? `· ${selectionCount} selected` : ''}
+								</h3>
+								<p class="hint">
+									{selected.name || '(unnamed)'} · {catalogOf.get(selected.nif_id)?.filename ??
+										`nif ${selected.nif_id}`} · {selected.ground ? 'ground' : 'free'}
+								</p>
+								<div class="fields">
+									<label
+										>x <input
+											type="number"
+											value={selected.x.toFixed(0)}
+											onchange={(e) => setFixtureField('x', e.currentTarget.value)}
+										/></label
+									>
+									<label
+										>y <input
+											type="number"
+											value={selected.y.toFixed(0)}
+											onchange={(e) => setFixtureField('y', e.currentTarget.value)}
+										/></label
+									>
+									{#if !selected.ground}
+										<label
+											>z <input
+												type="number"
+												value={selected.z.toFixed(0)}
+												onchange={(e) => setFixtureField('z', e.currentTarget.value)}
+											/></label
+										>
+									{/if}
+									<label
+										>A <input
+											type="number"
+											value={selected.angle.toFixed(0)}
+											onchange={(e) => setFixtureField('angle', e.currentTarget.value)}
+										/></label
+									>
+									<label
+										>scale <input
+											type="number"
+											value={selected.scale.toFixed(0)}
+											onchange={(e) => setFixtureField('scale', e.currentTarget.value)}
+										/></label
+									>
+								</div>
+								<div class="row">
+									<button type="button" onclick={() => viewer?.focusSelection()}>
+										<Crosshair size={13} /> Focus (F)
+									</button>
+									<button
+										type="button"
+										onclick={moveHere}
+										disabled={!addPoint}
+										title="drop the selection on the last ground click (add mode)"
+									>
+										move here
+									</button>
+									<button class="danger" type="button" onclick={removeSelection}> remove </button>
+								</div>
+								{#if proposals.length}
+									<label class="snap">
+										<input type="checkbox" bind:checked={carry} /> carry {proposals.length} server row{proposals.length >
+										1
+											? 's'
+											: ''}
+									</label>
+									<p class="hint">inside this object's own meshes: {carriedNote}</p>
+									<ul class="addlist">
+										{#each proposals as row (row.table + ':' + row.key)}
+											<li>
+												<button
+													type="button"
+													onclick={() => selectRow({ table: row.table, id: row.key })}
+												>
+													<span class="zname">{row.name || '(unnamed)'}</span>
+													<span class="zmeta">{row.table}</span>
+												</button>
+											</li>
+										{/each}
+									</ul>
+								{/if}
+							</section>
+						{:else if selectedRow && selectedSpawn}
+							<section class="context">
+								<h3>{selectedRow.table} <span class="dim">{selectedRow.id.slice(0, 8)}</span></h3>
+								<p class="hint">{selectedSpawn.name || '(unnamed)'}</p>
+								<div class="fields">
+									<label
+										>x <input
+											type="number"
+											value={selectedSpawn.x.toFixed(0)}
+											onchange={(e) => setRowField('x', e.currentTarget.value)}
+										/></label
+									>
+									<label
+										>y <input
+											type="number"
+											value={selectedSpawn.y.toFixed(0)}
+											onchange={(e) => setRowField('y', e.currentTarget.value)}
+										/></label
+									>
+									<label
+										>z <input
+											type="number"
+											value={selectedSpawn.z.toFixed(0)}
+											onchange={(e) => setRowField('z', e.currentTarget.value)}
+										/></label
+									>
+									<label
+										>heading <input
+											type="number"
+											value={selectedSpawn.heading}
+											onchange={(e) => setRowField('heading', e.currentTarget.value)}
+										/></label
+									>
+								</div>
+								<div class="row">
+									<button
+										type="button"
+										onclick={moveHere}
+										disabled={!addPoint}
+										title="drop the row on the last ground click (add mode)"
+									>
+										move here
+									</button>
+									<button class="danger" type="button" onclick={removeSelection}>remove</button>
+								</div>
+							</section>
+						{:else}
+							<p class="hint controls">
+								left: click to select, drag a box for several · <b>middle: move</b> (shift+middle rotates,
+								alt+middle lifts, ctrl+middle scales) · right: orbit (shift+right pans) · wheel: zoom
+								· F: focus · Del: remove
+							</p>
+						{/if}
+
+						{#if editMode === 'add'}
+							<section class="context">
+								<p class="hint">
+									{addPoint
+										? `add at ${addPoint.x.toFixed(0)}, ${addPoint.y.toFixed(0)}`
+										: 'click the ground to aim'}
+								</p>
+								<input type="search" bind:value={addQuery} placeholder="catalog: file or name" />
+								<ul class="addlist">
+									{#each catalogRows as entry (entry.id)}
+										<li>
+											<button
+												type="button"
+												disabled={!addPoint || busyEdit}
+												onclick={() => addCatalog(entry)}
+											>
+												<span class="zname">{entry.filename}</span>
+												<span class="zmeta">{entry.name}</span>
+											</button>
+										</li>
+									{/each}
+								</ul>
+							</section>
+						{/if}
+					</div>
+				{/if}
+			</section>
 		{/if}
 	</div>
 </div>
@@ -1043,20 +1190,17 @@
 		color: #7f8a86;
 		font: 10px monospace;
 	}
-	.info dl,
-	.picked dl {
+	.info dl {
 		display: grid;
 		grid-template-columns: 56px 1fr;
 		gap: 2px 8px;
 		margin: 0;
 		font-size: 11px;
 	}
-	.info dt,
-	.picked dt {
+	.info dt {
 		color: #7f8a86;
 	}
-	.info dd,
-	.picked dd {
+	.info dd {
 		margin: 0;
 	}
 	.dim {
@@ -1082,44 +1226,146 @@
 		gap: 4px;
 		align-items: center;
 	}
-	.editor .modes {
+
+	/* The editor's own window, over the scene: drag it by its header. */
+	.panel {
+		position: absolute;
+		width: 350px;
+		max-height: calc(100% - 24px);
+		display: flex;
+		flex-direction: column;
+		background: rgba(14, 18, 21, 0.94);
+		border: 1px solid #2a3438;
+		border-radius: 8px;
+		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+		backdrop-filter: blur(4px);
+		z-index: 10;
+	}
+	.panel.dirty {
+		border-color: #6b5a25;
+	}
+	.panel header {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		padding: 8px 10px;
+		border-bottom: 1px solid #222b2e;
+		cursor: grab;
+	}
+	.panel header:active {
+		cursor: grabbing;
+	}
+	.panel h2 {
+		margin: 0;
+		font-size: 12px;
+		font-weight: 600;
+		flex: 1;
+	}
+	.panel .state {
+		font: 10px monospace;
+		color: #7f8a86;
+	}
+	.panel .state.on {
+		color: #ffd166;
+	}
+	.panel header button {
+		width: auto;
+		padding: 1px 7px;
+		border-color: #333;
+		font-size: 12px;
+	}
+	.panel .body {
+		overflow-y: auto;
+		padding: 10px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.panel .context {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding-top: 8px;
+		border-top: 1px solid #222b2e;
+	}
+	.panel h3 {
+		margin: 0;
+		font-size: 11px;
+		font-weight: 600;
+		color: #cfe8e0;
+	}
+	.panel .row {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 4px;
+		align-items: center;
 	}
-	.editor .modes button {
+	.panel .row button {
 		width: auto;
 		padding: 3px 8px;
 		border-color: #333;
 		font-size: 11px;
 	}
-	.editor .snap {
+	.panel .modes button.active {
+		border-color: #2dd4a7;
+		background: #17302a;
+	}
+	.panel .snap {
 		display: flex;
 		gap: 4px;
 		align-items: center;
 		font-size: 11px;
 		color: #9aa4a0;
 	}
-	.editor button.danger {
-		width: auto;
-		align-self: flex-start;
+	.panel button.danger {
 		border-color: #7a2f2f;
 		color: #ff8f8f;
+	}
+	.panel button.publish.on {
+		border-color: #6b5a25;
+		color: #ffd166;
+		background: #2a2415;
+	}
+	.panel button.link {
+		border: none;
+		background: none;
+		color: #2dd4a7;
+		padding: 0 3px;
+		text-decoration: underline;
+	}
+	.panel input[type='search'] {
 		font-size: 11px;
 	}
-	.editor input[type='search'] {
-		font-size: 11px;
-	}
-	.editor .addlist {
-		max-height: 22dvh;
+	.panel .addlist {
+		max-height: 20dvh;
 		overflow-y: auto;
 	}
-	button.focus {
-		justify-content: center;
+	.panel .controls {
+		line-height: 1.7;
+	}
+	.panel code {
+		color: #cfe8e0;
+	}
+	.fields {
+		display: flex;
+		flex-wrap: wrap;
 		gap: 6px;
-		margin-top: 6px;
-		border-color: #2dd4a7;
-		color: #2dd4a7;
+	}
+	.fields label {
+		display: flex;
+		gap: 3px;
+		align-items: center;
+		font: 10px monospace;
+		color: #7f8a86;
+	}
+	.fields input {
+		width: 68px;
+		padding: 2px 4px;
+		border: 1px solid #2a3438;
+		border-radius: 4px;
+		background: #10161a;
+		color: inherit;
+		font: 11px monospace;
 	}
 	.busy {
 		position: absolute;

@@ -359,6 +359,9 @@ class EditorState(BaseModel):
     rows: list[EditorRowOp] = []
     pack: EditorPack | None = None
     client: EditorClient | None = None
+    #: What was last published: the op count at that moment, so the panel can
+    #: tell a session ahead of its client half from a published one.
+    published: dict[str, Any] = {}
 
 
 class EditorEdit(BaseModel):

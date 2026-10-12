@@ -342,6 +342,9 @@ export interface EditorState {
 	rows: EditorRowOp[];
 	pack: EditorPack | null;
 	client: EditorClient | null;
+	/** What was last published: the op count at that moment (the panel's own
+	 * "is the session ahead of its client half?" test). */
+	published: Record<string, unknown>;
 }
 
 export interface EditorEdit {

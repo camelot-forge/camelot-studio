@@ -38,13 +38,27 @@ daemon writes them behind the explicit `--db-write` flag, records the
 originals it read, and `apply`/`revert` are symmetric — a patch's reversal is
 its original values, a removal's is the row re-inserted whole. A patch is
 server-specific by nature (it names a row by the server's own key), and it is
-never silent: without `--db-write` every row op is refused.
+it is never silent: without `--db-write` every row op is refused.
+
+**The mouse grammar (the UX pass of 2026-10-12).** Left is selection and only
+selection: a click picks, a drag draws a box that takes every fixture and every
+server row whose own point falls inside it (what is drawn is what is caught),
+shift adds. The **middle button** is the edit gesture — move, shift+middle
+rotate (15°, about the selection's own pivot), alt+middle lift, ctrl+middle
+scale — because the left button was doing three jobs at once. Right orbits,
+shift+right pans, the wheel zooms, F focuses, Del removes, Escape lets go. A
+gesture that ends where it started is **not** an edit and journals nothing.
+The editor lives in its own floating, draggable panel over the scene (the
+viewer stays a viewer), and the panel reads like a repository: the publish
+button carries the count of unpublished changes, and the session, the written
+rows and the *client's own installed half* are named separately.
 """
 from __future__ import annotations
 
 import json
 import math
 import os
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -252,7 +266,8 @@ class Editor:
             pack = EditorPack(pack=str(path), modified=stat.st_mtime, size=stat.st_size)
         return EditorState(available=True, dir=str(self.dir), mod=journal["mod"],
                            zones=zones, rows=patches, pack=pack,
-                           client=self.client_state())
+                           client=self.client_state(),
+                           published=dict(journal.get("published") or {}))
 
     # -- the tables ------------------------------------------------------------
 
@@ -577,12 +592,21 @@ class Editor:
         # where the viewer clicked, the row is written in world coordinates.
         left, top = zone.info.world_rect[0], zone.info.world_rect[1]
         # A moved row keeps its height *above the terrain*: a spawn placed on
-        # the ground stays on it, a gate keeps sitting on its wall.
-        offset = float(current["Z"]) - zone.height_at(float(current["X"]) - left,
-                                                      float(current["Y"]) - top)
+        # the ground stays on it, a gate keeps sitting on its wall. An op that
+        # names a `z` means it (the editor's height gesture): then that is the
+        # height, because the user asked for one.
+        if op.get("z") is not None:
+            try:
+                z = float(op["z"])
+            except (TypeError, ValueError):
+                raise EditorError("row-move: z must be a number") from None
+        else:
+            offset = float(current["Z"]) - zone.height_at(float(current["X"]) - left,
+                                                          float(current["Y"]) - top)
+            z = zone.height_at(x, y) + offset
         values: dict[str, str] = {
             "X": _number_text(round(left + x)), "Y": _number_text(round(top + y)),
-            "Z": _number_text(round(zone.height_at(x, y) + offset)),
+            "Z": _number_text(round(z)),
         }
         if "Heading" in columns and op.get("heading") is not None:
             values["Heading"] = str(int(op["heading"]))
@@ -830,6 +854,15 @@ class Editor:
             except Exception as error:  # InstallError, and anything the installer refuses
                 raise EditorError(f"install refused: {error}") from error
         written = self._write_patches(pending) if pending else 0
+        if client_ops:
+            # What the client now holds: the panel reads this to tell a session
+            # that is ahead of its published half from one that is not.
+            journal = self._load()
+            journal["published"] = {
+                "ops": sum(len(ops) for ops in journal["zones"].values()),
+                "at": time.time(),
+            }
+            self._save()
         return {**built, "install": install, "patches": written}
 
 

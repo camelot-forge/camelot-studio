@@ -510,6 +510,17 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
    the day/night time (a slider first — the server owns the real clock,
    `formats.md` §11), then terrain/texture editing and the dungeon/city
    variants.
+
+**The UX pass (2026-10-12, after B2's in-game check).** The editor moved out
+of the viewer's sidebar into its own floating, draggable panel, and the mouse
+grammar was rewritten: **left is selection** (click, box, shift adds) and the
+**middle button is the edit** (move, shift+middle rotate, alt+middle lift,
+ctrl+middle scale) — the left button was selecting, orbiting and moving at
+once. Right orbits, shift+right pans, the wheel zooms. The panel reads like a
+repository: the publish button carries the count of unpublished changes, and
+the client's own installed half, the journal and the written rows are named
+separately. Verified by `web/scripts/world_mouse_probe.mjs` (real pointer
+events through the page's own path).
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.

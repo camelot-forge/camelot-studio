@@ -40,7 +40,6 @@ const report = await page.evaluate(`(async () => {
 	if (!hit) return out;
 	window.__worldSelect(hit.id);
 	window.__worldFocus(hit.x, hit.y, 9000);
-	window.__worldEditMode('translate');
 	await new Promise((done) => setTimeout(done, 300));
 	out.editor = window.__worldEditor();
 	out.nearby = spawns.doors

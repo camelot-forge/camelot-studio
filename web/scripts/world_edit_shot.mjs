@@ -54,7 +54,6 @@ const picked = await page.evaluate(`(async () => {
 		zone.fixtures.find((f) => f.name);
 	if (!hit) return null;
 	window.__worldSelect(hit.id);
-	window.__worldEditMode('translate');
 	window.__worldFocus(hit.x, hit.y, 7000);
 	return hit;
 })()`);
