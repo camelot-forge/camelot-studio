@@ -152,6 +152,28 @@ def test_an_add_on_an_existing_id_is_refused():
         }])
 
 
+def test_a_remove_drops_the_row_and_its_line():
+    """The editor's journal removes placements (6.3). The pack carries whole
+    assembled files, so the op never reaches an installer — but it runs
+    through the same path, and obeys the same `expect` rule."""
+    edited = gamedata.edit_table(MONSTERS, "monsters.csv", [{
+        "action": "remove", "id": 99,
+        "columns": {"Body": 3}, "expect": {"Body": "109"},
+    }])
+    assert edited == (
+        b"Information,,NIF,Skins,\r\n"
+        b"ID,name,#,Body,\r\n"
+        b"286,Crab,231,110,\r\n"
+    )
+    with pytest.raises(TableError, match="expected '110', found '109'"):
+        gamedata.edit_table(MONSTERS, "monsters.csv", [{
+            "action": "remove", "id": 99,
+            "columns": {"Body": 3}, "expect": {"Body": "110"},
+        }])
+    with pytest.raises(TableError, match="no row with id 4000"):
+        gamedata.edit_table(MONSTERS, "monsters.csv", [{"action": "remove", "id": 4000}])
+
+
 def test_values_round_trip_in_latin_1_and_anything_else_is_refused():
     edited = gamedata.edit_table(MONNIFS, "monnifs.csv", [{
         "action": "set", "id": 231,

@@ -6,7 +6,14 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { api, type WorldFixture, type WorldSpawns, type WorldTextureLayer, type WorldZone } from '$lib/api/client';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import {
+	api,
+	type WorldFixture,
+	type WorldSpawns,
+	type WorldTextureLayer,
+	type WorldZone
+} from '$lib/api/client';
 import { loadFromGlb, textureFromDds, tintColor, textureSide } from '$lib/gltf/load';
 import { groundMaterial, groundSlots, type GroundSlot } from './ground';
 import {
@@ -14,6 +21,7 @@ import {
 	ZONE_SIZE,
 	ZONE_UNIT,
 	fixturePlacement,
+	fixtureZ,
 	parseTerrain,
 	patchGeometry,
 	zoneNormals,
@@ -30,7 +38,14 @@ function dotSprite(): THREE.Texture {
 	canvas.width = size;
 	canvas.height = size;
 	const context = canvas.getContext('2d')!;
-	const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+	const gradient = context.createRadialGradient(
+		size / 2,
+		size / 2,
+		0,
+		size / 2,
+		size / 2,
+		size / 2
+	);
 	gradient.addColorStop(0, 'rgba(255,255,255,1)');
 	gradient.addColorStop(0.55, 'rgba(255,255,255,0.85)');
 	gradient.addColorStop(1, 'rgba(255,255,255,0)');
@@ -61,11 +76,27 @@ interface LoadedMesh {
 	model: Awaited<ReturnType<typeof loadFromGlb>>;
 }
 
-/** One instanced group: the mesh drawn and the fixtures it stands for, in
- * instance order — what a click raycasts against (Phase 6.3's selection). */
+/** One instanced group: the mesh drawn, the fixtures it stands for (in
+ * instance order — what a click raycasts against), and the mesh's own local
+ * matrix, kept so a moved instance can be recomposed exactly (6.3). */
 interface PickGroup {
 	mesh: THREE.InstancedMesh;
 	fixtures: WorldFixture[];
+	local: THREE.Matrix4;
+}
+
+export type EditMode = 'off' | 'translate' | 'rotate' | 'scale' | 'add';
+export type EditKind = 'move' | 'rotate' | 'scale';
+
+/** Snap steps: the zone's own subtile (65536 / 256, measured from the
+ * terrain grid), 15 degrees and 5 percent — editor conveniences, named. */
+const SNAP_POSITION = 256;
+const SNAP_ANGLE = (15 * Math.PI) / 180;
+const SNAP_SCALE = 0.05;
+
+function readAngle(yaw: number): number {
+	const degrees = (-yaw * 360) / (Math.PI * 2);
+	return ((degrees % 360) + 360) % 360;
 }
 
 export interface Picked {
@@ -99,6 +130,14 @@ export class WorldViewer {
 	private composedPatches = 0;
 	private picks: PickGroup[] = [];
 	private marker = new THREE.Group();
+	private transform: TransformControls | null = null;
+	private proxy = new THREE.Object3D();
+	private grid: THREE.GridHelper | null = null;
+	private editMode: EditMode = 'off';
+	private dragging = false;
+	/** The page's hooks: a finished drag, and an add-mode ground click. */
+	onEdit: ((kind: EditKind, fixture: WorldFixture) => void) | null = null;
+	onPick: ((point: { x: number; y: number; z: number }) => void) | null = null;
 	private selected: WorldFixture | null = null;
 	private token = 0;
 	private frame = 0;
@@ -121,10 +160,143 @@ export class WorldViewer {
 		const sun = this.scene.children[this.scene.children.length - 1] as THREE.DirectionalLight;
 		sun.position.set(0.55, 1, 0.35).multiplyScalar(50000);
 		for (const group of Object.values(this.groups)) this.scene.add(group);
+		this.scene.add(this.proxy); // TransformControls refuses an unattached object
 		this.marker.visible = false;
 		this.buildMarker();
 		this.scene.add(this.marker);
 		this.resize();
+	}
+
+	/** True while a gizmo handle is under the pointer or being dragged — a
+	 * click then belongs to the gizmo, not to selection. */
+	get editing(): boolean {
+		return this.dragging || (this.transform?.axis ?? null) !== null;
+	}
+
+	/** Arm the editing tools (6.3). `translate`/`rotate`/`scale` attach a gizmo
+	 * to the selected fixture; `add` only arms the ground click. */
+	setEditMode(mode: EditMode, snap = true): void {
+		this.editMode = mode;
+		if (mode === 'translate' || mode === 'rotate' || mode === 'scale') {
+			if (!this.transform) {
+				this.transform = new TransformControls(this.camera, this.canvas);
+				this.transform.addEventListener('dragging-changed', (event) => {
+					this.dragging = Boolean((event as { value: unknown }).value);
+					this.controls.enabled = !this.dragging;
+					if (!this.dragging && this.selected) {
+						this.onEdit?.(this.editKind(), this.selected);
+					}
+				});
+				this.transform.addEventListener('objectChange', () => this.dragApply());
+				this.scene.add(this.transform.getHelper());
+			}
+			this.transform.setMode(mode);
+			this.transform.setTranslationSnap(snap ? SNAP_POSITION : null);
+			this.transform.setRotationSnap(snap ? SNAP_ANGLE : null);
+			this.transform.setScaleSnap(snap ? SNAP_SCALE : null);
+			this.attachProxy();
+			this.showGrid(true);
+			return;
+		}
+		this.transform?.detach();
+		this.showGrid(mode === 'add');
+	}
+
+	private editKind(): EditKind {
+		return this.editMode === 'rotate' ? 'rotate' : this.editMode === 'scale' ? 'scale' : 'move';
+	}
+
+	private attachProxy(): void {
+		if (!this.transform || !this.selected || !this.terrain) return;
+		const placement = fixturePlacement(this.terrain, this.selected);
+		this.proxy.position.set(...placement.position);
+		this.proxy.rotation.set(0, placement.yaw, 0);
+		this.proxy.scale.setScalar(placement.scale);
+		this.transform.attach(this.proxy);
+	}
+
+	/** The gizmo moved: write it back onto the fixture (and its instance) live.
+	 * A `Ground = 1` row follows the terrain — the client discards its Z
+	 * (W-3), so the gizmo must not pretend otherwise. */
+	private dragApply(): void {
+		if (!this.selected || !this.terrain) return;
+		const fixture = this.selected;
+		fixture.x = this.proxy.position.x;
+		fixture.y = this.proxy.position.z;
+		fixture.z = this.proxy.position.y;
+		if (this.editMode === 'rotate') fixture.angle = readAngle(this.proxy.rotation.y);
+		if (this.editMode === 'scale') fixture.scale = Math.round(this.proxy.scale.x * 100);
+		if (fixture.ground || this.editMode === 'scale') {
+			this.proxy.position.y = fixtureZ(this.terrain, fixture);
+			fixture.z = this.proxy.position.y;
+		}
+		this.updateFixture(fixture);
+	}
+
+	/** Recompose one fixture's instance from its fields (move/rotate/scale).
+	 * Found by id, never by object identity: the page's `$state` proxies and
+	 * the payload's plain objects are two views of the same row. */
+	updateFixture(fixture: WorldFixture): void {
+		if (!this.terrain) return;
+		const placement = fixturePlacement(this.terrain, fixture);
+		const matrix = new THREE.Matrix4();
+		for (const group of this.picks) {
+			const index = group.fixtures.findIndex((row) => row.id === fixture.id);
+			if (index < 0) continue;
+			matrix.compose(
+				new THREE.Vector3(...placement.position),
+				new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), placement.yaw),
+				new THREE.Vector3(placement.scale, placement.scale, placement.scale)
+			);
+			matrix.multiply(group.local);
+			group.mesh.setMatrixAt(index, matrix);
+			group.mesh.instanceMatrix.needsUpdate = true;
+		}
+		if (this.selected && this.selected.id === fixture.id) this.select(fixture);
+		if (!this.dragging) this.attachProxy();
+	}
+
+	/** The ground under a pointer, zone-local (the add-mode click). */
+	pickGround(ndcX: number, ndcY: number): { x: number; y: number; z: number } | null {
+		const ray = new THREE.Raycaster();
+		ray.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+		const hits = ray.intersectObjects(this.groups.ground.children, false);
+		if (!hits.length) return null;
+		const point = hits[0].point;
+		return { x: point.x, y: point.z, z: point.y };
+	}
+
+	private showGrid(on: boolean): void {
+		if (on && !this.grid) {
+			this.grid = new THREE.GridHelper(ZONE_SIZE, 32, 0x2dd4a7, 0x2a4a42);
+			const material = this.grid.material as THREE.LineBasicMaterial;
+			material.transparent = true;
+			material.opacity = 0.35;
+			material.depthWrite = false;
+			this.grid.position.set(ZONE_SIZE / 2, 0, ZONE_SIZE / 2);
+			this.scene.add(this.grid);
+		}
+		if (this.grid) this.grid.visible = on;
+	}
+
+	/** The fixtures group, rebuilt (an add or a removal changed the row set).
+	 * Meshes stay cached; only the instancing is redone. */
+	async rebuildFixtures(zoneId: number, zone: WorldZone): Promise<void> {
+		if (!this.terrain) return;
+		this.clearFixtures();
+		await this.buildFixtures(zoneId, zone, this.terrain, this.token);
+	}
+
+	private clearFixtures(): void {
+		this.picks = [];
+		for (const child of [...this.groups.fixtures.children]) {
+			this.groups.fixtures.remove(child);
+			const mesh = child as THREE.Mesh;
+			mesh.geometry?.dispose?.();
+			const material = mesh.material as THREE.Material | THREE.Material[] | undefined;
+			if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
+			else material?.dispose?.();
+		}
 	}
 
 	private buildMarker(): void {
@@ -206,11 +378,13 @@ export class WorldViewer {
 		this.selected = fixture;
 		if (!fixture || !this.terrain) {
 			this.marker.visible = false;
+			this.transform?.detach();
 			return;
 		}
 		const placement = fixturePlacement(this.terrain, fixture);
 		this.marker.position.set(...placement.position);
 		this.marker.visible = true;
+		this.attachProxy();
 	}
 
 	get selection(): WorldFixture | null {
@@ -254,6 +428,8 @@ export class WorldViewer {
 	dispose(): void {
 		cancelAnimationFrame(this.frame);
 		this.clear();
+		this.transform?.dispose();
+		this.grid?.geometry.dispose();
 		this.controls.dispose();
 		this.renderer.dispose();
 	}
@@ -262,6 +438,8 @@ export class WorldViewer {
 		this.picks = [];
 		this.selected = null;
 		this.marker.visible = false;
+		this.transform?.detach();
+		this.dragging = false;
 		this.texturedPatches = 0;
 		this.composedPatches = 0;
 		this.spawnCounts = { mobs: 0, statics: 0, doors: 0, patrols: 0, patrolPoints: 0 };
@@ -327,13 +505,19 @@ export class WorldViewer {
 		}
 	}
 
-	private points(rows: Array<{ x: number; y: number; z: number }>, color: number,
-		size: number): THREE.Points | null {
+	private points(
+		rows: Array<{ x: number; y: number; z: number }>,
+		color: number,
+		size: number
+	): THREE.Points | null {
 		if (!rows.length) return null;
 		const geometry = new THREE.BufferGeometry();
 		geometry.setAttribute(
 			'position',
-			new THREE.Float32BufferAttribute(rows.flatMap((row) => [row.x, row.z, row.y]), 3)
+			new THREE.Float32BufferAttribute(
+				rows.flatMap((row) => [row.x, row.z, row.y]),
+				3
+			)
 		);
 		const cloud = new THREE.Points(
 			geometry,
@@ -565,7 +749,7 @@ export class WorldViewer {
 			instanced.frustumCulled = false; // the instances span the zone
 			instanced.name = `fixtures-${mesh.name || 'mesh'}`;
 			this.groups.fixtures.add(instanced);
-			this.picks.push({ mesh: instanced, fixtures });
+			this.picks.push({ mesh: instanced, fixtures, local });
 		}
 	}
 

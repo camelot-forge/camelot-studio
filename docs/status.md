@@ -21,7 +21,7 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot client install P.tar.gz` / `uninstall MOD` / `status` / `verify` / `free-ids` | apply, remove, inspect and read back a pack's client half; list the model ids a mod may use |
 | `camelot client patch [--max-id N] [--restore]` | raise the client's model-id ceiling in place (unmanaged clients; `.orig` backup, byte-exact restore) |
 | `camelot server export --out F [--config C\|--dsn D]` | export the server's world rows (`mob`/`worldobject`/`door`/`path`) to a snapshot the viewer reads; needs `pymysql` (extra `mysql`) |
-| `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only |
+| `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--edits D] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only; `--edits` turns on the **world editor** (6.3: select, move/rotate/scale with snap, catalog add, remove, the undo journal, `build`/`apply`/`revert`) |
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
 client NIFs parsed (the two remaining are 10.1.0.0 housing files failing
@@ -479,8 +479,13 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
    `worldobject`, `door` and `path` rows from a snapshot (`--server-rows`) or
    the live MySQL (`--db-config`), 2,544 mobs / 35 statics / 11 doors / 67
    patrols in Camelot Hills (counts and shots in the workspace report);
-   **(c)** the editor (gizmos, snap, add/remove, the undo journal, the
-   authoring directory) **plus the publish path**; **(d)** the sky, fog and
+   **(c)** the editor (gizmos, snap, add/remove, the undo journal,
+   the authoring directory) **plus the publish path** — **done 2026-10-12**:
+   `--edits DIR` opens an editing session (the journal lives in the Phase 5
+   authoring directory; `build` runs the same `mod build` path and `apply`
+   the same `client install`); the viewer carries the gizmo and the panel
+   (the workspace report has the byte-level proof and the W-5 recipe);
+   **(d)** the sky, fog and
    the day/night time (a slider first — the server owns the real clock,
    `formats.md` §11), then terrain/texture editing and the dungeon/city
    variants.
@@ -518,4 +523,9 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 .venv/bin/camelot server export --config /path/to/serverconfig.xml \
   --out server-rows.json
 .venv/bin/camelot serve --root "$DAOC_CLIENT" --server-rows server-rows.json
+# The world editor (6.3): one authoring directory per editing session. The
+# journal, the assembled fixtures.csv and the built pack live in DIR; `apply`
+# installs through the same path as `camelot client install` (and refuses
+# while the game runs). Open /world, click an object, move it.
+.venv/bin/camelot serve --root "$DAOC_CLIENT" --edits /path/to/authoring
 ```

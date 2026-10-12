@@ -48,6 +48,10 @@ class ServeConfig:
     #: and the client's world still renders.
     server_rows: Path | None = None
     db_config: Path | None = None
+    #: The editing session's authoring directory (6.3): the journal lives
+    #: there, and `build` assembles the mod inside it. Without it the editor
+    #: routes answer 503 and nothing can be written anywhere.
+    edits: Path | None = None
 
     def __post_init__(self) -> None:
         self.root = Path(self.root).expanduser().resolve()
@@ -56,6 +60,8 @@ class ServeConfig:
             self.server_rows = Path(self.server_rows).expanduser()
         if self.db_config is not None:
             self.db_config = Path(self.db_config).expanduser()
+        if self.edits is not None:
+            self.edits = Path(self.edits).expanduser()
 
     @property
     def is_loopback(self) -> bool:

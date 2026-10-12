@@ -292,6 +292,42 @@ export interface WorldSpawns {
 	warnings: string[];
 }
 
+// --- the editor (Phase 6.3) ---------------------------------------------------
+// D2: the daemon writes, the browser consumes. `op` is the request op; the
+// daemon resolves it into a `gamedata` row op and journals it.
+
+export interface EditorZone {
+	id: number;
+	ops: Record<string, unknown>[];
+}
+
+export interface EditorPack {
+	pack: string;
+	modified: number;
+	size: number;
+}
+
+export interface EditorState {
+	available: boolean;
+	dir: string | null;
+	mod: Record<string, unknown>;
+	zones: EditorZone[];
+	pack: EditorPack | null;
+}
+
+export interface EditorEdit {
+	op: Record<string, unknown>;
+	fixture: WorldFixture | null;
+}
+
+export interface EditorBuild {
+	pack: string;
+	entries: Record<string, unknown>[];
+	files: string[];
+	report: Record<string, unknown>;
+	install: Record<string, unknown> | null;
+}
+
 const BASE_KEY = 'camelot.apiBase';
 
 function normalize(base: string): string {
@@ -329,6 +365,26 @@ function queryString(params: Record<string, string | number | undefined>): strin
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
 	const res = await fetch(`${getApiBase()}/api/v1${path}`, { signal });
 	if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+	return (await res.json()) as T;
+}
+
+/** A JSON request that carries the daemon's own refusal message, not a code. */
+async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+	const res = await fetch(`${getApiBase()}/api/v1${path}`, {
+		method,
+		headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+		body: body === undefined ? undefined : JSON.stringify(body)
+	});
+	if (!res.ok) {
+		let detail = `${res.status} ${res.statusText}`;
+		try {
+			const payload = (await res.json()) as { detail?: unknown };
+			if (typeof payload.detail === 'string') detail = payload.detail;
+		} catch {
+			// not JSON: the status line is all there is
+		}
+		throw new Error(detail);
+	}
 	return (await res.json()) as T;
 }
 
@@ -418,5 +474,14 @@ export const api = {
 	worldTextureUrl: (zoneId: number, logical: string, entry: string) =>
 		`${getApiBase()}/api/v1/world/zone/${zoneId}/texture/${encodeURIComponent(logical)}/${encodeURIComponent(entry)}`,
 	worldTerrainTexUrl: (name: string) =>
-		`${getApiBase()}/api/v1/world/terraintex/${encodeURIComponent(name)}`
+		`${getApiBase()}/api/v1/world/terraintex/${encodeURIComponent(name)}`,
+
+	// --- the editor (6.3) --------------------------------------------------
+	worldEdit: (signal?: AbortSignal) => get<EditorState>('/world/edit', signal),
+	worldEditApply: (zoneId: number, op: Record<string, unknown>) =>
+		send<EditorEdit>('POST', `/world/zone/${zoneId}/edits`, op),
+	worldEditUndo: (zoneId: number) => send<EditorEdit>('DELETE', `/world/zone/${zoneId}/edits`),
+	worldModBuild: () => send<EditorBuild>('POST', '/world/mod/build'),
+	worldModApply: () => send<EditorBuild>('POST', '/world/mod/apply'),
+	worldModRevert: () => send<EditorState>('POST', '/world/mod/revert')
 };

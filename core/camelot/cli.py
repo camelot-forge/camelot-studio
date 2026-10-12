@@ -350,6 +350,7 @@ def cmd_serve(args) -> int:
         static_dir=static_dir,
         server_rows=args.server_rows,
         db_config=args.db_config,
+        edits=args.edits,
     )
     app = create_app(cfg)
 
@@ -940,6 +941,9 @@ def main(argv=None) -> int:
                    help="snapshot exported from the server DB (camelot server export)")
     p.add_argument("--db-config",
                    help="the server's own serverconfig.xml: read the live MySQL")
+    p.add_argument("--edits",
+                   help="authoring directory of an editing session (6.3): the "
+                        "journal, the built mod and its pack live there")
     p.add_argument("--allow-remote", action="store_true",
                    help="allow binding a non-loopback host (unsafe)")
     p.add_argument("--log-level", default="info")

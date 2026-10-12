@@ -133,6 +133,14 @@ class WorldFixture(BaseModel):
     cave: bool
     unique_id: int
 
+    @classmethod
+    def from_row(cls, row) -> WorldFixture:
+        """A `zones.Fixture` as the payload's fixture (one mapping, one home)."""
+        return cls(id=row.id, nif_id=row.nif_id, name=row.name, x=row.x, y=row.y,
+                   z=row.z, angle=row.angle, scale=row.scale, radius=row.radius,
+                   collide=row.collide, animate=row.animate, ground=row.ground,
+                   flip=row.flip, cave=row.cave, unique_id=row.unique_id)
+
 
 class WorldCatalogEntry(BaseModel):
     id: int
@@ -305,3 +313,43 @@ class WorldSpawns(BaseModel):
     doors: list[WorldSpawnDoor] = []
     paths: list[WorldSpawnPath] = []
     warnings: list[str] = []
+
+
+# --- the editor (6.3) ---------------------------------------------------------
+
+class EditorZone(BaseModel):
+    id: int
+    ops: list[dict[str, Any]] = []
+
+
+class EditorPack(BaseModel):
+    pack: str
+    modified: float
+    size: int
+
+
+class EditorState(BaseModel):
+    """One editing session: the mod, its journal, and the built pack."""
+
+    available: bool
+    dir: str | None = None
+    mod: dict[str, Any] = {}
+    zones: list[EditorZone] = []
+    pack: EditorPack | None = None
+
+
+class EditorEdit(BaseModel):
+    """One accepted edit: the resolved row op, and the row as it stands."""
+
+    op: dict[str, Any]
+    fixture: WorldFixture | None = None
+
+
+class EditorBuild(BaseModel):
+    """What a build (or an apply) wrote, with the toolchain's own report."""
+
+    pack: str
+    entries: list[dict[str, Any]] = []
+    files: list[str] = []
+    report: dict[str, Any] = {}
+    install: dict[str, Any] | None = None

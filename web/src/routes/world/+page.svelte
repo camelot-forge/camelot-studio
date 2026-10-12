@@ -6,12 +6,13 @@
 	import { resolve } from '$app/paths';
 	import {
 		api,
+		type EditorState,
 		type WorldFixture,
 		type WorldIndex,
 		type WorldSpawns,
 		type WorldZone
 	} from '$lib/api/client';
-	import { WorldViewer } from '$lib/world/viewer';
+	import { WorldViewer, type EditKind, type EditMode } from '$lib/world/viewer';
 	import { LoaderCircle, Crosshair } from '@lucide/svelte';
 
 	let canvasEl = $state<HTMLCanvasElement | null>(null);
@@ -38,6 +39,41 @@
 	let query = $state('');
 	let fixtureQuery = $state('');
 	let selected = $state<WorldFixture | null>(null);
+
+	// The editor (6.3): the mode, the snap, and the authoring session's state.
+	const modes = [
+		{ id: 'off', label: 'select', title: 'click to select; no gizmo' },
+		{
+			id: 'translate',
+			label: 'move',
+			title: 'drag the handles (a ground row follows the terrain)'
+		},
+		{ id: 'rotate', label: 'rotate', title: 'A, degrees, about the vertical axis' },
+		{ id: 'scale', label: 'scale', title: 'Scale, percent' },
+		{ id: 'add', label: 'add', title: 'click the ground, then pick a catalog entry' }
+	] as const;
+	let editMode = $state<EditMode>('off');
+	let snap = $state(true);
+	let addPoint = $state<{ x: number; y: number; z: number } | null>(null);
+	let addQuery = $state('');
+	let edit = $state<EditorState | null>(null);
+	let editStatus = $state<string | null>(null);
+	let editError = $state<string | null>(null);
+	let busyEdit = $state(false);
+
+	const editOps = $derived(edit?.zones.find((z) => z.id === zoneId)?.ops.length ?? 0);
+	const catalogRows = $derived.by(() => {
+		if (!zone) return [];
+		const needle = addQuery.trim().toLowerCase();
+		return zone.catalog
+			.filter(
+				(entry) =>
+					!needle ||
+					entry.filename.toLowerCase().includes(needle) ||
+					entry.name.toLowerCase().includes(needle)
+			)
+			.slice(0, 200);
+	});
 
 	// Zones of the picked region, filtered by the search box; a zone the
 	// client does not ship is listed but cannot be opened.
@@ -76,6 +112,10 @@
 		if (!canvasEl) return;
 		viewer = new WorldViewer(canvasEl);
 		viewer.start();
+		viewer.onEdit = (kind, fixture) => void commitDrag(kind, fixture);
+		viewer.onPick = (point) => {
+			addPoint = point;
+		};
 		const observer = new ResizeObserver(() => viewer?.resize());
 		observer.observe(canvasEl.parentElement!);
 		const onKey = (event: KeyboardEvent) => {
@@ -95,6 +135,15 @@
 				error = e instanceof Error ? e.message : String(e);
 				status = 'no client';
 			});
+		api
+			.worldEdit()
+			.then((state) => {
+				edit = state;
+			})
+			.catch(() => {
+				// an older daemon without the editor routes: the panel stays hidden
+				edit = null;
+			});
 		return () => {
 			window.removeEventListener('keydown', onKey);
 			observer.disconnect();
@@ -105,6 +154,10 @@
 
 	$effect(() => {
 		viewer?.setToggles(toggles);
+	});
+
+	$effect(() => {
+		viewer?.setEditMode(editMode, snap);
 	});
 
 	async function open(zoneRow: { id: number; name: string; available: boolean }) {
@@ -149,6 +202,29 @@
 				const found = loaded.fixtures.find((fixture) => fixture.id === id);
 				if (found) selectFixture(found);
 			};
+			// The editor, scriptable: the verification harness drives the same
+			// code path the panel does, never a private shortcut.
+			(window as unknown as { __worldEdit?: (op: object) => Promise<object | null> }).__worldEdit =
+				async (op: object) => {
+					await applyEdit(op as Record<string, unknown>);
+					return edit;
+				};
+			(
+				window as unknown as {
+					__worldEditMode?: (mode: EditMode, snapOn?: boolean) => void;
+				}
+			).__worldEditMode = (mode: EditMode, snapOn?: boolean) => {
+				editMode = mode;
+				if (snapOn !== undefined) snap = snapOn;
+			};
+			(window as unknown as { __worldEditor?: () => object }).__worldEditor = () => ({
+				mode: editMode,
+				ops: editOps,
+				status: editStatus,
+				error: editError,
+				pack: edit?.pack ?? null,
+				add: addPoint
+			});
 			(
 				window as unknown as { __worldFocus?: (x: number, y: number, d?: number) => void }
 			).__worldFocus = (x, y, d) => viewer?.focus(x, y, d);
@@ -166,19 +242,167 @@
 	}
 
 	function selectFixture(fixture: WorldFixture | null) {
-		selected = fixture;
-		viewer?.select(fixture);
+		// One row, one object: a pick hands back the viewer's plain object, the
+		// lists hand back the `$state` proxy — settle on the page's own row so
+		// the inspector, the viewer and every later edit talk about the same one.
+		const known =
+			fixture && zone ? (zone.fixtures.find((row) => row.id === fixture.id) ?? fixture) : fixture;
+		selected = known;
+		viewer?.select(known);
 	}
 
 	function focusFixture(fixture: WorldFixture) {
 		viewer?.focusFixture(fixture);
 	}
 
+	async function reloadFixtures() {
+		if (zoneId === null || !viewer) return;
+		const loaded = await api.worldZone(zoneId);
+		zone = loaded;
+		await viewer.rebuildFixtures(zoneId, loaded);
+	}
+
+	/** One edit, through the daemon (D2): the answer is the row as it stands. */
+	async function applyEdit(op: Record<string, unknown>) {
+		if (zoneId === null || busyEdit) return;
+		busyEdit = true;
+		editError = null;
+		try {
+			const result = await api.worldEditApply(zoneId, op);
+			if (op.kind === 'add' || op.kind === 'remove') {
+				await reloadFixtures();
+			} else if (result.fixture) {
+				const row = result.fixture;
+				const shown = zone?.fixtures.find((fixture) => fixture.id === row.id);
+				if (shown) {
+					Object.assign(shown, row);
+					viewer?.updateFixture(shown);
+				}
+			}
+			editStatus = describe(op, result.fixture);
+			edit = await api.worldEdit();
+		} catch (e) {
+			editError = e instanceof Error ? e.message : String(e);
+			await reloadFixtures(); // the daemon's state wins after a refusal
+		} finally {
+			busyEdit = false;
+		}
+	}
+
+	function describe(op: Record<string, unknown>, fixture: WorldFixture | null): string {
+		const id = fixture?.id ?? op.id;
+		if (op.kind === 'remove') return `removed #${id}`;
+		if (op.kind === 'add' && fixture) return `added #${fixture.id} ${fixture.name}`;
+		return `${op.kind} #${id}`;
+	}
+
+	/** A gizmo drag ended: the viewer already wrote the fields locally; the
+	 * daemon journals them (it fills `expect` from the row it holds). */
+	async function commitDrag(kind: EditKind, fixture: WorldFixture) {
+		await applyEdit({
+			kind,
+			id: fixture.id,
+			x: fixture.x,
+			y: fixture.y,
+			z: fixture.z,
+			angle: fixture.angle,
+			scale: fixture.scale
+		});
+	}
+
+	async function undo() {
+		if (zoneId === null || busyEdit) return;
+		busyEdit = true;
+		editError = null;
+		try {
+			const result = await api.worldEditUndo(zoneId);
+			editStatus = result.op.action
+				? `undid ${result.op.action} #${result.op.id}`
+				: 'nothing to undo';
+			await reloadFixtures();
+			edit = await api.worldEdit();
+		} catch (e) {
+			editError = e instanceof Error ? e.message : String(e);
+		} finally {
+			busyEdit = false;
+		}
+	}
+
+	async function removeSelected() {
+		if (!selected) return;
+		const id = selected.id;
+		selectFixture(null);
+		await applyEdit({ kind: 'remove', id });
+	}
+
+	async function addCatalog(entry: { id: number; name: string; filename: string }) {
+		if (!addPoint) return;
+		await applyEdit({
+			kind: 'add',
+			nif_id: entry.id,
+			x: addPoint.x,
+			y: addPoint.y,
+			name: entry.name
+		});
+	}
+
+	async function build() {
+		if (busyEdit) return;
+		busyEdit = true;
+		editError = null;
+		try {
+			const result = await api.worldModBuild();
+			editStatus = `built ${result.pack}`;
+			edit = await api.worldEdit();
+		} catch (e) {
+			editError = e instanceof Error ? e.message : String(e);
+		} finally {
+			busyEdit = false;
+		}
+	}
+
+	async function apply() {
+		if (busyEdit) return;
+		busyEdit = true;
+		editError = null;
+		try {
+			const result = await api.worldModApply();
+			const mod = (result.install ?? {}).mod ?? edit?.mod.id ?? '';
+			editStatus = `installed ${mod}`;
+			edit = await api.worldEdit();
+		} catch (e) {
+			editError = e instanceof Error ? e.message : String(e);
+		} finally {
+			busyEdit = false;
+		}
+	}
+
+	async function revert() {
+		if (busyEdit) return;
+		busyEdit = true;
+		editError = null;
+		try {
+			await api.worldModRevert();
+			editStatus = 'journal cleared';
+			await reloadFixtures();
+			edit = await api.worldEdit();
+		} catch (e) {
+			editError = e instanceof Error ? e.message : String(e);
+		} finally {
+			busyEdit = false;
+		}
+	}
+
 	function onCanvasClick(event: MouseEvent) {
 		if (!viewer || !canvasEl) return;
+		if (viewer.editing) return; // the gizmo owns this click
 		const rect = canvasEl.getBoundingClientRect();
 		const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
 		const ndcY = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
+		if (editMode === 'add') {
+			addPoint = viewer.pickGround(ndcX, ndcY);
+			return;
+		}
 		const picked = viewer.pick(ndcX, ndcY);
 		selectFixture(picked ? picked.fixture : null);
 	}
@@ -279,6 +503,97 @@
 				<label><input type="checkbox" bind:checked={toggles.water} /> water</label>
 				<label><input type="checkbox" bind:checked={toggles.jumps} /> jumps</label>
 			</section>
+
+			{#if edit?.available}
+				<section class="editor">
+					<h2>Editor <span class="dim">{edit.mod.id}</span></h2>
+					<div class="modes">
+						{#each modes as mode (mode.id)}
+							<button
+								type="button"
+								class:active={editMode === mode.id}
+								title={mode.title}
+								onclick={() => (editMode = mode.id)}
+							>
+								{mode.label}
+							</button>
+						{/each}
+					</div>
+					<label class="snap">
+						<input type="checkbox" bind:checked={snap} /> snap — 256 units, 15°, 5%
+					</label>
+					{#if selected}
+						<button class="danger" type="button" onclick={removeSelected}>
+							remove #{selected.id}
+						</button>
+					{/if}
+					<div class="modes">
+						<button
+							type="button"
+							onclick={undo}
+							disabled={!editOps || busyEdit}
+							title="drop the journal's last op"
+						>
+							undo ({editOps})
+						</button>
+						<button
+							type="button"
+							onclick={build}
+							disabled={busyEdit}
+							title="assemble the authoring directory and run mod build"
+						>
+							build
+						</button>
+						<button
+							type="button"
+							onclick={apply}
+							disabled={busyEdit}
+							title="build, then install the client half"
+						>
+							apply
+						</button>
+						<button
+							type="button"
+							onclick={revert}
+							disabled={busyEdit}
+							title="undo every edit of every zone"
+						>
+							revert
+						</button>
+					</div>
+					{#if editMode === 'add'}
+						<p class="hint">
+							{addPoint
+								? `add at ${addPoint.x.toFixed(0)}, ${addPoint.y.toFixed(0)}`
+								: 'click the ground to aim'}
+						</p>
+						<input type="search" bind:value={addQuery} placeholder="catalog: file or name" />
+						<ul class="addlist">
+							{#each catalogRows as entry (entry.id)}
+								<li>
+									<button
+										type="button"
+										disabled={!addPoint || busyEdit}
+										onclick={() => addCatalog(entry)}
+									>
+										<span class="zname">{entry.filename}</span>
+										<span class="zmeta">{entry.name}</span>
+									</button>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+					{#if edit.pack}
+						<p class="hint">
+							pack {(edit.pack.size / 1000).toFixed(0)} kB · {new Date(
+								edit.pack.modified * 1000
+							).toLocaleTimeString()}
+						</p>
+					{/if}
+					{#if editStatus}<p class="hint">{editStatus}</p>{/if}
+					{#if editError}<p class="warn">{editError}</p>{/if}
+				</section>
+			{/if}
 
 			<section class="picked">
 				<h2>Selected</h2>
@@ -498,6 +813,38 @@
 		display: flex;
 		gap: 4px;
 		align-items: center;
+	}
+	.editor .modes {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+	}
+	.editor .modes button {
+		width: auto;
+		padding: 3px 8px;
+		border-color: #333;
+		font-size: 11px;
+	}
+	.editor .snap {
+		display: flex;
+		gap: 4px;
+		align-items: center;
+		font-size: 11px;
+		color: #9aa4a0;
+	}
+	.editor button.danger {
+		width: auto;
+		align-self: flex-start;
+		border-color: #7a2f2f;
+		color: #ff8f8f;
+		font-size: 11px;
+	}
+	.editor input[type='search'] {
+		font-size: 11px;
+	}
+	.editor .addlist {
+		max-height: 22dvh;
+		overflow-y: auto;
 	}
 	button.focus {
 		justify-content: center;

@@ -70,6 +70,7 @@ __all__ = [
     "ZoneError",
     "ZoneInfo",
     "ZoneNif",
+    "fixtures_from_table",
 ]
 
 #: The world's grid: a zone spans `ZONE_UNIT * 8` = 65536 units, the same
@@ -293,6 +294,45 @@ class Fixture:
     cave: bool
     unique_id: int
     row: list[str] = field(default_factory=list)
+
+
+def fixtures_from_table(name: str, table: gamedata.Table) -> list[Fixture]:
+    """The placements a parsed `fixtures.csv` holds.
+
+    The mapping lives here once: the client's own file and the editor's
+    working table (base rows plus the journal) produce the same typed rows,
+    so what the viewer shows is what a build would write.
+    """
+    try:
+        columns = {name: table.column_index(name) for name in (
+            "ID", "NIF #", "Textual Name", "X", "Y", "Z", "A", "Scale",
+            "Collide", "Radius", "Animate", "Ground", "Flip", "Cave", "Unique Id")}
+    except gamedata.TableError as error:
+        raise ZoneError(f"{name}: fixtures.csv: {error}") from error
+    out: list[Fixture] = []
+    for row in table.rows[gamedata.HEADER_ROWS:]:
+        if not row or not _field(row, 0).strip():
+            continue
+        fields = {name: _field(row, index) for name, index in columns.items()}
+        out.append(Fixture(
+            id=int(_number(fields["ID"], f"{name}: fixtures.csv ID")),
+            nif_id=int(_number(fields["NIF #"], f"{name}: fixtures.csv NIF #")),
+            name=fields["Textual Name"].strip(),
+            x=_number(fields["X"], f"{name}: fixtures.csv X"),
+            y=_number(fields["Y"], f"{name}: fixtures.csv Y"),
+            z=_number(fields["Z"], f"{name}: fixtures.csv Z"),
+            angle=_number(fields["A"], f"{name}: fixtures.csv A"),
+            scale=_number(fields["Scale"], f"{name}: fixtures.csv Scale"),
+            collide=_number(fields["Collide"], f"{name}: fixtures.csv Collide"),
+            radius=_number(fields["Radius"], f"{name}: fixtures.csv Radius"),
+            animate=_flag(fields["Animate"]),
+            ground=_flag(fields["Ground"]),
+            flip=_flag(fields["Flip"]),
+            cave=_flag(fields["Cave"]),
+            unique_id=int(_number(fields["Unique Id"], f"{name}: fixtures.csv Unique Id")),
+            row=list(row),
+        ))
+    return out
 
 
 @dataclass
@@ -567,37 +607,8 @@ class Zone:
 
     def fixtures(self) -> list[Fixture]:
         """The zone's object placements (`fixtures.csv`), typed."""
-        table = gamedata.parse_table("fixtures.csv", self.data_entry("fixtures.csv"))
-        try:
-            columns = {name: table.column_index(name) for name in (
-                "ID", "NIF #", "Textual Name", "X", "Y", "Z", "A", "Scale",
-                "Collide", "Radius", "Animate", "Ground", "Flip", "Cave", "Unique Id")}
-        except gamedata.TableError as error:
-            raise ZoneError(f"{self.name}: fixtures.csv: {error}") from error
-        out: list[Fixture] = []
-        for row in table.rows[gamedata.HEADER_ROWS:]:
-            if not row or not _field(row, 0).strip():
-                continue
-            fields = {name: _field(row, index) for name, index in columns.items()}
-            out.append(Fixture(
-                id=int(_number(fields["ID"], f"{self.name}: fixtures.csv ID")),
-                nif_id=int(_number(fields["NIF #"], f"{self.name}: fixtures.csv NIF #")),
-                name=fields["Textual Name"].strip(),
-                x=_number(fields["X"], f"{self.name}: fixtures.csv X"),
-                y=_number(fields["Y"], f"{self.name}: fixtures.csv Y"),
-                z=_number(fields["Z"], f"{self.name}: fixtures.csv Z"),
-                angle=_number(fields["A"], f"{self.name}: fixtures.csv A"),
-                scale=_number(fields["Scale"], f"{self.name}: fixtures.csv Scale"),
-                collide=_number(fields["Collide"], f"{self.name}: fixtures.csv Collide"),
-                radius=_number(fields["Radius"], f"{self.name}: fixtures.csv Radius"),
-                animate=_flag(fields["Animate"]),
-                ground=_flag(fields["Ground"]),
-                flip=_flag(fields["Flip"]),
-                cave=_flag(fields["Cave"]),
-                unique_id=int(_number(fields["Unique Id"], f"{self.name}: fixtures.csv Unique Id")),
-                row=list(row),
-            ))
-        return out
+        return fixtures_from_table(self.name, gamedata.parse_table(
+            "fixtures.csv", self.data_entry("fixtures.csv")))
 
     def catalog(self) -> list[ZoneNif]:
         """The zone's object catalog (`nifs.csv`), typed."""

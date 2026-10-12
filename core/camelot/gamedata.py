@@ -468,9 +468,12 @@ def apply_row_ops(table: Table, ops) -> Table:
 
     Each op is a resolved payload item (:mod:`camelot.mod`): ``set`` replaces
     named columns of an existing row; ``add`` appends one row, writing the id
-    into the id column. ``expect`` is compared before the op lands, so a pack
-    built against a different client (or reading an earlier mod's edit) is
-    refused with both values named rather than applied blind.
+    into the id column; ``remove`` drops the row and its line (the editor's
+    journal uses it — packs carry whole assembled files, so a remove op never
+    reaches an installer today, but it obeys the same rules here). ``expect``
+    is compared before the op lands, so a pack built against a different
+    client (or reading an earlier mod's edit) is refused with both values
+    named rather than applied blind.
     """
     lines = list(table.lines)
     rows = [list(row) for row in table.rows]
@@ -502,6 +505,19 @@ def apply_row_ops(table: Table, ops) -> Table:
             for name, value in values.items():
                 row[columns[name]] = value
             lines[index] = _encode_line(row)
+        elif action == "remove":
+            index = _find_row(rows, id_)
+            if index is None:
+                raise TableError(f"{table.name}: no row with id {id_}")
+            row = rows[index]
+            for name, wanted in expect.items():
+                current = row[columns[name]] if len(row) > columns[name] else ""
+                if current != wanted:
+                    raise TableError(
+                        f"{table.name}#{id_}.{name}: expected {wanted!r}, found {current!r}"
+                    )
+            del rows[index]
+            del lines[index]
         elif action == "add":
             if _find_row(rows, id_) is not None:
                 raise TableError(f"{table.name}: row {id_} already exists")

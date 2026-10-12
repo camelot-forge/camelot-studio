@@ -47,6 +47,7 @@ from ..png import encode_png
 from ..zones import ZONE_ARCHIVES, WorldIndex, Zone, ZoneError
 from .cache import read_json, write_json
 from .config import ServeConfig
+from .editor import Editor, EditorError, build_editor_router
 from .models import (
     WorldArchive,
     WorldBound,
@@ -97,6 +98,8 @@ class World:
         self.config = config
         self._index: WorldIndex | None = None
         self._available: set[int] | None = None
+        #: Set by `build_world_router`: the journal that overlays placements.
+        self.editor: Editor | None = None
 
     def index(self) -> WorldIndex:
         if self._index is None:
@@ -248,12 +251,7 @@ def index_payload(world: World) -> WorldIndexPayload:
 
 
 def _fixture(row) -> WorldFixture:
-    return WorldFixture(
-        id=row.id, nif_id=row.nif_id, name=row.name, x=row.x, y=row.y, z=row.z,
-        angle=row.angle, scale=row.scale, radius=row.radius, collide=row.collide,
-        animate=row.animate, ground=row.ground, flip=row.flip, cave=row.cave,
-        unique_id=row.unique_id,
-    )
+    return WorldFixture.from_row(row)
 
 
 def _catalog(zone: Zone) -> list[WorldCatalogEntry]:
@@ -285,6 +283,25 @@ def _patches(world: World, zone: Zone) -> WorldPatches | None:
     )
 
 
+def _zone_fixtures(world: World, zone: Zone) -> tuple[list[Any], list[str]]:
+    """The placements to show: the editor's journal applied when it has ops.
+
+    The journal is the daemon's own state and the payload is what the
+    *build* would write — one view of the zone, edited or not. A journal
+    that no longer applies (the client changed under it) falls back to the
+    client's own rows and says so, rather than showing half an edit.
+    """
+    editor = world.editor
+    if editor is None or not editor.ops(zone.info.zone_id):
+        return zone.fixtures(), []
+    try:
+        return editor.fixtures(zone), []
+    except (EditorError, ZoneError) as error:
+        return zone.fixtures(), [
+            (f"fixtures: the journal did not apply ({error}); "
+             "showing the client's own rows")]
+
+
 def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
     zone = world.zone(zone_id)
     warnings: list[str] = []
@@ -309,7 +326,12 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
             warnings.append(f"{name}: {error}")
             return default
 
-    fixtures = part("fixtures", lambda: [_fixture(row) for row in zone.fixtures()], [])
+    def placements() -> list[WorldFixture]:
+        rows, notes = _zone_fixtures(world, zone)
+        warnings.extend(notes)
+        return [_fixture(row) for row in rows]
+
+    fixtures = part("fixtures", placements, [])
     catalog = part("catalog", lambda: _catalog(zone), [])
     bounds = part("bounds", lambda: [WorldBound(id=b.id, points=b.points)
                                      for b in zone.bounds()], [])
@@ -609,6 +631,7 @@ def _http(error: WorldError) -> HTTPException:
 def build_world_router(config: ServeConfig) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
     world = World(config)
+    world.editor = Editor(config)
     server_rows = ServerRows(config)
 
     @router.get("/world/index", response_model=WorldIndexPayload)
@@ -689,4 +712,5 @@ def build_world_router(config: ServeConfig) -> APIRouter:
             raise _http(error) from error
         return Response(content=png, media_type="image/png")
 
+    router.include_router(build_editor_router(world))
     return router
