@@ -362,6 +362,53 @@ def test_apply_writes_the_patch_and_revert_puts_the_originals_back(editing, tmp_
     assert updates[-1][0] == str(LEFT + 19660)  # the original, put back
 
 
+def test_restore_takes_the_client_half_and_the_journal_back(editing, tmp_path,
+                                                           monkeypatch):
+    """`revert` knows the journal; the client's installed half is the
+    *client's* own authority (D6), so a full restore does both — and it does
+    the client first, so a refusal leaves the session whole (the operator hit
+    exactly this on 2026-10-12: a reverted journal and a client still showing
+    the moved keep)."""
+    fake = FakeConnection([
+        [door_row()],                 # the pair read
+        [door_row()],                 # the existence check at apply
+        [],                           # the UPDATE
+        [door_row(X=LEFT + 30000)],   # the existence check at revert
+        [],                           # the restoring UPDATE
+    ])
+    monkeypatch.setattr(serverrows, "connect", lambda _connection: fake)
+    client = db_client(editing, tmp_path, db_write=True)
+    assert edit(client, {"kind": "move", "id": 2, "x": 30000, "y": 31000,
+                         "rows": [{"table": "door", "key": "d1"}]}).status_code == 200
+    assert client.post("/api/v1/world/mod/apply").status_code == 200
+    state = client.get("/api/v1/world/edit").json()
+    assert state["client"]["installed"] is True
+    assert state["client"]["mod"] == "session"
+    pine = next(row for row in client.get("/api/v1/world/zone/0").json()["fixtures"]
+                if row["id"] == 2)
+    assert (pine["x"], pine["y"]) == (30000, 31000)
+    zone = WorldIndex(editing).open(0)
+    assert next(fixture for fixture in zone.fixtures() if fixture.id == 2).x == 30000
+
+    response = client.post("/api/v1/world/mod/restore")
+    assert response.status_code == 200, response.json()
+    body = response.json()
+    assert body["client"]["mod"] == "session"  # what was removed
+    assert body["rows"] == 1                    # the server row put back
+    assert body["state"]["zones"] == [] and body["state"]["rows"] == []
+    assert body["state"]["client"]["installed"] is False
+    # the client's own bytes are back, and so is the row
+    zone = WorldIndex(editing).open(0)
+    assert next(fixture for fixture in zone.fixtures() if fixture.id == 2).x == 32768
+    updates = [params for sql, params in fake.statements if sql.startswith("UPDATE")]
+    assert updates[-1][0] == str(LEFT + 19660)
+
+    # a second restore has nothing to do, and says so instead of failing
+    again = client.post("/api/v1/world/mod/restore")
+    assert again.status_code == 200, again.json()
+    assert again.json()["client"]["installed"] is False
+
+
 def test_a_row_removal_is_reversible_by_reinsertion(editing, tmp_path, monkeypatch):
     """A removal records the whole row; revert re-inserts it, every column
     the table's own list holds — a world edit is exactly reversible."""

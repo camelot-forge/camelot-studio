@@ -335,8 +335,22 @@ class EditorPack(BaseModel):
     size: int
 
 
+class EditorClient(BaseModel):
+    """What the *client* says about this session's own half.
+
+    `revert` cannot touch it — the installed state belongs to the client, its
+    own authority (D6) — so the panel shows it and `restore` takes it back.
+    """
+
+    mod: str = ""
+    installed: bool = False
+    version: str | None = None
+    claims: list[str] = []
+
+
 class EditorState(BaseModel):
-    """One editing session: the mod, its journal, and the built pack."""
+    """The editing session: the mod, the journal, the built pack — and the
+    client's own half, which the client records for itself."""
 
     available: bool
     dir: str | None = None
@@ -344,6 +358,7 @@ class EditorState(BaseModel):
     zones: list[EditorZone] = []
     rows: list[EditorRowOp] = []
     pack: EditorPack | None = None
+    client: EditorClient | None = None
 
 
 class EditorEdit(BaseModel):
@@ -367,3 +382,12 @@ class EditorBuild(BaseModel):
     report: dict[str, Any] = {}
     install: dict[str, Any] | None = None
     patches: int = 0
+
+
+class EditorRestore(BaseModel):
+    """What a full restore took back: the client half that *was* installed,
+    the server rows put back, and the session as it stands after."""
+
+    client: EditorClient
+    rows: int = 0
+    state: EditorState

@@ -325,6 +325,15 @@ export interface EditorRowOp {
 	patches: Record<string, unknown>[];
 }
 
+/** What the *client* says about the session's own half: the client records
+ * what it carries, so `revert` cannot touch it — `restore` does. */
+export interface EditorClient {
+	mod: string;
+	installed: boolean;
+	version: string | null;
+	claims: string[];
+}
+
 export interface EditorState {
 	available: boolean;
 	dir: string | null;
@@ -332,6 +341,7 @@ export interface EditorState {
 	zones: EditorZone[];
 	rows: EditorRowOp[];
 	pack: EditorPack | null;
+	client: EditorClient | null;
 }
 
 export interface EditorEdit {
@@ -347,6 +357,14 @@ export interface EditorBuild {
 	report: Record<string, unknown>;
 	install: Record<string, unknown> | null;
 	patches: number;
+}
+
+/** What a full restore took back: the client half that *was* installed, the
+ * server rows put back, and the session as it stands after. */
+export interface EditorRestore {
+	client: EditorClient;
+	rows: number;
+	state: EditorState;
 }
 
 const BASE_KEY = 'camelot.apiBase';
@@ -504,5 +522,6 @@ export const api = {
 	worldEditUndo: (zoneId: number) => send<EditorEdit>('DELETE', `/world/zone/${zoneId}/edits`),
 	worldModBuild: () => send<EditorBuild>('POST', '/world/mod/build'),
 	worldModApply: () => send<EditorBuild>('POST', '/world/mod/apply'),
-	worldModRevert: () => send<EditorState>('POST', '/world/mod/revert')
+	worldModRevert: () => send<EditorState>('POST', '/world/mod/revert'),
+	worldModRestore: () => send<EditorRestore>('POST', '/world/mod/restore')
 };

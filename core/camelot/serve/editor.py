@@ -56,8 +56,10 @@ from ..zones import Fixture, Zone, ZoneError, fixtures_from_table
 from .config import ServeConfig
 from .models import (
     EditorBuild,
+    EditorClient,
     EditorEdit,
     EditorPack,
+    EditorRestore,
     EditorRowOp,
     EditorState,
     EditorZone,
@@ -249,7 +251,8 @@ class Editor:
             stat = path.stat()
             pack = EditorPack(pack=str(path), modified=stat.st_mtime, size=stat.st_size)
         return EditorState(available=True, dir=str(self.dir), mod=journal["mod"],
-                           zones=zones, rows=patches, pack=pack)
+                           zones=zones, rows=patches, pack=pack,
+                           client=self.client_state())
 
     # -- the tables ------------------------------------------------------------
 
@@ -669,14 +672,15 @@ class Editor:
         for table, rows in by_table.items():
             serverrows.insert_rows(connect_, table, rows)
 
-    def revert(self) -> None:
+    def revert(self) -> int:
         """Undo everything: the journal empties, the originals stand again.
 
         Server patches that were written are put back first (their recorded
         originals; a removal re-inserts the whole row), then the client ops
         go and the build outputs with them — a pack left behind by a reverted
         journal would claim an edit that no longer exists. The *installed*
-        client half is untouched: uninstall reads the client's own state.
+        client half is untouched: uninstall reads the client's own state, and
+        `restore` is the call that does both. Returns the rows put back.
         """
         if not self.available:
             raise EditorError("the daemon was started without --edits <dir>")
@@ -689,6 +693,54 @@ class Editor:
         journal["patches"] = {}
         self._save()
         self._clear_build(str(journal["mod"].get("id", "world-edits")))
+        return len(applied)
+
+    def mod_id(self) -> str:
+        """The mod this session is: its own `mod.json`, else its directory."""
+        if not self.available:
+            return ""
+        return str(self._load()["mod"].get("id") or self.dir.name or "world-edits")
+
+    def client_state(self) -> EditorClient:
+        """The client's own half, as the client itself records it (D6).
+
+        A failure to read it is not an error here: the state is shown, and
+        `restore` is where a refusal has to be raised.
+        """
+        from .. import clientinstall
+
+        mod_id = self.mod_id()
+        try:
+            state = clientinstall.status(str(self.config.root))
+        except (clientinstall.InstallError, OSError):
+            return EditorClient(mod=mod_id)
+        for install in state["installs"]:
+            if install.get("mod") == mod_id:
+                return EditorClient(
+                    mod=mod_id, installed=True, version=str(install.get("version") or ""),
+                    claims=[str(claim) for claim in install.get("claims") or []])
+        return EditorClient(mod=mod_id)
+
+    def restore(self) -> tuple[EditorClient, int]:
+        """Everything back: the client's own half, then the journal.
+
+        `revert` alone leaves a client that still shows an edit the journal no
+        longer knows (the operator hit exactly that on 2026-10-12). The
+        uninstall therefore comes *first*: a refusal (the game running, another
+        mod needing this one) leaves the session untouched, never half-put-back.
+        """
+        if not self.available:
+            raise EditorError("the daemon was started without --edits <dir>")
+        removed = self.client_state()
+        if removed.installed:
+            from .. import clientinstall
+
+            try:
+                clientinstall.uninstall(str(self.config.root), removed.mod)
+            except clientinstall.InstallError as error:
+                raise EditorError(
+                    f"the client's half cannot be removed: {error}") from error
+        return removed, self.revert()
 
     def _clear_build(self, mod_id: str) -> None:
         paths = [self.dir / f"{mod_id}.tar.gz", self.dir / "client.patch.json",
@@ -854,5 +906,15 @@ def build_editor_router(world) -> APIRouter:
         except EditorError as error:
             raise http(error) from error
         return active.state()
+
+    @router.post("/world/mod/restore", response_model=EditorRestore)
+    def world_mod_restore() -> EditorRestore:
+        """Everything back: the client's installed half and the journal."""
+        try:
+            active = ensure()
+            removed, rows = active.restore()
+        except EditorError as error:
+            raise http(error) from error
+        return EditorRestore(client=removed, rows=rows, state=active.state())
 
     return router

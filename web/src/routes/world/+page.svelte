@@ -79,9 +79,19 @@
 	let carry = $state(true);
 
 	const editOps = $derived(edit?.zones.find((z) => z.id === zoneId)?.ops.length ?? 0);
-	const editRows = $derived(
-		(edit?.rows ?? []).reduce((sum, entry) => sum + entry.patches.length, 0)
-	);
+	const editPatches = $derived((edit?.rows ?? []).flatMap((entry) => entry.patches));
+	const editRows = $derived(editPatches.length);
+	// Written = in the server's database; the rest is the journal's promise.
+	const writtenRows = $derived(editPatches.filter((patch) => patch.applied === true).length);
+	const editClient = $derived(edit?.client ?? null);
+	// The client's half is the client's own authority: `revert` cannot touch it.
+	const clientNote = $derived.by(() => {
+		const client = edit?.client;
+		if (!client) return 'client: unknown';
+		if (!client.installed) return `client: no ${client.mod} half installed`;
+		const claims = client.claims.length;
+		return `client: ${client.mod} installed (${claims} claim${claims === 1 ? '' : 's'})`;
+	});
 	const selectedSpawn = $derived(selectedRow && spawns ? rowOf(spawns, selectedRow) : null);
 	// What the proposal is made of, named: a castle's box holds its doors *and*
 	// everyone standing in the courtyard, and the operator decides.
@@ -253,8 +263,10 @@
 			};
 			(window as unknown as { __worldEditor?: () => object }).__worldEditor = () => ({
 				mode: editMode,
-				ops: editOps,
+				mops: editOps,
 				rows: editRows,
+				written: writtenRows,
+				client: editClient,
 				row: selectedRow,
 				carried: proposals.map((row) => ({
 					table: row.table,
@@ -501,10 +513,38 @@
 		editError = null;
 		try {
 			await api.worldModRevert();
-			editStatus = 'journal cleared';
+			editStatus = 'journal cleared (the client half, if installed, stays)';
 			await reloadFixtures();
 			await reloadSpawns();
 			edit = await api.worldEdit();
+		} catch (e) {
+			editError = e instanceof Error ? e.message : String(e);
+		} finally {
+			busyEdit = false;
+		}
+	}
+
+	/** Everything back, the client half included: the client records what it
+	 * carries, so a journal-only revert would leave it showing an edit nothing
+	 * else knows about (the operator hit exactly that). */
+	async function restore() {
+		if (busyEdit) return;
+		busyEdit = true;
+		editError = null;
+		try {
+			const result = await api.worldModRestore();
+			const half = result.client.installed
+				? `${result.client.mod} removed from the client`
+				: 'no client half to remove';
+			const rows = result.rows
+				? ` · ${result.rows} server row${result.rows === 1 ? '' : 's'} put back`
+				: '';
+			editStatus = `restored: ${half}${rows}`;
+			edit = result.state;
+			selectFixture(null);
+			selectRow(null);
+			await reloadFixtures();
+			await reloadSpawns();
 		} catch (e) {
 			editError = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -696,9 +736,18 @@
 							type="button"
 							onclick={revert}
 							disabled={busyEdit}
-							title="undo every edit of every zone"
+							title="empty the journal and put the server rows back (the installed client half stays)"
 						>
 							revert
+						</button>
+						<button
+							class="danger"
+							type="button"
+							onclick={restore}
+							disabled={busyEdit || (!editOps && !editRows && !editClient?.installed)}
+							title="put everything back: uninstall the client half, put the server rows back, empty the journal"
+						>
+							restore all
 						</button>
 					</div>
 					{#if editMode === 'add'}
@@ -730,9 +779,21 @@
 							).toLocaleTimeString()}
 						</p>
 					{/if}
+					{#if editClient}
+						<p class="hint">{clientNote}</p>
+					{/if}
 					{#if editRows}
 						<p class="hint">
-							{editRows} server row patch{editRows === 1 ? '' : 'es'} in the journal
+							{editRows} server row patch{editRows === 1 ? '' : 'es'} in the journal{writtenRows
+								? ` · ${writtenRows} written to the database`
+								: ''}{editRows > writtenRows ? ` · ${editRows - writtenRows} pending` : ''}
+						</p>
+					{/if}
+					{#if writtenRows || editClient?.installed}
+						<p class="hint">
+							the running game reads these at startup: in game, <code>/reload doors</code>,
+							<code>/reload mob</code> and <code>/reload object</code> reread them (region {zone
+								.info.region})
 						</p>
 					{/if}
 					{#if editStatus}<p class="hint">{editStatus}</p>{/if}

@@ -21,7 +21,7 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot client install P.tar.gz` / `uninstall MOD` / `status` / `verify` / `free-ids` | apply, remove, inspect and read back a pack's client half; list the model ids a mod may use |
 | `camelot client patch [--max-id N] [--restore]` | raise the client's model-id ceiling in place (unmanaged clients; `.orig` backup, byte-exact restore) |
 | `camelot server export --out F [--config C\|--dsn D]` | export the server's world rows (`mob`/`worldobject`/`door`/`path`) to a snapshot the viewer reads; needs `pymysql` (extra `mysql`) |
-| `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--db-write] [--edits D] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only; `--edits` turns on the **world editor** (6.3: select, move/rotate/scale with snap, catalog add, remove, the undo journal, `build`/`apply`/`revert`); `--db-write` lets it also patch the server's **existing** world rows (B2: a keep's own doors move with the keep) |
+| `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--db-write] [--edits D] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only; `--edits` turns on the **world editor** (6.3: select, move/rotate/scale with snap, catalog add, remove, the undo journal, `build`/`apply`/`revert`/`restore`); `--db-write` lets it also patch the server's **existing** world rows (B2: a keep's own doors move with the keep) |
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
 client NIFs parsed (the two remaining are 10.1.0.0 housing files failing
@@ -496,7 +496,16 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
    anything is written); a row is moved or removed on its own too, and both
    land through the same journal: `apply` patches the database behind the
    explicit `--db-write`, recording every original it read, and `revert` puts
-   them back exactly. Such an edit is server-only — no pack, no client half;
+   them back exactly. Such an edit is server-only — no pack, no client half.
+   **What the game shows is a fourth layer**: a running server reads its rows
+   once, at startup, so a written patch is in the database but not on screen
+   until the server's own `/reload doors`, `/reload mob`, `/reload object`
+   (region-scoped, admin) or a restart — measured from the server's own
+   commands on 2026-10-12, and the panel says so. And because the installed
+   client half belongs to the *client*, a journal-only `revert` leaves it
+   behind: `restore` is the call that puts the client's half, the rows and
+   the journal back together (the uninstall first, so a refusal changes
+   nothing);
    **(d)** the sky, fog and
    the day/night time (a slider first — the server owns the real clock,
    `formats.md` §11), then terrain/texture editing and the dungeon/city
@@ -546,4 +555,11 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 # write it. Every patch records the originals it read, so `revert` is exact.
 .venv/bin/camelot serve --root "$DAOC_CLIENT" --edits /path/to/authoring \
   --db-config /path/to/serverconfig.xml --db-write
+# A running game server reads its own rows once, at startup — a written patch
+# is in the database but not on screen until it is told (in game, admin):
+#   /reload doors      (DoorMgr.Init, all zones)
+#   /reload mob        (the region you stand in)   /reload object  (same)
+# `restore` (the panel's "restore all") puts the installed client half, the
+# written rows and the journal back together; `client uninstall MOD` does the
+# client's half alone.
 ```
