@@ -322,6 +322,13 @@ class EditorZone(BaseModel):
     ops: list[dict[str, Any]] = []
 
 
+class EditorRowOp(BaseModel):
+    """One zone's server-row patches: moves and removals, journal order."""
+
+    zone: int
+    patches: list[dict[str, Any]] = []
+
+
 class EditorPack(BaseModel):
     pack: str
     modified: float
@@ -335,21 +342,28 @@ class EditorState(BaseModel):
     dir: str | None = None
     mod: dict[str, Any] = {}
     zones: list[EditorZone] = []
+    rows: list[EditorRowOp] = []
     pack: EditorPack | None = None
 
 
 class EditorEdit(BaseModel):
-    """One accepted edit: the resolved row op, and the row as it stands."""
+    """One accepted edit: the resolved row op, the row as it stands, and the
+    server rows it carried (B2: the rows a fixture move took with it)."""
 
     op: dict[str, Any]
     fixture: WorldFixture | None = None
+    patches: list[dict[str, Any]] = []
 
 
 class EditorBuild(BaseModel):
-    """What a build (or an apply) wrote, with the toolchain's own report."""
+    """What a build (or an apply) wrote, with the toolchain's own report.
 
-    pack: str
+    `pack` is None for a server-only edit (a moved door has no client half).
+    """
+
+    pack: str | None = None
     entries: list[dict[str, Any]] = []
     files: list[str] = []
     report: dict[str, Any] = {}
     install: dict[str, Any] | None = None
+    patches: int = 0

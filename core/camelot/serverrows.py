@@ -41,16 +41,21 @@ from urllib.parse import unquote, urlsplit
 
 __all__ = [
     "COLUMNS",
+    "KEY_COLUMNS",
     "SCHEMA",
     "TABLE_NAMES",
     "ServerRowsError",
     "Snapshot",
+    "apply_patches",
     "connect",
+    "delete_rows",
     "export_snapshot",
+    "insert_rows",
     "mysql_errors",
     "parse_dsn",
     "parse_server_config",
     "read_rows",
+    "read_rows_by_key",
     "read_rows_in_rect",
     "rows_in_rect",
 ]
@@ -235,6 +240,160 @@ def read_rows_in_rect(connect_: Callable[[], Any], *, region: int, zone_id: int,
     finally:
         database.close()
     return {table: out.get(table, []) for table in TABLE_NAMES}
+
+
+# --- the write half: patches to rows that already exist -----------------------
+
+#: The key column of each world table the editor may *patch*. These are the
+#: server's own primary keys (GUIDs): nothing is allocated here — a patch
+#: names a row that exists, which is why a patch is server-specific by nature
+#: (the loader's allocated blocks remain the channel for *new* rows).
+KEY_COLUMNS = {"mob": "Mob_ID", "worldobject": "WorldObject_ID", "door": "Door_ID"}
+
+
+def _check_patch(table: str, values: dict) -> dict[str, str]:
+    """A patch writes the table's own columns — never SQL, never its key."""
+    if table not in KEY_COLUMNS:
+        raise ServerRowsError(
+            f"{table!r} is not a patchable table ({', '.join(sorted(KEY_COLUMNS))})")
+    if not values:
+        raise ServerRowsError(f"{table}: a patch needs at least one value")
+    cleaned: dict[str, str] = {}
+    for column, value in values.items():
+        if column not in COLUMNS[table]:
+            raise ServerRowsError(f"{table}: no column named {column!r}")
+        if column == KEY_COLUMNS[table]:
+            raise ServerRowsError(f"{table}: a patch may not touch its key column")
+        cleaned[column] = str(value)
+    return cleaned
+
+
+def read_rows_by_key(connect_: Callable[[], Any], table: str,
+                     keys) -> dict[str, dict]:
+    """The rows those keys name, by key — the originals a patch records."""
+    if table not in KEY_COLUMNS:
+        raise ServerRowsError(f"{table!r} is not a patchable table")
+    wanted = [str(key) for key in keys]
+    if not wanted:
+        return {}
+    holes = ", ".join(["%s"] * len(wanted))
+    database = connect_()
+    try:
+        with database.cursor() as cursor:
+            cursor.execute(
+                f"{_select(table)} WHERE {KEY_COLUMNS[table]} IN ({holes})", wanted)
+            return {str(row[KEY_COLUMNS[table]]): row for row in cursor.fetchall()}
+    finally:
+        database.close()
+
+
+def apply_patches(connect_: Callable[[], Any], patches) -> int:
+    """Write patches to existing rows, in one transaction; returns the count.
+
+    Every patch is validated first (known table, known columns, never the
+    key), the row is looked up before it is touched — a patch that matches
+    nothing is an error, not a silent no-op — and the whole set commits
+    together or not at all.
+    """
+    prepared: list[tuple[str, str, dict[str, str]]] = []
+    for patch in patches:
+        table = patch.get("table", "")
+        cleaned = _check_patch(table, patch.get("values") or {})
+        if not patch.get("key"):
+            raise ServerRowsError(f"{table}: a patch needs the row's key")
+        prepared.append((table, str(patch["key"]), cleaned))
+    if not prepared:
+        return 0
+
+    database = connect_()
+    try:
+        for table, key, values in prepared:
+            with database.cursor() as cursor:
+                cursor.execute(
+                    f"{_select(table)} WHERE {KEY_COLUMNS[table]} = %s", (key,))
+                if cursor.fetchone() is None:
+                    raise ServerRowsError(
+                        f"{table}: no row with {KEY_COLUMNS[table]} {key!r}")
+        database.begin()
+        try:
+            with database.cursor() as cursor:
+                for table, key, values in prepared:
+                    columns = ", ".join(f"`{column}` = %s" for column in values)
+                    cursor.execute(
+                        f"UPDATE `{table}` SET {columns} "
+                        f"WHERE {KEY_COLUMNS[table]} = %s",
+                        (*values.values(), key))
+            database.commit()
+        except Exception:
+            database.rollback()
+            raise
+    finally:
+        database.close()
+    return len(prepared)
+
+
+def delete_rows(connect_: Callable[[], Any], table: str, keys) -> int:
+    """Remove whole rows, in one transaction; each key must exist first."""
+    if table not in KEY_COLUMNS:
+        raise ServerRowsError(f"{table!r} is not a patchable table")
+    wanted = [str(key) for key in keys]
+    if not wanted:
+        return 0
+    database = connect_()
+    try:
+        for key in wanted:
+            with database.cursor() as cursor:
+                cursor.execute(
+                    f"{_select(table)} WHERE {KEY_COLUMNS[table]} = %s", (key,))
+                if cursor.fetchone() is None:
+                    raise ServerRowsError(
+                        f"{table}: no row with {KEY_COLUMNS[table]} {key!r}")
+        database.begin()
+        try:
+            with database.cursor() as cursor:
+                for key in wanted:
+                    cursor.execute(
+                        f"DELETE FROM `{table}` WHERE {KEY_COLUMNS[table]} = %s", (key,))
+            database.commit()
+        except Exception:
+            database.rollback()
+            raise
+    finally:
+        database.close()
+    return len(wanted)
+
+
+def insert_rows(connect_: Callable[[], Any], table: str, rows) -> int:
+    """Re-insert whole rows — a removal's reversal, from the recorded
+    originals: every column of the table's own list, the key included."""
+    if table not in KEY_COLUMNS:
+        raise ServerRowsError(f"{table!r} is not a patchable table")
+    prepared = []
+    for row in rows:
+        values = {column: str(row.get(column, "")) for column in COLUMNS[table]}
+        if not values[KEY_COLUMNS[table]]:
+            raise ServerRowsError(f"{table}: a re-inserted row needs its key")
+        prepared.append(values)
+    if not prepared:
+        return 0
+    columns = ", ".join(f"`{column}`" for column in COLUMNS[table])
+    holes = ", ".join(["%s"] * len(COLUMNS[table]))
+    database = connect_()
+    try:
+        database.begin()
+        try:
+            with database.cursor() as cursor:
+                for values in prepared:
+                    cursor.execute(
+                        f"INSERT INTO `{table}` ({columns}) VALUES ({holes})",
+                        tuple(values[column] for column in COLUMNS[table]))
+            database.commit()
+        except Exception:
+            database.rollback()
+            raise
+    finally:
+        database.close()
+    return len(prepared)
 
 
 # --- the snapshot -------------------------------------------------------------

@@ -24,28 +24,62 @@ edit made against a changed client is refused with both values named, never
 applied blind. Undo drops the last op: ops are additive on the base table,
 so dropping is exact. `remove` exists only in the journal — the build
 assembles whole files, so no row op ever reaches an installer.
+
+**The zone's server rows (B2, W-4's first half).** A fixture move may carry
+`rows`: the server rows that move with it (the keep and its doors — the case
+W-1 measured; the browser proposes the pairs from the fixture's own mesh box,
+this side validates them against the live rows and computes the new values).
+Rows are also editable on their own (`row-move`, `row-remove`), whose
+coordinates are zone-local too — the row a viewer holds is (B1 measured that
+split), and only the write turns it into the server's world coordinates.
+Those edits are **patches to rows that already exist**, which is the one
+thing the Phase 5 loader does not do (it allocates ids for *new* rows): the
+daemon writes them behind the explicit `--db-write` flag, records the
+originals it read, and `apply`/`revert` are symmetric — a patch's reversal is
+its original values, a removal's is the row re-inserted whole. A patch is
+server-specific by nature (it names a row by the server's own key), and it is
+never silent: without `--db-write` every row op is refused.
 """
 from __future__ import annotations
 
 import json
+import math
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from .. import gamedata, modbuild
+from .. import gamedata, modbuild, serverrows
 from ..zones import Fixture, Zone, ZoneError, fixtures_from_table
 from .config import ServeConfig
-from .models import EditorBuild, EditorEdit, EditorPack, EditorState, EditorZone, WorldFixture
+from .models import (
+    EditorBuild,
+    EditorEdit,
+    EditorPack,
+    EditorRowOp,
+    EditorState,
+    EditorZone,
+    WorldFixture,
+)
 
 __all__ = ["SCHEMA", "Editor", "EditorError", "build_editor_router"]
 
 #: The journal's schema tag: an editor that does not know it refuses the file.
 SCHEMA = "camelot.editor/1"
 
-#: The op kinds the journal holds.
-KINDS = ("move", "rotate", "scale", "add", "remove")
+#: The op kinds the journal holds. The last two edit the zone's *server* rows.
+KINDS = ("move", "rotate", "scale", "add", "remove", "row-move", "row-remove")
+
+#: Server-row edits need a live connection: without one there is nothing to
+#: read the originals from, and a patch that cannot be reversed is not made.
+ROW_KINDS = ("row-move", "row-remove")
+
+#: The server's heading is a 12-bit compass (measured); `fixtures.csv`'s `A`
+#: is degrees. Both turn clockwise on a north-up map, so a rotation delta
+#: carries over with the unit change alone.
+HEADING_UNITS = 4096.0
 
 #: The columns the editor writes, in the client's own header spelling.
 COLUMN_NAMES = ("ID", "NIF #", "Textual Name", "X", "Y", "Z", "A", "Scale",
@@ -64,12 +98,63 @@ def _number_text(value: Any) -> str:
     return f"{number:.3f}".rstrip("0").rstrip(".")
 
 
+def _frame(angle: float) -> tuple[tuple[float, float], tuple[float, float]]:
+    """A fixture's own frame as map vectors: its local `+x` and `+y`.
+
+    Measured conventions: `A` is degrees with 0 = the mesh's front to the
+    north, 90 = east (the keep's gatehouse is north at `A = 0`), and the map
+    is `(x east, y south)`. So `+y` maps to `(sin A, -cos A)`.
+    """
+    radians = math.radians(angle)
+    return ((math.cos(radians), math.sin(radians)),
+            (math.sin(radians), -math.cos(radians)))
+
+
+def _move_with_fixture(before: dict, after: dict, rows, origin) -> list[dict]:
+    """The row patches a fixture move implies (B2: the keep and its doors).
+
+    Each row's position is re-projected through the fixture's frame, so a
+    rotation carries the rows around the fixture exactly; a row keeps its
+    height *relative to the fixture* (a gate on a wall stays on the wall);
+    scaling a fixture does not scale its server rows, and that is written
+    down rather than guessed at. `origin` is the zone's world rectangle:
+    the fixture is in zone-local coordinates, the rows in world ones.
+    """
+    left, top = origin
+    old_x, old_y = _frame(before["angle"])
+    new_x, new_y = _frame(after["angle"])
+    delta_angle = (float(after["angle"]) - float(before["angle"])) % 360
+    patches = []
+    for table, key, row in rows:
+        dx = (float(row["X"]) - left) - before["x"]
+        dy = (float(row["Y"]) - top) - before["y"]
+        local_x = dx * old_x[0] + dy * old_x[1]
+        local_y = dx * old_y[0] + dy * old_y[1]
+        new_local_x = after["x"] + local_x * new_x[0] + local_y * new_y[0]
+        new_local_y = after["y"] + local_x * new_x[1] + local_y * new_y[1]
+        values: dict[str, str] = {
+            "X": _number_text(round(left + new_local_x)),
+            "Y": _number_text(round(top + new_local_y)),
+            "Z": _number_text(round(float(row["Z"]) - before["z"] + after["z"])),
+        }
+        if "Heading" in serverrows.COLUMNS[table]:
+            values["Heading"] = str(
+                round((float(row["Heading"]) + delta_angle * HEADING_UNITS / 360.0)
+                      % HEADING_UNITS))
+        patches.append({"table": table, "key": key, "values": values,
+                        "originals": {name: str(row.get(name, "")) for name in values}})
+    return patches
+
+
 class Editor:
     """The journal, the working tables, and the publish path of one mod."""
 
-    def __init__(self, config: ServeConfig):
+    def __init__(self, config: ServeConfig, *, connect_=None):
         self.config = config
         self._journal: dict[str, Any] | None = None
+        self._connection: dict[str, Any] | None = None
+        #: injected by the tests; production opens MySQL through `serverrows`.
+        self._connect = connect_ or serverrows.connect
 
     @property
     def dir(self) -> Path | None:
@@ -101,9 +186,11 @@ class Editor:
                     raise EditorError(
                         f"{path}: this journal is {document.get('schema')!r}; "
                         f"this build understands {SCHEMA}")
+                document.setdefault("patches", {})
                 self._journal = document
             else:
-                self._journal = {"schema": SCHEMA, "mod": self._mod(), "zones": {}}
+                self._journal = {"schema": SCHEMA, "mod": self._mod(),
+                                 "zones": {}, "patches": {}}
         return self._journal
 
     def _save(self) -> None:
@@ -116,6 +203,35 @@ class Editor:
             return []
         return list(self._load()["zones"].get(str(zone_id), []))
 
+    def patches(self, zone_id: int) -> list[dict]:
+        """The zone's server-row patches (moves and removals), journal order."""
+        if not self.available:
+            return []
+        return list(self._load()["patches"].get(str(zone_id), []))
+
+    def patch_rows(self, zone_id: int, rows: dict[str, list[dict]]) -> tuple[dict, list[str]]:
+        """The server rows with this zone's journal patches applied — what the
+        viewer must show, so an edited door appears where it was recorded."""
+        notes: list[str] = []
+        for patch in self.patches(zone_id):
+            table = patch["table"]
+            rows_for = rows.get(table)
+            if not rows_for:
+                continue
+            key_column = serverrows.KEY_COLUMNS[table]
+            for index, row in enumerate(rows_for):
+                if str(row.get(key_column)) != str(patch["key"]):
+                    continue
+                if patch.get("deleted"):
+                    rows_for.pop(index)
+                    notes.append(f"{table}: removed by the journal")
+                else:
+                    updated = dict(row)
+                    updated.update(patch["values"])
+                    rows_for[index] = updated
+                break
+        return rows, notes
+
     def state(self) -> EditorState:
         if not self.available:
             return EditorState(available=False)
@@ -123,13 +239,17 @@ class Editor:
         zones = [EditorZone(id=int(key), ops=list(ops))
                  for key, ops in sorted(journal["zones"].items(), key=lambda item: int(item[0]))
                  if ops]
+        patches = [EditorRowOp(zone=int(key), patches=list(entries))
+                   for key, entries in sorted(journal["patches"].items(),
+                                              key=lambda item: int(item[0]))
+                   if entries]
         pack = None
         path = self.dir / f"{journal['mod'].get('id', 'world-edits')}.tar.gz"
         if path.is_file():
             stat = path.stat()
             pack = EditorPack(pack=str(path), modified=stat.st_mtime, size=stat.st_size)
         return EditorState(available=True, dir=str(self.dir), mod=journal["mod"],
-                           zones=zones, pack=pack)
+                           zones=zones, rows=patches, pack=pack)
 
     # -- the tables ------------------------------------------------------------
 
@@ -317,29 +437,176 @@ class Editor:
 
     # -- writing ---------------------------------------------------------------
 
-    def record(self, zone: Zone, op: dict) -> tuple[dict, Fixture | None]:
-        """Validate one op, journal it, and hand back the row it leaves."""
+    def record(self, zone: Zone, op: dict) -> tuple[dict, Fixture | None, list[dict]]:
+        """Validate one op, journal it, and hand back what it leaves.
+
+        Returns `(resolved, fixture, patches)`: the client row op (empty for a
+        server-row op), the fixture it leaves (None for a removal), and the
+        server-row patches the op implies — the rows a fixture move carries
+        (B2), or the row op itself (W-4's first half).
+        """
         if not self.available:
             raise EditorError("the daemon was started without --edits <dir>")
         journal = self._load()
-        ops = journal["zones"].setdefault(str(zone.info.zone_id), [])
-        resolved = self._resolve(zone, self.working_table(zone), op)
+        zone_key = str(zone.info.zone_id)
+        if op.get("kind") in ROW_KINDS:
+            patches = self._resolve_rows(zone, op)
+            journal["patches"].setdefault(zone_key, []).extend(patches)
+            self._save()
+            return {}, None, patches
+
+        current = self.working_table(zone)
+        resolved = self._resolve(zone, current, op)
         try:
-            table = gamedata.apply_row_ops(self.working_table(zone), [resolved])
+            after = gamedata.apply_row_ops(current, [resolved])
         except gamedata.TableError as error:
             raise EditorError(str(error)) from error
-        ops.append(resolved)
+        patches = self._pair_patches(zone, current, after, resolved, op.get("rows") or [])
+        journal["zones"].setdefault(zone_key, []).append(resolved)
+        if patches:
+            journal["patches"].setdefault(zone_key, []).extend(patches)
         self._save()
         row_id = resolved["id"]
-        fixture = next((row for row in fixtures_from_table(zone.name, table)
+        fixture = next((row for row in fixtures_from_table(zone.name, after)
                         if row.id == row_id), None)
-        return resolved, fixture
+        return resolved, fixture, patches
+
+    def _placement(self, zone: Zone, table: gamedata.Table, row_id: int) -> dict:
+        """A fixture's placement as the *client* renders it (`Ground = 1`
+        drops the row on the terrain — W-3 — so the frame uses that z)."""
+        index = table.row_index(row_id)
+        if index is None:
+            raise EditorError(f"zone {zone.info.zone_id}: no fixture with id {row_id}")
+        row = table.rows[index]
+        columns = self._columns(table)
+
+        def cell(name: str, default: str = "") -> str:
+            position = columns.get(name)
+            if position is None or len(row) <= position:
+                return default
+            return row[position]
+
+        x = float(cell("X", "0") or 0)
+        y = float(cell("Y", "0") or 0)
+        ground = cell("Ground").strip() not in ("", "0")
+        return {"x": x, "y": y,
+                "z": zone.height_at(x, y) if ground else float(cell("Z", "0") or 0),
+                "angle": float(cell("A", "0") or 0)}
+
+    def _pair_patches(self, zone: Zone, before_table: gamedata.Table,
+                      after_table: gamedata.Table, resolved: dict,
+                      keys) -> list[dict]:
+        """The server rows a fixture op carries (B2), validated live.
+
+        The browser proposes the pairs (it holds the fixture's own mesh box);
+        this side checks every key against the database it is about to write.
+        """
+        if not keys:
+            return []
+        grouped: dict[str, list[str]] = {}
+        for entry in keys:
+            table = str(entry.get("table", ""))
+            key = str(entry.get("key", ""))
+            if table not in serverrows.KEY_COLUMNS or not key:
+                raise EditorError(
+                    f"a paired row needs a patchable table and a key: {entry!r}")
+            grouped.setdefault(table, []).append(key)
+        rows: list[tuple[str, str, dict]] = []
+        for table, wanted in grouped.items():
+            found = serverrows.read_rows_by_key(self._read_connect(), table, wanted)
+            for key in wanted:
+                if key not in found:
+                    raise EditorError(
+                        f"{table}: no row with key {key!r} in the server's database")
+                rows.append((table, key, found[key]))
+        before = self._placement(zone, before_table, resolved["id"])
+        after = self._placement(zone, after_table, resolved["id"])
+        rect = zone.info.world_rect
+        patches = _move_with_fixture(before, after, self._journal_rows(zone, rows),
+                                     (rect[0], rect[1]))
+        # The values come from the rows as the journal *already* leaves them (a
+        # keep moved twice before an apply stacks, exactly as the fixture's own
+        # ops do), but a patch's `originals` are what the database holds: that
+        # is what a revert has to put back, whatever the journal did between.
+        stored = {(table, key): row for table, key, row in rows}
+        for patch in patches:
+            held = stored[(patch["table"], patch["key"])]
+            patch["originals"] = {name: str(held.get(name, ""))
+                                  for name in patch["values"]}
+        return patches
+
+    def _journal_rows(self, zone: Zone, rows: list[tuple[str, str, dict]]):
+        """The rows as the zone's journal already leaves them.
+
+        A patch's values are absolute, so a second edit must start from the row
+        the *viewer* shows — the database plus the journal's patches — never
+        from the database alone, or the first edit's delta is dropped when both
+        land at once.
+        """
+        current = {(table, key): dict(row) for table, key, row in rows}
+        for patch in self.patches(zone.info.zone_id):
+            found = current.get((patch["table"], str(patch["key"])))
+            if found is None or patch.get("deleted"):
+                continue
+            found.update(patch["values"])
+        return [(table, key, current[(table, key)]) for table, key, _row in rows]
+
+    def _resolve_rows(self, zone: Zone, op: dict) -> list[dict]:
+        """One row op (move/remove of a server row) -> a recorded patch."""
+        table = str(op.get("table", ""))
+        key = str(op.get("key", ""))
+        if table not in serverrows.KEY_COLUMNS or not key:
+            raise EditorError("a row op needs a patchable table and the row's key")
+        found = serverrows.read_rows_by_key(self._read_connect(), table, [key])
+        if key not in found:
+            raise EditorError(f"{table}: no row with key {key!r} in the server's database")
+        stored = found[key]
+        current = self._journal_rows(zone, [(table, key, stored)])[0][2]
+        columns = serverrows.COLUMNS[table]
+        if op["kind"] == "row-remove":
+            return [{"table": table, "key": key, "values": {}, "deleted": True,
+                     "originals": {name: str(stored.get(name, "")) for name in columns}}]
+        try:
+            x, y = float(op["x"]), float(op["y"])
+        except (KeyError, TypeError, ValueError):
+            raise EditorError("row-move needs x and y") from None
+        # The op is zone-local, the row it moves is not: the terrain is sampled
+        # where the viewer clicked, the row is written in world coordinates.
+        left, top = zone.info.world_rect[0], zone.info.world_rect[1]
+        # A moved row keeps its height *above the terrain*: a spawn placed on
+        # the ground stays on it, a gate keeps sitting on its wall.
+        offset = float(current["Z"]) - zone.height_at(float(current["X"]) - left,
+                                                      float(current["Y"]) - top)
+        values: dict[str, str] = {
+            "X": _number_text(round(left + x)), "Y": _number_text(round(top + y)),
+            "Z": _number_text(round(zone.height_at(x, y) + offset)),
+        }
+        if "Heading" in columns and op.get("heading") is not None:
+            values["Heading"] = str(int(op["heading"]))
+        return [{"table": table, "key": key, "values": values,
+                 "originals": {name: str(stored.get(name, "")) for name in values}}]
 
     def undo(self, zone_id: int) -> dict | None:
-        """Drop the zone's last op — exact, because ops are additive."""
+        """Drop the zone's last op — exact, because ops are additive.
+
+        Server-row patches undo first (they are the more recent kind); a
+        patch that was already *written* to the database is refused: undo
+        must never leave a live change with no journal entry behind it.
+        """
         if not self.available:
             raise EditorError("the daemon was started without --edits <dir>")
         journal = self._load()
+        patches = journal["patches"].get(str(zone_id)) or []
+        if patches:
+            if patches[-1].get("applied"):
+                raise EditorError(
+                    "the last edit is already written to the server's database: "
+                    "use revert (it puts the recorded originals back)")
+            dropped = patches.pop()
+            if not patches:
+                journal["patches"].pop(str(zone_id))
+            self._save()
+            return dropped
         ops = journal["zones"].get(str(zone_id)) or []
         if not ops:
             return None
@@ -349,23 +616,83 @@ class Editor:
         self._save()
         return dropped
 
-    def revert(self) -> None:
-        """Undo everything: the journal empties, the base tables stand again.
+    # -- the server's database (patches) ---------------------------------------
 
-        The build outputs go with it — a pack left behind by a reverted
+    def _connect_for(self) -> Callable[[], Any]:
+        if self.config.db_config is None:
+            raise EditorError(
+                "editing the server's own rows needs its database: "
+                "start the daemon with --db-config <serverconfig.xml>")
+        if self._connection is None:
+            self._connection = serverrows.parse_server_config(str(self.config.db_config))
+        return lambda: self._connect(self._connection)
+
+    def _read_connect(self) -> Callable[[], Any]:
+        """A connection maker for the reads (originals, validation)."""
+        return self._connect_for()
+
+    def _write_connect(self) -> Callable[[], Any]:
+        """A connection maker for the writes — behind the explicit flag."""
+        if not self.config.db_write:
+            raise EditorError(
+                "writing the server's own rows needs --db-write: patches and "
+                "removals are recorded and reversible, but never silent")
+        return self._connect_for()
+
+    def _write_patches(self, patches: list[dict]) -> int:
+        """Apply the journal's patches to the database, in one pass."""
+        connect_ = self._write_connect()
+        updates = [patch for patch in patches if not patch.get("deleted")]
+        removals = [patch for patch in patches if patch.get("deleted")]
+        written = 0
+        if updates:
+            written += serverrows.apply_patches(connect_, updates)
+        for patch in removals:
+            written += serverrows.delete_rows(connect_, patch["table"], [patch["key"]])
+        for patch in patches:
+            patch["applied"] = True
+        self._save()
+        return written
+
+    def _restore_patches(self, patches: list[dict]) -> None:
+        """Put recorded originals back: a patch's values, a removal's row."""
+        connect_ = self._write_connect()
+        updates = [{"table": patch["table"], "key": patch["key"],
+                    "values": patch["originals"]}
+                   for patch in patches if not patch.get("deleted")]
+        if updates:
+            serverrows.apply_patches(connect_, updates)
+        by_table: dict[str, list[dict]] = {}
+        for patch in patches:
+            if patch.get("deleted"):
+                by_table.setdefault(patch["table"], []).append(patch["originals"])
+        for table, rows in by_table.items():
+            serverrows.insert_rows(connect_, table, rows)
+
+    def revert(self) -> None:
+        """Undo everything: the journal empties, the originals stand again.
+
+        Server patches that were written are put back first (their recorded
+        originals; a removal re-inserts the whole row), then the client ops
+        go and the build outputs with them — a pack left behind by a reverted
         journal would claim an edit that no longer exists. The *installed*
-        half in the client is untouched: uninstall reads the client's own
-        stored state, never this directory.
+        client half is untouched: uninstall reads the client's own state.
         """
         if not self.available:
             raise EditorError("the daemon was started without --edits <dir>")
         journal = self._load()
+        applied = [patch for entries in journal["patches"].values() for patch in entries
+                   if patch.get("applied")]
+        if applied:
+            self._restore_patches(applied)
         journal["zones"] = {}
+        journal["patches"] = {}
         self._save()
         self._clear_build(str(journal["mod"].get("id", "world-edits")))
 
     def _clear_build(self, mod_id: str) -> None:
-        paths = [self.dir / f"{mod_id}.tar.gz", self.dir / "client.patch.json"]
+        paths = [self.dir / f"{mod_id}.tar.gz", self.dir / "client.patch.json",
+                 self.dir / "server.patch.json"]
         paths += sorted(self.dir.glob("fixtures-zone*.csv"))
         for path in paths:
             try:
@@ -401,30 +728,57 @@ class Editor:
                     "file": name,
                 })
                 files.append(name)
-            if not entries:
+            has_patches = any(journal["patches"].values())
+            if not entries and not has_patches:
                 raise EditorError("nothing to publish: the journal holds no edit")
             (self.dir / "mod.json").write_text(
                 json.dumps(journal["mod"], indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8")
             (self.dir / "client.patch.json").write_text(
                 json.dumps({"archive": entries}, indent=2) + "\n", encoding="utf-8")
-            pack = self.dir / f"{journal['mod'].get('id', 'world-edits')}.tar.gz"
-            report = modbuild.build_mod_pack(
-                str(self.dir), str(world.config.root), str(pack))
+            (self.dir / "server.patch.json").write_text(
+                json.dumps({"patches": journal["patches"]}, indent=1,
+                           ensure_ascii=False) + "\n", encoding="utf-8")
+            if not entries:
+                # A server-only edit (a moved door has no client half): the
+                # record is `server.patch.json`, applied by this daemon.
+                report = {"client_items": 0}
+                pack = None
+            else:
+                pack = self.dir / f"{journal['mod'].get('id', 'world-edits')}.tar.gz"
+                report = modbuild.build_mod_pack(
+                    str(self.dir), str(world.config.root), str(pack))
         except (ValueError, OSError) as error:
             raise EditorError(f"build refused: {error}") from error
-        return {"pack": str(pack), "entries": entries, "files": files, "report": report}
+        return {"pack": str(pack) if pack is not None else None, "entries": entries,
+                "files": files, "report": report}
 
     def apply(self, world) -> dict[str, Any]:
-        """Build, then install the client half through the toolchain."""
-        from .. import clientinstall
+        """Publish: the client half through the installer, the server rows
+        through the database — both recorded, both reversible."""
+        if not self.available:
+            raise EditorError("the daemon was started without --edits <dir>")
+        journal = self._load()
+        pending = [patch for entries in journal["patches"].values()
+                   for patch in entries if not patch.get("applied")]
+        client_ops = any(journal["zones"].values())
+        if not pending and not client_ops:
+            raise EditorError("nothing to apply: the journal is empty")
+        if pending and not self.config.db_write:
+            # refused *before* any client write, so nothing lands half-applied
+            self._write_connect()
+        built = self.build(world) if client_ops else {
+            "pack": None, "entries": [], "files": [], "report": {}}
+        install = None
+        if client_ops:
+            from .. import clientinstall
 
-        built = self.build(world)
-        try:
-            install = clientinstall.install_pack(str(world.config.root), built["pack"])
-        except Exception as error:  # InstallError, and anything the installer refuses
-            raise EditorError(f"install refused: {error}") from error
-        return {**built, "install": install}
+            try:
+                install = clientinstall.install_pack(str(world.config.root), built["pack"])
+            except Exception as error:  # InstallError, and anything the installer refuses
+                raise EditorError(f"install refused: {error}") from error
+        written = self._write_patches(pending) if pending else 0
+        return {**built, "install": install, "patches": written}
 
 
 # --- routes -------------------------------------------------------------------
@@ -461,13 +815,13 @@ def build_editor_router(world) -> APIRouter:
         try:
             active = ensure()
             zone = world.zone(zone_id)
-            resolved, fixture = active.record(zone, op)
+            resolved, fixture, patches = active.record(zone, op)
         except EditorError as error:
             raise http(error) from error
         except ZoneError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
         row = WorldFixture(**vars(fixture)) if fixture is not None else None
-        return EditorEdit(op=resolved, fixture=row)
+        return EditorEdit(op=resolved, fixture=row, patches=patches)
 
     @router.delete("/world/zone/{zone_id}/edits", response_model=EditorEdit)
     def world_edit_undo(zone_id: int) -> EditorEdit:

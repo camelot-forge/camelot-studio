@@ -163,10 +163,13 @@ class FakeCursor:
 
     def execute(self, sql, params=None):
         self.connection.statements.append((sql, params))
-        self.result = self.connection.answers.pop(0)
+        self.result = self.connection.answers.pop(0) if self.connection.answers else []
 
     def fetchall(self):
         return self.result
+
+    def fetchone(self):
+        return self.result[0] if self.result else None
 
 
 class FakeConnection:
@@ -175,10 +178,20 @@ class FakeConnection:
     def __init__(self, answers):
         self.answers = list(answers)
         self.statements = []
+        self.transactions = []
         self.closed = False
 
     def cursor(self):
         return FakeCursor(self)
+
+    def begin(self):
+        self.transactions.append("begin")
+
+    def commit(self):
+        self.transactions.append("commit")
+
+    def rollback(self):
+        self.transactions.append("rollback")
 
     def close(self):
         self.closed = True
@@ -241,6 +254,67 @@ def test_the_columns_and_tables_are_the_measured_schema():
     assert "IsPostern" in serverrows.COLUMNS["door"]
     assert "WaitTime" in serverrows.COLUMNS["pathpoints"]
     assert all(column in serverrows.COLUMNS["path"] for column in ("PathID", "PathType"))
+
+
+# --- the write half: patches --------------------------------------------------
+
+def test_a_patch_is_validated_before_anything_is_touched():
+    """A patch writes the table's own columns through the driver's parameters —
+    never SQL, never the key column — and that is checked before connecting."""
+
+    def never():
+        raise AssertionError("connected before validating")
+
+    with pytest.raises(ServerRowsError, match="not a patchable table"):
+        serverrows.apply_patches(never, [{"table": "path", "key": "a",
+                                          "values": {"PathType": "1"}}])
+    with pytest.raises(ServerRowsError, match="no column named"):
+        serverrows.apply_patches(never, [{"table": "door", "key": "a",
+                                          "values": {"Nope": "1"}}])
+    with pytest.raises(ServerRowsError, match="key column"):
+        serverrows.apply_patches(never, [{"table": "door", "key": "a",
+                                          "values": {"Door_ID": "b"}}])
+    with pytest.raises(ServerRowsError, match="row's key"):
+        serverrows.apply_patches(never, [{"table": "door", "key": "",
+                                          "values": {"X": "1"}}])
+
+
+def test_a_patch_updates_the_row_it_names_in_one_transaction():
+    connection = FakeConnection([
+        [ROWS["door"][0]],  # the existence check
+        [],                 # the UPDATE
+    ])
+    count = serverrows.apply_patches(lambda: connection, [
+        {"table": "door", "key": "d-in",
+         "values": {"X": "576000", "Y": "533100", "Heading": "1024"}},
+    ])
+    assert count == 1
+    sql, params = connection.statements[0]
+    assert sql.startswith("SELECT") and "WHERE Door_ID = %s" in sql
+    assert params == ("d-in",)
+    sql, params = connection.statements[1]
+    assert sql.startswith("UPDATE `door` SET `X` = %s, `Y` = %s, `Heading` = %s")
+    assert "WHERE Door_ID = %s" in sql
+    assert params == ("576000", "533100", "1024", "d-in")
+    assert connection.transactions == ["begin", "commit"]
+    assert connection.closed
+
+
+def test_a_patch_on_a_missing_row_is_refused_before_the_transaction():
+    connection = FakeConnection([[]])
+    with pytest.raises(ServerRowsError, match="no row with Door_ID 'ghost'"):
+        serverrows.apply_patches(lambda: connection, [
+            {"table": "door", "key": "ghost", "values": {"X": "1"}}])
+    assert connection.transactions == []
+    assert connection.closed
+
+
+def test_the_read_by_key_gives_the_originals():
+    connection = FakeConnection([[ROWS["mob"][0]]])
+    originals = serverrows.read_rows_by_key(lambda: connection, "mob", ["m-in", "m-out"])
+    assert list(originals) == ["m-in"]
+    assert originals["m-in"]["Mob_ID"] == "m-in"
+    assert "IN (%s, %s)" in connection.statements[0][0]
 
 
 # --- the connection strings ---------------------------------------------------

@@ -350,6 +350,7 @@ def cmd_serve(args) -> int:
         static_dir=static_dir,
         server_rows=args.server_rows,
         db_config=args.db_config,
+        db_write=args.db_write,
         edits=args.edits,
     )
     app = create_app(cfg)
@@ -941,6 +942,9 @@ def main(argv=None) -> int:
                    help="snapshot exported from the server DB (camelot server export)")
     p.add_argument("--db-config",
                    help="the server's own serverconfig.xml: read the live MySQL")
+    p.add_argument("--db-write", action="store_true",
+                   help="let the editor write the server's own rows (patches "
+                        "and removals, recorded and reversible) — never silent")
     p.add_argument("--edits",
                    help="authoring directory of an editing session (6.3): the "
                         "journal, the built mod and its pack live there")

@@ -382,6 +382,11 @@ def spawns_payload(server_rows: ServerRows, world: World, zone_id: int) -> World
     zone = world.zone(zone_id)
     left, top, _width, _height = zone.info.world_rect
     rows, warnings = server_rows.for_zone(zone)
+    if world.editor is not None:
+        # The journal's patches are part of what this zone *is* now: an edited
+        # door must appear where it was recorded, before it is applied.
+        rows, notes = world.editor.patch_rows(zone.info.zone_id, rows)
+        warnings.extend(notes)
 
     def local(value: float, origin: float) -> float:
         return float(value) - float(origin)

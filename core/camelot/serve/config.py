@@ -48,6 +48,10 @@ class ServeConfig:
     #: and the client's world still renders.
     server_rows: Path | None = None
     db_config: Path | None = None
+    #: May the editor *write* the server's own rows (patches and removals)?
+    #: Never implied by `db_config` alone: reading is a convenience, writing
+    #: is a decision the operator states.
+    db_write: bool = False
     #: The editing session's authoring directory (6.3): the journal lives
     #: there, and `build` assembles the mod inside it. Without it the editor
     #: routes answer 503 and nothing can be written anywhere.

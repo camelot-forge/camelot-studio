@@ -292,6 +292,19 @@ export interface WorldSpawns {
 	warnings: string[];
 }
 
+/** One server row as the viewer tracks it: a position, an id, and whatever
+ * the daemon sent (the full row lives in the page's payload). */
+export interface SpawnRow {
+	id: string;
+	x: number;
+	y: number;
+	z: number;
+	name?: string;
+	heading?: number;
+}
+
+export type SpawnTable = 'mob' | 'worldobject' | 'door';
+
 // --- the editor (Phase 6.3) ---------------------------------------------------
 // D2: the daemon writes, the browser consumes. `op` is the request op; the
 // daemon resolves it into a `gamedata` row op and journals it.
@@ -307,25 +320,33 @@ export interface EditorPack {
 	size: number;
 }
 
+export interface EditorRowOp {
+	zone: number;
+	patches: Record<string, unknown>[];
+}
+
 export interface EditorState {
 	available: boolean;
 	dir: string | null;
 	mod: Record<string, unknown>;
 	zones: EditorZone[];
+	rows: EditorRowOp[];
 	pack: EditorPack | null;
 }
 
 export interface EditorEdit {
 	op: Record<string, unknown>;
 	fixture: WorldFixture | null;
+	patches: Record<string, unknown>[];
 }
 
 export interface EditorBuild {
-	pack: string;
+	pack: string | null;
 	entries: Record<string, unknown>[];
 	files: string[];
 	report: Record<string, unknown>;
 	install: Record<string, unknown> | null;
+	patches: number;
 }
 
 const BASE_KEY = 'camelot.apiBase';

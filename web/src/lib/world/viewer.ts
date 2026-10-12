@@ -9,6 +9,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import {
 	api,
+	type SpawnRow,
+	type SpawnTable,
 	type WorldFixture,
 	type WorldSpawns,
 	type WorldTextureLayer,
@@ -16,6 +18,7 @@ import {
 } from '$lib/api/client';
 import { loadFromGlb, textureFromDds, tintColor, textureSide } from '$lib/gltf/load';
 import { groundMaterial, groundSlots, type GroundSlot } from './ground';
+import { carryRow, type CarryFrame } from './carried';
 import {
 	PATCH_CELLS,
 	ZONE_SIZE,
@@ -90,18 +93,55 @@ export type EditKind = 'move' | 'rotate' | 'scale';
 
 /** Snap steps: the zone's own subtile (65536 / 256, measured from the
  * terrain grid), 15 degrees and 5 percent — editor conveniences, named. */
+//: the zone's own subtile (65536 / 256, measured from the
+//: terrain grid), 15 degrees and 5 percent — editor conveniences, named.
 const SNAP_POSITION = 256;
 const SNAP_ANGLE = (15 * Math.PI) / 180;
 const SNAP_SCALE = 0.05;
+
+/** The server's `Heading` is a 12-bit compass (measured): 4096 steps to the
+ * turn, clockwise from north — the same way `fixtures.csv`'s `A` runs. */
+const HEADING_UNITS = 4096;
 
 function readAngle(yaw: number): number {
 	const degrees = (-yaw * 360) / (Math.PI * 2);
 	return ((degrees % 360) + 360) % 360;
 }
 
+/** A row's 12-bit heading as the scene's yaw (the fixtures' own convention). */
+function headingYaw(heading: number): number {
+	return -(heading * Math.PI * 2) / HEADING_UNITS;
+}
+
 export interface Picked {
 	fixture: WorldFixture;
 	point: THREE.Vector3;
+}
+
+/** One server row the viewer can select (`mob`, `worldobject` or `door` — the
+ * three tables the daemon patches, keyed by the server's own ids). */
+export interface RowPick {
+	table: SpawnTable;
+	id: string;
+}
+
+/** A row proposed to travel with a fixture (B2): the daemon validates the key
+ * against the database before it writes anything. */
+export interface RowProposal {
+	table: SpawnTable;
+	key: string;
+	name: string;
+	distance: number;
+}
+
+/** One row cloud: the points drawn, the rows behind them (in buffer order —
+ * what a click raycasts against), and the layer the toggle governs. */
+interface RowCloud {
+	table: SpawnTable;
+	group: THREE.Group;
+	rows: SpawnRow[];
+	cloud: THREE.Points;
+	size: number;
 }
 
 export class WorldViewer {
@@ -129,15 +169,37 @@ export class WorldViewer {
 	private texturedPatches = 0;
 	private composedPatches = 0;
 	private picks: PickGroup[] = [];
+	private rowClouds: RowCloud[] = [];
+	private selectedRow: RowPick | null = null;
+	/** The height a row keeps *above the ground* while it is dragged: the same
+	 * rule the daemon applies to a `row-move` (a spawn on the ground stays on
+	 * it, a gate keeps sitting on its wall). */
+	private rowOffset = 0;
+	/** The rows a selected fixture carries: proposed against the payload as it
+	 * stood when it was selected, so the drag that follows uses the pairs the
+	 * user was shown (a moved fixture has left its doors behind). */
+	private carried: RowProposal[] = [];
+	private carriedFor: number | null = null;
+	/** A drag's own start: the fixture placement and the carried rows as they
+	 * stood, so every frame re-projects them from there — the daemon's own
+	 * arithmetic, never an accumulation of deltas. */
+	private dragFrom: CarryFrame | null = null;
+	private dragRows: Array<{
+		table: SpawnTable;
+		row: SpawnRow;
+		from: { x: number; y: number; z: number; heading?: number };
+	}> = [];
 	private marker = new THREE.Group();
 	private transform: TransformControls | null = null;
 	private proxy = new THREE.Object3D();
 	private grid: THREE.GridHelper | null = null;
 	private editMode: EditMode = 'off';
 	private dragging = false;
-	/** The page's hooks: a finished drag, and an add-mode ground click. */
+	/** The page's hooks: a finished drag, an add-mode ground click, and a
+	 * finished row drag (the page journals the `row-move`). */
 	onEdit: ((kind: EditKind, fixture: WorldFixture) => void) | null = null;
 	onPick: ((point: { x: number; y: number; z: number }) => void) | null = null;
+	onRowMove: ((pick: RowPick) => void) | null = null;
 	private selected: WorldFixture | null = null;
 	private token = 0;
 	private frame = 0;
@@ -183,9 +245,12 @@ export class WorldViewer {
 				this.transform.addEventListener('dragging-changed', (event) => {
 					this.dragging = Boolean((event as { value: unknown }).value);
 					this.controls.enabled = !this.dragging;
-					if (!this.dragging && this.selected) {
-						this.onEdit?.(this.editKind(), this.selected);
+					if (this.dragging) {
+						this.beginDrag();
+						return;
 					}
+					if (this.selectedRow) this.onRowMove?.(this.selectedRow);
+					else if (this.selected) this.onEdit?.(this.editKind(), this.selected);
 				});
 				this.transform.addEventListener('objectChange', () => this.dragApply());
 				this.scene.add(this.transform.getHelper());
@@ -207,7 +272,24 @@ export class WorldViewer {
 	}
 
 	private attachProxy(): void {
-		if (!this.transform || !this.selected || !this.terrain) return;
+		if (!this.transform || !this.terrain) return;
+		if (this.selectedRow) {
+			const row = this.rowAt(this.selectedRow);
+			// a server row is a position, not a size: the scale gizmo would lie
+			if (!row || this.editMode === 'scale') {
+				this.transform.detach();
+				return;
+			}
+			this.proxy.position.set(row.x, row.z, row.y);
+			this.proxy.rotation.set(0, row.heading === undefined ? 0 : headingYaw(row.heading), 0);
+			this.proxy.scale.setScalar(1);
+			this.transform.attach(this.proxy);
+			return;
+		}
+		if (!this.selected) {
+			this.transform.detach();
+			return;
+		}
 		const placement = fixturePlacement(this.terrain, this.selected);
 		this.proxy.position.set(...placement.position);
 		this.proxy.rotation.set(0, placement.yaw, 0);
@@ -219,7 +301,12 @@ export class WorldViewer {
 	 * A `Ground = 1` row follows the terrain — the client discards its Z
 	 * (W-3), so the gizmo must not pretend otherwise. */
 	private dragApply(): void {
-		if (!this.selected || !this.terrain) return;
+		if (!this.terrain) return;
+		if (this.selectedRow) {
+			this.dragRow(this.selectedRow);
+			return;
+		}
+		if (!this.selected) return;
 		const fixture = this.selected;
 		fixture.x = this.proxy.position.x;
 		fixture.y = this.proxy.position.z;
@@ -230,7 +317,108 @@ export class WorldViewer {
 			this.proxy.position.y = fixtureZ(this.terrain, fixture);
 			fixture.z = this.proxy.position.y;
 		}
+		this.previewRows(fixture);
 		this.updateFixture(fixture);
+	}
+
+	private beginDrag(): void {
+		this.dragFrom = null;
+		this.dragRows = [];
+		if (!this.selected || !this.terrain) return;
+		const fixture = this.selected;
+		this.dragFrom = {
+			x: fixture.x,
+			y: fixture.y,
+			z: fixturePlacement(this.terrain, fixture).position[1],
+			angle: fixture.angle
+		};
+		for (const proposal of this.carried) {
+			const row = this.rowAt({ table: proposal.table, id: proposal.key });
+			if (row) {
+				this.dragRows.push({
+					table: proposal.table,
+					row,
+					from: { x: row.x, y: row.y, z: row.z, heading: row.heading }
+				});
+			}
+		}
+	}
+
+	/** The rows a fixture move carries, re-projected live through the fixture's
+	 * frame — `carryRow` is the daemon's own arithmetic (`_move_with_fixture`),
+	 * so the drag shows what the server will hold: a row keeps its height
+	 * relative to the fixture, and a rotation turns it about the fixture,
+	 * heading included. */
+	private previewRows(fixture: WorldFixture): void {
+		const from = this.dragFrom;
+		if (!from || !this.dragRows.length || !this.terrain) return;
+		const after: CarryFrame = {
+			x: fixture.x,
+			y: fixture.y,
+			z: fixturePlacement(this.terrain, fixture).position[1],
+			angle: fixture.angle
+		};
+		for (const entry of this.dragRows) {
+			const moved = carryRow(from, after, entry.from);
+			entry.row.x = moved.x;
+			entry.row.y = moved.y;
+			entry.row.z = moved.z;
+			if (moved.heading !== undefined) entry.row.heading = moved.heading;
+			this.updateRow({ table: entry.table, id: entry.row.id });
+		}
+	}
+
+	/** A server row moved by the gizmo — or by a ground click. The row keeps
+	 * its height above the terrain (the daemon's own `row-move` rule), so what
+	 * the user drags is what the server will hold. */
+	private dragRow(pick: RowPick, point?: { x: number; y: number }): void {
+		const row = this.rowAt(pick);
+		if (!row || !this.terrain) return;
+		if (point) {
+			row.x = point.x;
+			row.y = point.y;
+		} else {
+			row.x = this.proxy.position.x;
+			row.y = this.proxy.position.z;
+			if (this.editMode === 'rotate' && row.heading !== undefined) {
+				row.heading =
+					Math.round((readAngle(this.proxy.rotation.y) * HEADING_UNITS) / 360) % HEADING_UNITS;
+			}
+		}
+		row.z = this.terrain.heightAt(row.x, row.y) + this.rowOffset;
+		this.proxy.position.set(row.x, row.z, row.y);
+		this.updateRow(pick);
+	}
+
+	/** Drop a row at a zone-local point (the click-to-place path). */
+	moveRow(pick: RowPick, point: { x: number; y: number }): void {
+		this.dragRow(pick, point);
+	}
+
+	/** Write one row back into its cloud (the drag's live preview). Found by
+	 * id, never by object identity: the page's `$state` proxies and the
+	 * payload's plain rows are two views of the same row. */
+	updateRow(pick: RowPick): void {
+		const entry = this.rowClouds.find((cloud) => cloud.table === pick.table);
+		const index = entry ? entry.rows.findIndex((row) => row.id === pick.id) : -1;
+		if (!entry || index < 0) return;
+		const row = entry.rows[index];
+		const attribute = entry.cloud.geometry.getAttribute('position') as THREE.BufferAttribute;
+		attribute.setXYZ(index, row.x, row.z, row.y);
+		attribute.needsUpdate = true;
+		if (
+			this.selectedRow &&
+			this.selectedRow.table === pick.table &&
+			this.selectedRow.id === pick.id
+		) {
+			this.marker.position.set(row.x, row.z, row.y);
+		}
+	}
+
+	private rowAt(pick: RowPick): SpawnRow | undefined {
+		return this.rowClouds
+			.find((cloud) => cloud.table === pick.table)
+			?.rows.find((row) => row.id === pick.id);
 	}
 
 	/** Recompose one fixture's instance from its fields (move/rotate/scale).
@@ -372,10 +560,38 @@ export class WorldViewer {
 		return null;
 	}
 
+	/** The server row under a click. A point cloud has no surface, so the
+	 * raycaster matches within a radius — each cloud is probed with its own dot
+	 * size, a door being easier to hit than a mob exactly as it is drawn. */
+	pickRow(ndcX: number, ndcY: number): RowPick | null {
+		const ray = new THREE.Raycaster();
+		ray.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+		let best: { distance: number; pick: RowPick } | null = null;
+		for (const entry of this.rowClouds) {
+			if (!entry.cloud.visible || !entry.group.visible) continue;
+			ray.params.Points.threshold = entry.size * 2.5;
+			const hits = ray.intersectObject(entry.cloud, false);
+			const row = hits.length ? entry.rows[hits[0].index ?? -1] : undefined;
+			if (!row) continue;
+			if (!best || hits[0].distance < best.distance) {
+				best = { distance: hits[0].distance, pick: { table: entry.table, id: row.id } };
+			}
+		}
+		return best?.pick ?? null;
+	}
+
 	/** Mark a fixture: a ring at its feet and a pin above it, so a small
 	 * object stays findable from a zone-wide camera. */
 	select(fixture: WorldFixture | null): void {
 		this.selected = fixture;
+		this.selectedRow = null;
+		if (this.carriedFor !== (fixture?.id ?? null)) {
+			// The pairs are proposed against the rows as they stand now: a fixture
+			// that has just been dragged has left its doors behind, and those are
+			// exactly the rows the next drag carries.
+			this.carried = fixture ? this.proposalsFor(fixture.id) : [];
+			this.carriedFor = fixture ? fixture.id : null;
+		}
 		if (!fixture || !this.terrain) {
 			this.marker.visible = false;
 			this.transform?.detach();
@@ -385,6 +601,78 @@ export class WorldViewer {
 		this.marker.position.set(...placement.position);
 		this.marker.visible = true;
 		this.attachProxy();
+	}
+
+	/** Mark a server row, the way a fixture is marked (same ring and pin). */
+	selectRow(pick: RowPick | null): void {
+		const row = pick ? this.rowAt(pick) : undefined;
+		const terrain = this.terrain;
+		if (pick && (!row || !terrain)) return;
+		this.selectedRow = pick;
+		if (pick && row && terrain) {
+			this.selected = null;
+			this.rowOffset = row.z - terrain.heightAt(row.x, row.y);
+			this.marker.position.set(row.x, row.z, row.y);
+			this.marker.visible = true;
+		} else if (!this.selected) {
+			this.marker.visible = false;
+		}
+		this.attachProxy();
+	}
+
+	/** The server rows a fixture would carry if it moved now (B2): the pairs
+	 * the page sends with the op, and the ones the daemon validates live. */
+	carriedRows(fixtureId: number): RowProposal[] {
+		if (this.carriedFor === fixtureId) return this.carried;
+		return this.proposalsFor(fixtureId);
+	}
+
+	/** A fixture's own rows: every row that stands *inside one of its meshes'
+	 * boxes*, measured in the fixture's frame. A proposal, not a measurement of
+	 * the walls — the boxes are the glTF's, so a row inside a courtyard is
+	 * carried and one beyond its walls is not; the daemon checks every key
+	 * against the database before it writes. */
+	private proposalsFor(fixtureId: number): RowProposal[] {
+		if (!this.terrain) return [];
+		const found = new Map<string, RowProposal>();
+		const matrix = new THREE.Matrix4();
+		const inverse = new THREE.Matrix4();
+		const box = new THREE.Box3();
+		const size = new THREE.Vector3();
+		const point = new THREE.Vector3();
+		for (const group of this.picks) {
+			const index = group.fixtures.findIndex((row) => row.id === fixtureId);
+			if (index < 0) continue;
+			const fixture = group.fixtures[index];
+			const placement = fixturePlacement(this.terrain, fixture);
+			matrix.compose(
+				new THREE.Vector3(...placement.position),
+				new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), placement.yaw),
+				new THREE.Vector3(placement.scale, placement.scale, placement.scale)
+			);
+			matrix.multiply(group.local);
+			inverse.copy(matrix).invert();
+			const geometry = group.mesh.geometry;
+			if (!geometry.boundingBox) geometry.computeBoundingBox();
+			if (!geometry.boundingBox) continue;
+			box.copy(geometry.boundingBox);
+			// A small margin: a row sits at the terrain height under itself, the
+			// mesh's box is the modeller's own — a wall's threshold must count.
+			box.expandByScalar(Math.max(32, box.getSize(size).length() * 0.02));
+			for (const cloud of this.rowClouds) {
+				for (const row of cloud.rows) {
+					point.set(row.x, row.z, row.y).applyMatrix4(inverse);
+					if (!box.containsPoint(point)) continue;
+					const distance = Math.hypot(row.x - placement.position[0], row.y - placement.position[2]);
+					const key = `${cloud.table}:${row.id}`;
+					const seen = found.get(key);
+					if (!seen || distance < seen.distance) {
+						found.set(key, { table: cloud.table, key: row.id, name: row.name ?? '', distance });
+					}
+				}
+			}
+		}
+		return [...found.values()].sort((a, b) => a.distance - b.distance);
 	}
 
 	get selection(): WorldFixture | null {
@@ -436,7 +724,13 @@ export class WorldViewer {
 
 	private clear(): void {
 		this.picks = [];
+		this.rowClouds = [];
 		this.selected = null;
+		this.selectedRow = null;
+		this.carried = [];
+		this.carriedFor = null;
+		this.dragFrom = null;
+		this.dragRows = [];
 		this.marker.visible = false;
 		this.transform?.detach();
 		this.dragging = false;
@@ -478,17 +772,16 @@ export class WorldViewer {
 	 * doors and patrols, in the same zone-local space as the fixtures. Drawn as
 	 * points — a mob row is a position the server owns, not an actor with a
 	 * pose — and a patrol as its whole line (the daemon keeps it unclipped).
-	 * Call after `show`, which clears the groups. */
+	 * Call after `show`, which clears the groups; a second call replaces the
+	 * clouds, so a re-read after an edit shows the journal's own patches. */
 	showSpawns(spawns: WorldSpawns): void {
+		this.clearSpawns();
 		this.spawnCounts.mobs = spawns.mobs.length;
 		this.spawnCounts.statics = spawns.objects.length;
 		this.spawnCounts.doors = spawns.doors.length;
-		const mobs = this.points(spawns.mobs, 0xe0b23e, 90);
-		if (mobs) this.groups.spawns.add(mobs);
-		const statics = this.points(spawns.objects, 0x64b5f6, 150);
-		if (statics) this.groups.statics.add(statics);
-		const doors = this.points(spawns.doors, 0xef5350, 220);
-		if (doors) this.groups.doors.add(doors);
+		this.addRows('mob', 'spawns', spawns.mobs, 0xe0b23e, 90);
+		this.addRows('worldobject', 'statics', spawns.objects, 0x64b5f6, 150);
+		this.addRows('door', 'doors', spawns.doors, 0xef5350, 220);
 		for (const path of spawns.paths) {
 			if (path.points.length < 2) continue;
 			const line = new THREE.Line(
@@ -502,6 +795,37 @@ export class WorldViewer {
 			this.groups.patrols.add(line);
 			this.spawnCounts.patrols += 1;
 			this.spawnCounts.patrolPoints += path.points.length;
+		}
+	}
+
+	private addRows(
+		table: SpawnTable,
+		group: 'spawns' | 'statics' | 'doors',
+		rows: SpawnRow[],
+		color: number,
+		size: number
+	): void {
+		const cloud = this.points(rows, color, size);
+		if (!cloud) return;
+		this.groups[group].add(cloud);
+		this.rowClouds.push({ table, group: this.groups[group], rows, cloud, size });
+	}
+
+	private clearSpawns(): void {
+		this.rowClouds = [];
+		this.carried = [];
+		this.carriedFor = null;
+		this.dragFrom = null;
+		this.dragRows = [];
+		this.spawnCounts = { mobs: 0, statics: 0, doors: 0, patrols: 0, patrolPoints: 0 };
+		for (const key of ['spawns', 'statics', 'doors', 'patrols'] as const) {
+			const group = this.groups[key];
+			for (const child of [...group.children]) {
+				group.remove(child);
+				const cloud = child as THREE.Points;
+				cloud.geometry?.dispose?.();
+				(cloud.material as THREE.Material | undefined)?.dispose?.();
+			}
 		}
 	}
 

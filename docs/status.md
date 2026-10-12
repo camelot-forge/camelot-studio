@@ -21,7 +21,7 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot client install P.tar.gz` / `uninstall MOD` / `status` / `verify` / `free-ids` | apply, remove, inspect and read back a pack's client half; list the model ids a mod may use |
 | `camelot client patch [--max-id N] [--restore]` | raise the client's model-id ceiling in place (unmanaged clients; `.orig` backup, byte-exact restore) |
 | `camelot server export --out F [--config C\|--dsn D]` | export the server's world rows (`mob`/`worldobject`/`door`/`path`) to a snapshot the viewer reads; needs `pymysql` (extra `mysql`) |
-| `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--edits D] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only; `--edits` turns on the **world editor** (6.3: select, move/rotate/scale with snap, catalog add, remove, the undo journal, `build`/`apply`/`revert`) |
+| `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--db-write] [--edits D] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only; `--edits` turns on the **world editor** (6.3: select, move/rotate/scale with snap, catalog add, remove, the undo journal, `build`/`apply`/`revert`); `--db-write` lets it also patch the server's **existing** world rows (B2: a keep's own doors move with the keep) |
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
 client NIFs parsed (the two remaining are 10.1.0.0 housing files failing
@@ -489,6 +489,14 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
    authoring directory; `build` runs the same `mod build` path and `apply`
    the same `client install`); the viewer carries the gizmo and the panel
    (the workspace report has the byte-level proof and the W-5 recipe);
+   **(c2)** editing the server's own rows — **done 2026-10-12**: a fixture
+   move carries the rows that stand inside its own meshes (B2, the case W-1
+   measured — Camelot Hills' keep carries its two doors, and, as measured,
+   the 27 NPCs and 2 banners its court holds, which the panel names before
+   anything is written); a row is moved or removed on its own too, and both
+   land through the same journal: `apply` patches the database behind the
+   explicit `--db-write`, recording every original it read, and `revert` puts
+   them back exactly. Such an edit is server-only — no pack, no client half;
    **(d)** the sky, fog and
    the day/night time (a slider first — the server owns the real clock,
    `formats.md` §11), then terrain/texture editing and the dungeon/city
@@ -532,4 +540,10 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 # installs through the same path as `camelot client install` (and refuses
 # while the game runs). Open /world, click an object, move it.
 .venv/bin/camelot serve --root "$DAOC_CLIENT" --edits /path/to/authoring
+# To let a move carry the rows inside a fixture (a keep's own doors, a gate on
+# a wall) or to edit a server row on its own, the daemon needs the server's
+# database: `--db-config` reads it, `--db-write` is the explicit permission to
+# write it. Every patch records the originals it read, so `revert` is exact.
+.venv/bin/camelot serve --root "$DAOC_CLIENT" --edits /path/to/authoring \
+  --db-config /path/to/serverconfig.xml --db-write
 ```

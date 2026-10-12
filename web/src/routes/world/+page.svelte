@@ -6,13 +6,23 @@
 	import { resolve } from '$app/paths';
 	import {
 		api,
+		type EditorEdit,
 		type EditorState,
 		type WorldFixture,
 		type WorldIndex,
+		type WorldSpawnDoor,
+		type WorldSpawnMob,
+		type WorldSpawnObject,
 		type WorldSpawns,
 		type WorldZone
 	} from '$lib/api/client';
-	import { WorldViewer, type EditKind, type EditMode } from '$lib/world/viewer';
+	import {
+		WorldViewer,
+		type EditKind,
+		type EditMode,
+		type RowPick,
+		type RowProposal
+	} from '$lib/world/viewer';
 	import { LoaderCircle, Crosshair } from '@lucide/svelte';
 
 	let canvasEl = $state<HTMLCanvasElement | null>(null);
@@ -61,7 +71,28 @@
 	let editError = $state<string | null>(null);
 	let busyEdit = $state(false);
 
+	// The server rows (B2/W-4's first half): one row selected for editing, the
+	// rows the selected fixture would carry, and whether to carry them.
+	type SpawnRowOf = WorldSpawnMob | WorldSpawnObject | WorldSpawnDoor;
+	let selectedRow = $state<RowPick | null>(null);
+	let proposals = $state<RowProposal[]>([]);
+	let carry = $state(true);
+
 	const editOps = $derived(edit?.zones.find((z) => z.id === zoneId)?.ops.length ?? 0);
+	const editRows = $derived(
+		(edit?.rows ?? []).reduce((sum, entry) => sum + entry.patches.length, 0)
+	);
+	const selectedSpawn = $derived(selectedRow && spawns ? rowOf(spawns, selectedRow) : null);
+	// What the proposal is made of, named: a castle's box holds its doors *and*
+	// everyone standing in the courtyard, and the operator decides.
+	const carriedNote = $derived.by(() => {
+		const counts: Record<string, number> = {};
+		for (const row of proposals) counts[row.table] = (counts[row.table] ?? 0) + 1;
+		const names: Record<string, string> = { mob: 'mobs', worldobject: 'statics', door: 'doors' };
+		return Object.entries(counts)
+			.map(([table, count]) => `${count} ${names[table] ?? table}`)
+			.join(' · ');
+	});
 	const catalogRows = $derived.by(() => {
 		if (!zone) return [];
 		const needle = addQuery.trim().toLowerCase();
@@ -113,6 +144,7 @@
 		viewer = new WorldViewer(canvasEl);
 		viewer.start();
 		viewer.onEdit = (kind, fixture) => void commitDrag(kind, fixture);
+		viewer.onRowMove = (pick) => void commitRow(pick);
 		viewer.onPick = (point) => {
 			addPoint = point;
 		};
@@ -167,6 +199,8 @@
 		status = `loading ${zoneRow.name}…`;
 		zoneId = zoneRow.id;
 		selected = null;
+		selectedRow = null;
+		proposals = [];
 		spawns = null;
 		try {
 			const [loaded, rows] = await Promise.all([
@@ -220,6 +254,15 @@
 			(window as unknown as { __worldEditor?: () => object }).__worldEditor = () => ({
 				mode: editMode,
 				ops: editOps,
+				rows: editRows,
+				row: selectedRow,
+				carried: proposals.map((row) => ({
+					table: row.table,
+					key: row.key,
+					name: row.name,
+					distance: Math.round(row.distance)
+				})),
+				carry,
 				status: editStatus,
 				error: editError,
 				pack: edit?.pack ?? null,
@@ -248,7 +291,23 @@
 		const known =
 			fixture && zone ? (zone.fixtures.find((row) => row.id === fixture.id) ?? fixture) : fixture;
 		selected = known;
+		selectedRow = null;
 		viewer?.select(known);
+		// The rows this fixture would take with it (B2): proposed from its own
+		// meshes' boxes, shown before anything is dragged, sent with the op.
+		proposals = known ? (viewer?.carriedRows(known.id) ?? []) : [];
+	}
+
+	function selectRow(pick: RowPick | null) {
+		selectedRow = pick;
+		if (pick) selected = null;
+		viewer?.selectRow(pick);
+	}
+
+	function rowOf(rows: WorldSpawns, pick: RowPick): SpawnRowOf | null {
+		if (pick.table === 'mob') return rows.mobs.find((row) => row.id === pick.id) ?? null;
+		if (pick.table === 'worldobject') return rows.objects.find((row) => row.id === pick.id) ?? null;
+		return rows.doors.find((row) => row.id === pick.id) ?? null;
 	}
 
 	function focusFixture(fixture: WorldFixture) {
@@ -262,14 +321,28 @@
 		await viewer.rebuildFixtures(zoneId, loaded);
 	}
 
-	/** One edit, through the daemon (D2): the answer is the row as it stands. */
+	/** The server's rows as the daemon now holds them: the journal's patches are
+	 * part of what the zone *is* (a moved door is drawn where it was recorded),
+	 * and a rebased payload re-proposes the pairs a fixture carries. */
+	async function reloadSpawns() {
+		if (zoneId === null || !viewer) return;
+		const rows = await api.worldSpawns(zoneId).catch(() => null);
+		if (!rows) return;
+		spawns = rows;
+		viewer.showSpawns(rows);
+		if (selectedRow) viewer.selectRow(selectedRow);
+		if (selected) proposals = viewer.carriedRows(selected.id);
+	}
+
+	/** One edit, through the daemon (D2): the answer is the row as it stands,
+	 * plus whatever server rows the op carried (B2). */
 	async function applyEdit(op: Record<string, unknown>) {
 		if (zoneId === null || busyEdit) return;
 		busyEdit = true;
 		editError = null;
 		try {
 			const result = await api.worldEditApply(zoneId, op);
-			if (op.kind === 'add' || op.kind === 'remove') {
+			if (op.kind === 'add' || op.kind === 'remove' || op.kind === 'row-remove') {
 				await reloadFixtures();
 			} else if (result.fixture) {
 				const row = result.fixture;
@@ -279,26 +352,41 @@
 					viewer?.updateFixture(shown);
 				}
 			}
-			editStatus = describe(op, result.fixture);
+			// A patch is part of what the zone is now: the viewer must show the
+			// rows where the journal puts them, not where the database has them.
+			if (result.patches.length) await reloadSpawns();
+			editStatus = describe(op, result);
 			edit = await api.worldEdit();
 		} catch (e) {
 			editError = e instanceof Error ? e.message : String(e);
 			await reloadFixtures(); // the daemon's state wins after a refusal
+			await reloadSpawns();
 		} finally {
 			busyEdit = false;
 		}
 	}
 
-	function describe(op: Record<string, unknown>, fixture: WorldFixture | null): string {
-		const id = fixture?.id ?? op.id;
+	function describe(op: Record<string, unknown>, result: EditorEdit): string {
+		const id = result.fixture?.id ?? op.id;
 		if (op.kind === 'remove') return `removed #${id}`;
-		if (op.kind === 'add' && fixture) return `added #${fixture.id} ${fixture.name}`;
-		return `${op.kind} #${id}`;
+		if (op.kind === 'add' && result.fixture)
+			return `added #${result.fixture.id} ${result.fixture.name}`;
+		if (op.kind === 'row-remove') return `removed ${op.table} row ${op.key}`;
+		if (op.kind === 'row-move') return `moved ${op.table} row ${op.key}`;
+		const rows = result.patches.length
+			? ` · ${result.patches.length} server row${result.patches.length > 1 ? 's' : ''}`
+			: '';
+		return `${op.kind} #${id}${rows}`;
 	}
 
 	/** A gizmo drag ended: the viewer already wrote the fields locally; the
 	 * daemon journals them (it fills `expect` from the row it holds). */
 	async function commitDrag(kind: EditKind, fixture: WorldFixture) {
+		// The pairs the user was shown when the fixture was picked: the rows of
+		// the structure as it stood, which is what a move has to carry. A scale
+		// moves nothing, so it carries nothing either.
+		const rows =
+			carry && kind !== 'scale' ? proposals.map((row) => ({ table: row.table, key: row.key })) : [];
 		await applyEdit({
 			kind,
 			id: fixture.id,
@@ -306,8 +394,32 @@
 			y: fixture.y,
 			z: fixture.z,
 			angle: fixture.angle,
-			scale: fixture.scale
+			scale: fixture.scale,
+			...(rows.length ? { rows } : {})
 		});
+	}
+
+	/** A gizmo drag on a server row ended, or a ground click placed one: the
+	 * viewer already moved the point locally; the daemon journals the patch. */
+	async function commitRow(pick: RowPick) {
+		if (!spawns) return;
+		const row = rowOf(spawns, pick);
+		if (!row) return;
+		await applyEdit({
+			kind: 'row-move',
+			table: pick.table,
+			key: pick.id,
+			x: row.x,
+			y: row.y,
+			heading: row.heading
+		});
+	}
+
+	async function removeRow() {
+		if (!selectedRow) return;
+		const pick = selectedRow;
+		await applyEdit({ kind: 'row-remove', table: pick.table, key: pick.id });
+		selectRow(null);
 	}
 
 	async function undo() {
@@ -320,6 +432,7 @@
 				? `undid ${result.op.action} #${result.op.id}`
 				: 'nothing to undo';
 			await reloadFixtures();
+			await reloadSpawns();
 			edit = await api.worldEdit();
 		} catch (e) {
 			editError = e instanceof Error ? e.message : String(e);
@@ -352,7 +465,9 @@
 		editError = null;
 		try {
 			const result = await api.worldModBuild();
-			editStatus = `built ${result.pack}`;
+			editStatus = result.pack
+				? `built ${result.pack}`
+				: `journaled ${result.patches} server row patch${result.patches === 1 ? '' : 'es'}`;
 			edit = await api.worldEdit();
 		} catch (e) {
 			editError = e instanceof Error ? e.message : String(e);
@@ -368,7 +483,10 @@
 		try {
 			const result = await api.worldModApply();
 			const mod = (result.install ?? {}).mod ?? edit?.mod.id ?? '';
-			editStatus = `installed ${mod}`;
+			editStatus = result.install
+				? `installed ${mod}`
+				: `wrote ${result.patches} server row${result.patches === 1 ? '' : 's'} (no client half)`;
+			await reloadSpawns();
 			edit = await api.worldEdit();
 		} catch (e) {
 			editError = e instanceof Error ? e.message : String(e);
@@ -385,6 +503,7 @@
 			await api.worldModRevert();
 			editStatus = 'journal cleared';
 			await reloadFixtures();
+			await reloadSpawns();
 			edit = await api.worldEdit();
 		} catch (e) {
 			editError = e instanceof Error ? e.message : String(e);
@@ -404,7 +523,28 @@
 			return;
 		}
 		const picked = viewer.pick(ndcX, ndcY);
-		selectFixture(picked ? picked.fixture : null);
+		if (picked) {
+			selectFixture(picked.fixture);
+			return;
+		}
+		const row = viewer.pickRow(ndcX, ndcY);
+		if (row) {
+			selectRow(row);
+			return;
+		}
+		if (selectedRow) {
+			// a ground click with a row in hand places it (the daemon's own rule
+			// keeps its height above the terrain; the gizmo refines it after)
+			const point = viewer.pickGround(ndcX, ndcY);
+			if (point) {
+				const pick = selectedRow;
+				viewer.moveRow(pick, point);
+				void commitRow(pick);
+				return;
+			}
+		}
+		selectFixture(null);
+		selectRow(null);
 	}
 
 	function onCanvasDoubleClick(event: MouseEvent) {
@@ -531,10 +671,10 @@
 						<button
 							type="button"
 							onclick={undo}
-							disabled={!editOps || busyEdit}
-							title="drop the journal's last op"
+							disabled={(!editOps && !editRows) || busyEdit}
+							title="drop the journal's last op (server rows first)"
 						>
-							undo ({editOps})
+							undo ({editOps}{editRows ? ` +${editRows} rows` : ''})
 						</button>
 						<button
 							type="button"
@@ -590,6 +730,11 @@
 							).toLocaleTimeString()}
 						</p>
 					{/if}
+					{#if editRows}
+						<p class="hint">
+							{editRows} server row patch{editRows === 1 ? '' : 'es'} in the journal
+						</p>
+					{/if}
 					{#if editStatus}<p class="hint">{editStatus}</p>{/if}
 					{#if editError}<p class="warn">{editError}</p>{/if}
 				</section>
@@ -617,10 +762,72 @@
 					<button class="focus" type="button" onclick={() => focusFixture(selected!)}>
 						<Crosshair size={13} /> Focus (F)
 					</button>
+					{#if proposals.length}
+						<label class="snap">
+							<input type="checkbox" bind:checked={carry} /> carry {proposals.length} server row{proposals.length >
+							1
+								? 's'
+								: ''}
+						</label>
+						<p class="hint">
+							rows inside this object's own meshes: {carriedNote} — they move with it (B2)
+						</p>
+						<ul class="addlist">
+							{#each proposals as row (row.table + ':' + row.key)}
+								<li>
+									<button
+										type="button"
+										onclick={() => selectRow({ table: row.table, id: row.key })}
+										title="inspect this server row"
+									>
+										<span class="zname">{row.name || '(unnamed)'}</span>
+										<span class="zmeta">{row.table} {row.key}</span>
+									</button>
+								</li>
+							{/each}
+						</ul>
+					{/if}
 				{:else}
-					<p class="hint">click an object in the scene, or a row below — double-click recentres</p>
+					<p class="hint">
+						click an object in the scene, or a row below — a coloured dot is a server row,
+						double-click recentres
+					</p>
 				{/if}
 			</section>
+
+			{#if selectedRow && selectedSpawn}
+				<section class="picked">
+					<h2>Server row</h2>
+					<dl>
+						<dt>table</dt>
+						<dd>{selectedRow.table} <span class="dim">{selectedRow.id}</span></dd>
+						<dt>name</dt>
+						<dd>{selectedSpawn.name || '(unnamed)'}</dd>
+						<dt>at</dt>
+						<dd>
+							{selectedSpawn.x.toFixed(0)}, {selectedSpawn.y.toFixed(0)}, {selectedSpawn.z.toFixed(
+								0
+							)}
+						</dd>
+						<dt>heading</dt>
+						<dd>{selectedSpawn.heading} <span class="dim">of 4096</span></dd>
+					</dl>
+					<div class="modes">
+						<button
+							class="danger"
+							type="button"
+							onclick={removeRow}
+							disabled={busyEdit}
+							title="the row is dropped on apply; revert puts it back whole"
+						>
+							remove row
+						</button>
+					</div>
+					<p class="hint">
+						drag the gizmo, or click the ground, to move it — it keeps its height above the terrain
+					</p>
+				</section>
+			{/if}
 
 			<section class="fixtures">
 				<label class="field">
