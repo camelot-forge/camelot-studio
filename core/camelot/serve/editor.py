@@ -294,18 +294,49 @@ class Editor:
         edit into the client, so the journal then describes a state the base
         carries; replaying it must be a no-op, not a conflict (the operator
         hit exactly this right after their first in-game check, 2026-10-12).
+        And so does a *run* of ops on one row whose last step is where the base
+        already stands: that is a chain a publish has carried (25344 → 20992 →
+        19968 landing on a base that reads 19968), and refusing it would leave
+        the session unable to publish again.
         A row that differs from *both* the op's expectation and its values
         still refuses: that is a real conflict, not a replay.
         """
         table = self.base_table(zone)
-        for op in self.ops(zone.info.zone_id):
+        pending = list(self.ops(zone.info.zone_id))
+        index = 0
+        while index < len(pending):
+            op = pending[index]
             if self._already_applied(table, op):
+                index += 1
                 continue
             try:
                 table = gamedata.apply_row_ops(table, [op])
+                index += 1
             except gamedata.TableError as error:
-                raise EditorError(str(error)) from error
+                carried = self._published_run(table, pending, index)
+                if carried is None:
+                    raise EditorError(str(error)) from error
+                index += carried
         return table
+
+    def _published_run(self, table: gamedata.Table, pending: list[dict],
+                       index: int) -> int | None:
+        """How many ops to skip when the run that starts here was published.
+
+        A run is the consecutive ops on one row. It counts as published when
+        its *last* step is a state the table already shows — whatever the
+        intermediate steps asked for, a published chain ends where the base
+        stands.
+        """
+        row_id = pending[index].get("id")
+        if row_id is None:
+            return None
+        end = index
+        while end + 1 < len(pending) and pending[end + 1].get("id") == row_id:
+            end += 1
+        if end == index:
+            return None
+        return end - index + 1 if self._already_applied(table, pending[end]) else None
 
     @staticmethod
     def _already_applied(table: gamedata.Table, op: dict) -> bool:

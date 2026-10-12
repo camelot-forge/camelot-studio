@@ -533,6 +533,49 @@ def test_a_journal_without_the_ledger_still_reverts(editing, tmp_path, monkeypat
     assert updates[-1][0] == str(LEFT + 19660)  # the patch's own original
 
 
+def test_a_published_chain_does_not_block_the_build(editing, tmp_path):
+    """The operator's own state on 2026-10-12: two ops on one row, published
+    (25344 → 20992 → 19968) so the client reads 19968 — the first op's
+    expectation no longer matches. The chain ends where the base stands, so it
+    counts as published: the build goes through instead of refusing."""
+    edits = tmp_path / "session"
+    client = editor_client(editing, edits)
+    assert edit(client, {"kind": "move", "id": 2, "x": 20992,
+                         "y": 32768}).status_code == 200
+    assert edit(client, {"kind": "move", "id": 2, "x": 19968,
+                         "y": 32768}).status_code == 200
+    assert client.post("/api/v1/world/mod/apply").status_code == 200
+
+    # the client now reads 19968; put the ops back, as a session saved before
+    # the commit-on-publish rule would have them
+    path = edits / "journal.json"
+    journal = json.loads(path.read_text())
+    journal["published"] = {}
+    journal["zones"] = {"0": [
+        {"action": "set", "id": 2, "columns": {"X": 3, "Y": 4},
+         "values": {"X": "20992", "Y": "32768"}, "expect": {"X": "32768", "Y": "32768"}},
+        {"action": "set", "id": 2, "columns": {"X": 3, "Y": 4},
+         "values": {"X": "19968", "Y": "32768"}, "expect": {"X": "20992", "Y": "32768"}},
+    ]}
+    path.write_text(json.dumps(journal))
+
+    # a new daemon reads the file: the journal is cached per instance
+    fresh = editor_client(editing, edits)
+    zone = fresh.get("/api/v1/world/zone/0").json()
+    assert zone["warnings"] == []
+    pine = next(fixture for fixture in zone["fixtures"] if fixture["id"] == 2)
+    assert (pine["x"], pine["y"]) == (19968, 32768)
+    built = fresh.post("/api/v1/world/mod/build")
+    assert built.status_code == 200, built.json()
+
+    # a chain that lands somewhere else still refuses
+    journal["zones"]["0"][1]["values"] = {"X": "18000", "Y": "32768"}
+    path.write_text(json.dumps(journal))
+    again = editor_client(editing, edits)
+    warnings = again.get("/api/v1/world/zone/0").json()["warnings"]
+    assert any("the journal did not apply" in warning for warning in warnings), warnings
+
+
 def test_the_zone_payload_shows_the_journal_patches(editing, tmp_path, monkeypatch):
     """The viewer must show what the journal recorded, before it is applied:
     the door the operator moved is drawn where the patch puts it."""

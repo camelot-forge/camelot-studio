@@ -299,15 +299,22 @@ export class WorldViewer {
 		const canvas = this.canvas;
 		canvas.style.touchAction = 'none';
 		canvas.style.cursor = 'grab';
-		// the page's own menu has no business over the scene: right is the camera
-		window.addEventListener(
+		// the page's own menu has no business over the scene: right is the camera.
+		// A capture-phase listener on the document, and the *position* decides —
+		// some browsers retarget the event when the pointer is captured, so the
+		// target is not something to trust here.
+		document.addEventListener(
 			'contextmenu',
 			(event) => {
-				if (event.target instanceof Node && this.canvas.contains(event.target)) {
-					event.preventDefault();
-				}
+				const rect = this.canvas.getBoundingClientRect();
+				const inside =
+					event.clientX >= rect.left &&
+					event.clientX <= rect.right &&
+					event.clientY >= rect.top &&
+					event.clientY <= rect.bottom;
+				if (inside) event.preventDefault();
 			},
-			{ signal }
+			{ capture: true, signal }
 		);
 		canvas.addEventListener('wheel', (event) => this.zoomBy(event), {
 			signal,
