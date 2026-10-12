@@ -64,9 +64,10 @@ from .models import (
 
 #: Bump when an exported artefact (glb, png) changes shape: the mtime alone
 #: would keep serving files built by an older exporter. Bumped to 7 when the
-#: zone meshes moved to the world axis conversion (the reflection of the
-#: client's left-handed frame — the cached glbs were mirrored).
-_WORLD_EXPORT_VERSION = "7"
+#: zone meshes went back to the figures' axis rotation (the reflection the
+#: previous bump introduced turned every building 180 deg round — the cached
+#: glbs are rebuilt).
+_WORLD_EXPORT_VERSION = "8"
 
 #: `/world/zone/{id}/terrain`'s payload: magic, version, grid, factors, planes.
 TERRAIN_MAGIC = b"CAMT"

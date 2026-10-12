@@ -52,7 +52,15 @@ def create_app(config: ServeConfig) -> FastAPI:
         origin = request.headers.get("origin")
         if origin and not origin_allowed(origin, extra):
             return JSONResponse({"detail": "invalid origin"}, status_code=403)
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            # The daemon is a *live* view of the client: a mesh exported with a
+            # different axis conversion keeps the same URL, so without this a
+            # browser may serve the old one and hide the change (measured
+            # 2026-10-12, the world axis fix). Revalidate every time; the
+            # static viewer build keeps its normal caching.
+            response.headers["cache-control"] = "no-cache"
+        return response
 
     app.include_router(build_router(config, index, watcher))
     app.include_router(build_world_router(config))

@@ -207,10 +207,17 @@ their heading (**degrees**, measured — not the server's 12-bit grid) and
 scale, bounds/water/jump overlays, a region browser, a zone picker, and
 click-to-select/recentre with a searchable fixture list and an inspector
 (6.3's first slice). The scene is the client's own map orientation — north
-up, east right, `+y` (south) mapped to scene `+Z`, fixture yaw `−A` — since
-the zone frame is left-handed (`formats.md` §11, "The world frame is
-left-handed"); the first cut used the figure rotation and drew the whole
-world mirrored. The terrain patches share one zone-wide normal field (a
+up, east right, `+y` (south) mapped to scene `+Z`, fixture yaw `−A`; `A = 0`
+puts a mesh's own `+y` (the keep's gatehouse) on the north side and increasing
+`A` turns clockwise on that map, as the in-game aerials show (measured
+2026-10-12; the earlier "`A = 0` faces south" read `A` as the *server's*
+12-bit compass). The *zone meshes* take the figures' rotation
+(`(x,y,z)→(x,z,−y)`, `nifutil.WORLD_AXIS_CONVERSION`); the reflection that
+shipped for a day (2026-10-11 → 12) fixed the map but stood every building
+180° round — caught by the user's aerial `/world`-vs-game comparison and, in
+data, by the keep's `door` nodes landing 15 units from the server's rows under
+the rotation against 357 under the reflection. The terrain patches share one
+zone-wide normal field (a
 per-patch computation drew the 8×8 grid as 64 shaded tiles) and the ground
 masks are clamped (a mask covers its patch exactly). The ground is the
 client's layer stack, not its bake: each
@@ -220,11 +227,13 @@ patch is composed from its `TerrainTex` sheets and masks in one pass
 `texXX-YY` composite (`formats.md` §11) — the first cuts drew that bake alone,
 then its layers 8× too densely, both flat washes where the game shows
 pebbles and grass blades — with the
-bake kept as the fallback for zones that ship no layers. Fixtures honour `Z`
-as authored and drop `Z = 0` + `Ground = 1`
-rows on the terrain; whether the client honours a non-zero `Z` under
-`Ground` is the **W-3** experiment (its probe pack is installed, the in-game
-read is pending). The world reader mirrors the client's own archive
+bake kept as the fallback for zones that ship no layers. Fixtures are placed
+by the viewer's rule — every `Ground = 1` row is dropped on the terrain and
+its authored `Z` is ignored, `Ground = 0` rows keep their `Z`
+(`terrain.ts::fixtureZ`, pinned by `terrain.test.ts`) — which is what the
+in-game probe screenshots show so far; whether the client honours a non-zero
+`Z` under `Ground` is the **W-3** experiment (its probe pack is installed, the
+in-game read is pending). The world reader mirrors the client's own archive
 preference since 2026-10-12 — `csv` first per entry, `dat` as the fallback
 (`Zone.data_entry`) — because taking `dat` first served an installed pack's
 pristine bytes and left its rows invisible; an archive the client ships empty
@@ -262,17 +271,18 @@ in `workspace/notes/`.
   for selected figures, not a complete Ghidra proof of every client path.
 - **glTF axis**: vertices/normals stay in NIF space and the synthetic root
   node (`__axes__`) applies the axis conversion once (no double rotation).
-  Every era composes **Z-up** in NIF world space, so the figure conversion is
-  always `(x,y,z)→(x,z,−y)` (`formats.md` §2 "Up axis"): the former
-  version-based "early 4.x is X-down" rule was a pre-row-major artifact and is
-  gone. **The world is not a figure**: the client's zone frame is
-  left-handed (`+y` south — the server's own compass, `formats.md` §11), so
-  zone objects are exported with the reflection `(x,y,z)→(x,z,+y)`
-  (`nifutil.WORLD_AXIS_CONVERSION`); with the rotation they came out mirrored
-  (every map flipped, the keep's gate on the wrong side, measured
-  2026-10-11). Whether the figure pipeline should flip too — it would
-  re-mirror every character, and the orientation corrections were tuned under
-  the rotation — is an open decision. The viewer normalises scale to ~5 units
+  Every era composes **Z-up** in NIF world space, so the conversion is always
+  `(x,y,z)→(x,z,−y)` (`formats.md` §2 "Up axis"): the former version-based
+  "early 4.x is X-down" rule was a pre-row-major artifact and is gone. **The
+  world and the figures now share it** (`nifutil.WORLD_AXIS_CONVERSION` *is*
+  `AXIS_CONVERSION`): the client's map is left-handed (`+y` south — the
+  server's own compass, `formats.md` §11) but that decides *where a point
+  goes*, not which way a NIF's own axes face — the zone meshes take the same
+  rotation as the figures, and a mesh's `+y` lands on the north side. The
+  reflection `(x,y,z)→(x,z,+y)` that shipped 2026-10-11 → 12 conflated the
+  two and turned every building 180° round (user's aerial comparison,
+  2026-10-12; the server's `door` rows agree with the rotation to 15 units and
+  not with the reflection, 357). The viewer normalises scale to ~5 units
   and keeps a 90° rotate control. Open: `Rat.NIF` (10.x) still has its length
   along the horizontal axis — its tail dominates the bbox, visual confirmation
   pending.

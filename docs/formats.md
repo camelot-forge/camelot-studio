@@ -711,20 +711,26 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   boundaries. `texXX-YY` stays as the fallback where
   a zone ships no layers. `lodXX-YY.dds` (256²) is `texXX-YY`'s lower-detail
   copy, `texXX-YY.bmp` an 8-bit indexed companion.
-- **A fixture's heading** is **degrees** (0..359), counter-clockwise in the
-  (x, y) plane — measured on the bridges of six zones: each one's long axis
-  (from its mesh's own vertices) lies along its river's bank-to-bank
-  direction and `A` matches that rotation
-  (`notes/heading-convention.py`). The plane's compass is the client's
-  own (§11 "The world frame is left-handed"): `A = 0` faces `+y` = **south**,
-  `A = 90` faces `−x` = west — the same sense as the server's 12-bit grid,
-  which is nevertheless a **different** field (`door.Heading`, 0..4095; 0 at
-  `+y`, 1024 at `−x`, `Point2D.GetHeading`) — mixing the two turns every
-  fixture by A/11 and looks like "the rotation is ignored". A fixture's `Z` is
-  used as authored unless `Z = 0` with `Ground = 1`, which drops it on the
-  terrain; whether the client honours a non-zero `Z` when `Ground` is set
-  (Camelot Hills' authored rows) is **not yet measured** — the W-3
-  experiment settles it.
+- **A fixture's heading** is **degrees** (0..359) and `A = 0` leaves the
+  mesh as the client draws it: the mesh's own `+y` winds up on the **north**
+  side (the keep's gatehouse is at its `+y` and stands north with `A = 0`,
+  measured 2026-10-12 against the in-game aerial). Increasing `A` turns the
+  object **counter-clockwise in the client's `(x, y)` plane**, i.e. clockwise
+  on a north-up map: `A = 90` is east, 180 south, 270 west — so `A` is the
+  object's *bearing*. The bridge probe
+  (`notes/heading-convention.py`) pins that sense, and only the sense:
+  every bridge in the corpus is `Hstonebridge.nif`, whose long axis measures
+  **0.0°** in the NIF, where a rotation and a mirror agree — the "a dozen rows
+  in six zones" the first reading claimed does not exist, and the 180°-off
+  zero ("`A = 0` faces south", read from the server's 12-bit grid) went
+  unnoticed for the same reason. The server's `door.Heading` is a
+  **different** field (0..4095; 0 at `+y`, 1024 at `−x`,
+  `Point2D.GetHeading`): 180° away from `A` at the zero, clockwise on the map
+  like it, so mixing the two turns every fixture by A/11 and looks like "the
+  rotation is ignored". A fixture's `Z` is used as authored unless
+  `Z = 0` with `Ground = 1`, which drops it on the terrain; whether the client
+  honours a non-zero `Z` when `Ground` is set (Camelot Hills' authored rows)
+  is **not yet measured** — the W-3 experiment settles it.
 - **A world object ships one visible level, not three**: every zone object's
   visible branch is a `NiLODNode` with a `(near, far)` range per child *in
   file order* (the tavern lists the far child first, the guard tower the
@@ -736,33 +742,35 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   coarser copy over every object (measured on the zone corpus; the exporter
   does this under `world_object=True`, dropping the tavern from 80 meshes to
   38 and the guard tower from 18 to 5).
-- **The world frame is left-handed**: zone-local `+x` is **east**, `+y` is
-  **south**, `+z` up — `x × y` is *down*. Measured 2026-10-11 on two
-  independent sources, not guessed: the server's own compass
+- **The world frame is left-handed, and a NIF is not**: zone-local `+x` is
+  **east**, `+y` is **south**, `+z` up — `x × y` is *down*. Measured
+  2026-10-11 on two independent sources: the server's own compass
   (`Point2D.GetPointFromHeading` puts heading 0 at `+y`; `where.cs`/`yell.cs`
-  translate 0/1024/2048/3072 to South/West/North/East), and the in-game
-  screenshots (facing south from the keep's north approach, the gate — its
-  mesh's `−y` side — faces the player, the crop field sits east, the walled
-  graveyard west). A **rotation** into a right-handed renderer is therefore
-  wrong: it mirrors the world — a north-up map flips, and every mesh with it
-  (the keep's gate came out on the wrong side). The faithful conversion keeps
-  `x` and `up` and flips `y`: `(x,y,z) → (x, z, +y)`
-  (`nifutil.WORLD_AXIS_CONVERSION`, determinant −1), used by
-  `export_gltf(..., world_object=True)` — three.js flips front faces on a
-  negative-determinant node, so the mirrored winding renders correctly — and
-  by `web/src/lib/world/terrain.ts` (`zoneToScene`; the fixture yaw is `−A`,
-  and a three.js camera south of its target shows the client's own north-up,
-  east-right map). Figures still use the rotation `mat4_axis`; whether the
-  figure pipeline should flip too (it would re-mirror every character, and
-  the `_ORIENTATION`/signature corrections were tuned under the rotation) is
-  an **open decision**.
-  Proof: `notes/ground-mosaic.py` assembles the client's own 64 baked
-  `texXX-YY` sheets — sheet row 0 is the patch's lowest y, roads and the
-  river bed continue across every patch seam, and `sector.dat`'s river banks
-  land on the painted river — and the keep shots in
-  `notes/world-shots/` show it from the same side before
-  (`keep-az-0.png`: the small south tower) and after
-  (`Camelot_Hills-keep-north-fixed.png`: the gate).
+  translate 0/1024/2048/3072 to South/West/North/East) and the in-game
+  screenshots (facing south from the keep's north approach, the gate faces the
+  player, the crop field sits east, the walled graveyard west). **Two
+  different things follow, and conflating them cost a day (2026-10-11/12):**
+  - the **map** — fixture positions, the terrain, every query in the viewer —
+    keeps `x` and `up` and puts DAoC's `+y` (south) on scene `+Z`
+    (`web/src/lib/world/terrain.ts::zoneToScene`; a camera south of its target
+    then shows the client's own north-up, east-right map);
+  - the **zone meshes** (a NIF, i.e. right-handed) take the same conversion
+    as the figures: `(x, y, z) → (x, z, -y)` — the **rotation**
+    (`nifutil.WORLD_AXIS_CONVERSION`, determinant +1, `AXIS_CONVERSION` once
+    more), which puts a mesh's `+y` on the north side. The reflection
+    `(x, z, +y)` that shipped for a day was a misreading of the *map* fix:
+    it turned every building 180° round (the user's aerial `/world` vs aerial
+    in game, 2026-10-12), which the *bridges* could not have caught (their
+    mesh axes are all 0.0°, see the heading entry above) while the server's
+    own rows could: the keep's two `door` rows sit within **15 units** of the
+    mesh's two door nodes under the rotation and **357** under the reflection
+    (`notes/keep-door-nodes.py`, `server-doors.py`). The two `Albion
+    Banner` worldobjects (1315 units north, facing north) and the road agree.
+  Figures use the same rotation — the pipeline was right, the world was the
+  one that had been flipped. Proof of the map half: `notes/ground-
+  mosaic.py` assembles the client's own 64 baked `texXX-YY` sheets (sheet row
+  0 is the patch's lowest y, roads and the river bed continue across every
+  seam, `sector.dat`'s banks land on the painted river).
 - **The sky is per zone, and the clock is the server's**: `sector.dat` carries
   `[sky]` and `[fog]` (plus `[terrain]`'s horizon and cloud fields — the
   section *exists* in every outdoor zone; its fields are not unpacked yet),

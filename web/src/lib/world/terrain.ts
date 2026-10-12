@@ -85,14 +85,15 @@ export function parseTerrain(buffer: ArrayBuffer): TerrainData {
 
 /** A zone-local point in scene space.
  *
- * The client's zone frame is left-handed: `+x` is east, **`+y` is south**,
- * `+z` up (the server's own compass, `Point2D.GetPointFromHeading`: heading
- * 0 at `+y`, `where.cs` calling it "South"; 1024 at `-x`, "West"). A
- * right-handed three.js scene therefore cannot use a rotation to show it —
- * that mirrors the world. Keep `x` and `up`, flip `y`: DAoC's `+y` (south)
- * is scene **+Z**, and a camera south of its target looks north with north
- * up, east right — the client's own map orientation. The zone meshes are
- * exported with the same reflection (`nifutil.WORLD_AXIS_CONVERSION`). */
+ * The client's zone frame is `+x` east, **`+y` south**, `+z` up (the
+ * server's own compass, `Point2D.GetPointFromHeading`: heading 0 at `+y`,
+ * `where.cs` calling it "South"; 1024 at `-x`, "West"). The scene draws that
+ * plane as a north-up map — this is the *map*, measured against the client's
+ * own mosaics and validated in game — so DAoC's `+y` (south) is scene **+Z**
+ * and a camera south of its target looks north, east right. The zone *meshes*
+ * come in through the exporters' own conversion
+ * (`nifutil.WORLD_AXIS_CONVERSION`), which is a separate question: it is the
+ * one that decides which way a building's front faces (see below). */
 export function zoneToScene(x: number, y: number, z: number): [number, number, number] {
 	return [x, z, y];
 }
@@ -101,17 +102,21 @@ export function zoneToScene(x: number, y: number, z: number): [number, number, n
  *
  * The corpus settles the unit: `fixtures.csv`'s `A` runs 0..359 with every
  * human value on top (0/90/180/45/270/315) — **degrees**, not the server's
- * 12-bit grid (`door.Heading` is 0..4095; 1024 = 90° there). The sense is
- * counter-clockwise in DAoC's (x, y) plane, measured on the bridges: each
- * one's long axis (from its mesh's own vertices) lies along its river's
- * bank-to-bank direction, and `A` matches that rotation sign across a dozen
- * rows in six zones (`notes/heading-convention.py`). `A = 0` faces
- * `+y` = south — the client's compass — and 90° faces `-x` = west.
+ * 12-bit grid (`door.Heading` is 0..4095; 1024 = 90° there). `A` is the
+ * bearing of the mesh's own front (`+y` in the NIF: the keep's gatehouse is
+ * there and `A = 0` puts it on the north side, as the game does — user's
+ * aerial comparison, 2026-10-12). Increasing `A` turns the object
+ * counter-clockwise in DAoC's `(x, y)` plane, which is clockwise on a
+ * north-up map: `A = 90` is east, 180 south, 270 west. (The older "`A = 0`
+ * faces south" came from reading `A` as the *server's* 12-bit compass, which
+ * is 180° off; the bridge probe could not see it — every bridge mesh in the
+ * corpus has its long axis at 0.0° in the NIF, where a mirror and a rotation
+ * agree — `notes/heading-convention.py`.)
  *
- * The plane is mirrored into the scene (`+y` -> `+Z`), which reverses the
- * rotation's sense: the scene yaw is `-A` about +Y, which sends the mesh's
- * own `+y` (its forward) to `+Z` at `A = 0` and to `-X` (west) at `A = 90`,
- * as the client places it. */
+ * The scene's `(x, y)` plane becomes `(X, Z)` unchanged, which turns that
+ * counter-clockwise sense into a *negative* yaw about +Y: `-A` sends the
+ * mesh's `+y` to the north side at `A = 0` and to the east at `A = 90`, as
+ * the client places it. */
 export function headingYaw(angle: number): number {
 	const yaw = -(((angle % 360) * Math.PI * 2) / 360);
 	// -0 is a different value to Object.is; callers compare yaws exactly.

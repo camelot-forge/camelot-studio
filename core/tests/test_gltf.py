@@ -118,10 +118,13 @@ class TestExportSynthetic:
             sidecar = json.load(fh)
         assert sidecar["meshes"][0]["name"] == "Mesh"
 
-    def test_world_object_takes_the_world_axis_reflection(self, nif_path, tmp_path):
-        """A zone object must land in the client's world frame: the exported
-        axis node is the *reflection* (`mat4_world_axis`), while a figure still
-        gets the rotation — a mirror here flipped every object in `/world`."""
+    def test_world_object_takes_the_same_axis_as_a_figure(self, nif_path, tmp_path):
+        """A zone object and a figure land in the scene the same way now.
+
+        Measured 2026-10-12: with a *reflection* here every building in
+        `/world` stood 180 deg round (the user's aerial comparison, and the
+        server's `door` rows landing 357 units off the mesh's door nodes).
+        """
         from camelot.nifutil import mat4_axis, mat4_world_axis
 
         def axis_node(prefix: str) -> list[float]:
@@ -136,7 +139,7 @@ class TestExportSynthetic:
         world = str(tmp_path / "world")
         export_gltf(nif_path, world, verbose=False, world_object=True)
         assert axis_node(world) == flatten_colmajor(mat4_world_axis())
-        assert axis_node(world) != flatten_colmajor(mat4_axis())
+        assert axis_node(world) == flatten_colmajor(mat4_axis())
 
         figure = str(tmp_path / "figure")
         export_gltf(nif_path, figure, verbose=False)

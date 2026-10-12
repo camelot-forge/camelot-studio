@@ -126,35 +126,35 @@ def version_bits(data) -> tuple[int, int]:
 # Axis conversion matrix: NIF (Z-up, every DAoC era) -> glTF (Y-up).
 # -90 deg about X: (x, y, z) -> (x, z, -y).
 #
-# This is a *rotation*, i.e. it reads the NIF numbers as a right-handed
-# frame — true for a figure on its own, but the client's *world* frame is
-# left-handed (`WORLD_AXIS_CONVERSION` below). Figures keep this conversion
-# until the character pipeline is re-verified against it.
+# Both pipelines use it, and that is measured, not a style choice. The
+# client's zone frame is `+x` east, **`+y` south**, `+z` up (the server's own
+# compass: `Point2D.GetPointFromHeading` puts heading 0 at `+y`, `where.cs`
+# calls it "South", 1024 at `-x` "West"), so the client's world is
+# left-handed while a NIF is right-handed — and the client draws a NIF into
+# it with this rotation (a proper rotation, determinant +1: three.js then
+# keeps the winding and no front-face flip is involved).
+#
+# Measured 2026-10-12 against the server's own rows, after `/world` drew every
+# building 180 deg round (user, aerial `/world` vs aerial in game: the keep's
+# gatehouse pointed south where the game points it north):
+# - the keep's two door nodes land within **15 units** of the server's two
+#   `door` rows under this rotation (Δy +15.6 and -14.3, `Δx -0.7 and +11.5`),
+#   and **357 units** off under the reflection (`notes/keep-door-nodes.py`);
+# - the two `Albion Banner` worldobjects flank the north gate (1315 units
+#   north, facing north) and the road arrives there, so the gatehouse must
+#   land north: it does under this rotation.
 AXIS_CONVERSION = (
     (1.0, 0.0, 0.0),
     (0.0, 0.0, 1.0),
     (0.0, -1.0, 0.0),
 )
 
-# Axis conversion matrix for the client's *world*: NIF (Z-up, left-handed)
-# -> glTF (Y-up, right-handed, `(x, y, z) -> (x, z, y)`).
-#
-# The client's zone-local frame is `+x` east, **`+y` south**, `+z` up —
-# measured on the engine's own compass, not guessed: the server's
-# `Point2D.GetPointFromHeading` puts heading 0 at `+y` and 1024 at `-x`, and
-# its `where.cs`/`yell.cs` translate heading 0 to "South", 1024 to "West",
-# 2048 to "North", 3072 to "East" (OpenDAoC, read 2026-10-11). `x cross y`
-# is then `-z` (down), so the frame is left-handed and a *rotation* into a
-# right-handed renderer mirrors the world: the viewer showed a north-up map
-# flipped (rivers, roads, the keep's gate all on the wrong side of the
-# screenshot). A faithful conversion keeps `x` and `up` and flips `y` — a
-# reflection (determinant -1), which renderers that honour winding (three.js
-# flips front faces on negative-determinant nodes) draw exactly.
-WORLD_AXIS_CONVERSION = (
-    (1.0, 0.0, 0.0),
-    (0.0, 0.0, 1.0),
-    (0.0, 1.0, 0.0),
-)
+# The world pipeline uses the same conversion as the figures. It briefly had
+# its own reflection (`(x, y, z) -> (x, z, y)`, determinant -1, 2026-10-11)
+# while the *map* was being fixed: that corrected `zoneToScene` (north-up
+# maps) but turned every zone object round — the entry above is the measured
+# one, and the two pipelines are one rule again.
+WORLD_AXIS_CONVERSION = AXIS_CONVERSION
 
 
 def vec3(v) -> tuple[float, float, float]:
@@ -232,7 +232,7 @@ def mat4_axis() -> list[list[float]]:
 
 
 def mat4_world_axis() -> list[list[float]]:
-    """The world pipeline's axis conversion (reflection, see WORLD_AXIS_CONVERSION)."""
+    """The world pipeline's axis conversion (the same rotation as the figures)."""
     return _mat4_from3(WORLD_AXIS_CONVERSION)
 
 
