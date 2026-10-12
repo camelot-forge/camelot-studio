@@ -12,7 +12,10 @@ The ops are zone-local, as `fixtures.csv` is:
 - `move` writes `X` and `Y`, and `Z` only for a row that does **not** carry
   `Ground = 1`: the client drops a ground row on the terrain whatever its `Z`
   says (W-3, measured in game 2026-10-12), so the editor never invents one;
-- `rotate` writes `A` (degrees), `scale` writes `Scale` (percent);
+- `rotate` writes `A` (degrees), and `X`/`Y` when the op names them: the
+  editor's rotate gesture turns the whole selection about its own pivot, so a
+  fixture *moves* as it turns and the rows it carries must ride that frame;
+  `scale` writes `Scale` (percent);
 - `add` builds the whole row from the zone's own catalog (`nifs.csv`) — the
   catalogue's radius and ground flag are the client's own hints. A
   ground-placed entry is written `z = 0, Ground = 1` (the client's own
@@ -40,18 +43,23 @@ its original values, a removal's is the row re-inserted whole. A patch is
 server-specific by nature (it names a row by the server's own key), and it is
 it is never silent: without `--db-write` every row op is refused.
 
-**The mouse grammar (the UX pass of 2026-10-12).** Left is selection and only
-selection: a click picks, a drag draws a box that takes every fixture and every
-server row whose own point falls inside it (what is drawn is what is caught),
-shift adds. The **middle button** is the edit gesture — move, shift+middle
-rotate (15°, about the selection's own pivot), alt+middle lift, ctrl+middle
-scale — because the left button was doing three jobs at once. Right orbits,
-shift+right pans, the wheel zooms, F focuses, Del removes, Escape lets go. A
-gesture that ends where it started is **not** an edit and journals nothing.
-The editor lives in its own floating, draggable panel over the scene (the
-viewer stays a viewer), and the panel reads like a repository: the publish
-button carries the count of unpublished changes, and the session, the written
-rows and the *client's own installed half* are named separately.
+**The mouse grammar (the UX pass of 2026-10-12, its second cut).** Left is
+selection first: a click picks, a box takes every fixture and every server row
+whose own point falls inside it (what is drawn is what is caught), ctrl adds,
+shift+click toggles. The **mode buttons** (select, move, rotate, scale, add)
+arm the left button *on the selection*: a drag that starts on it applies the
+mode, a drag anywhere else is still a box. The **middle button** applies the
+same gesture from anywhere — move, shift+middle rotate (15°, about the
+selection's own pivot), alt+middle lift (16), ctrl+middle scale (5%). One
+gesture is one transform, computed from the items' own origins and quantized
+once (a snapped *delta*, never each item's position), so a selection keeps its
+shape exactly; the daemon hears one op per changed item, and a gesture that ends
+where it started journals nothing. Right orbits, shift+right or shift+left
+pans, the wheel zooms, F focuses, Del removes, Escape lets go. The editor lives
+in its own floating, draggable panel over the scene (the viewer stays a viewer),
+and the panel reads like a repository: the publish button carries the count of
+unpublished changes, and the session, the written rows and the *client's own
+installed half* are named separately.
 """
 from __future__ import annotations
 
@@ -422,7 +430,14 @@ class Editor:
             if op.get("angle") is None:
                 raise EditorError("rotate needs angle")
             values["A"] = _number_text(op["angle"])
-            expect = self._expect(op, value_at, ("A",))
+            # A turn about the selection's own pivot moves the fixture as it
+            # turns it: an op that names the position it landed on is written
+            # with it, or the journal would keep the old one and the rows it
+            # carries would turn about a place the fixture no longer stands.
+            for field, column in (("x", "X"), ("y", "Y")):
+                if op.get(field) is not None:
+                    values[column] = _number_text(op[field])
+            expect = self._expect(op, value_at, tuple(values))
         elif kind == "scale":
             if op.get("scale") is None:
                 raise EditorError("scale needs scale")

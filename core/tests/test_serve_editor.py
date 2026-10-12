@@ -296,6 +296,27 @@ def test_a_rotation_carries_the_rows_around_the_fixture(editing, tmp_path, monke
     assert values["Heading"] == "1024"       # a quarter turn of 4096
 
 
+def test_a_rotation_may_name_the_position_it_orbited(editing, tmp_path, monkeypatch):
+    """The editor's rotate gesture turns the whole selection about its own
+    pivot: the fixture *moves* as it turns. An op that names the position it
+    landed on is written with it — and the rows it carries ride that frame, or
+    a turned keep's doors would turn about a place it no longer stands."""
+    fake = FakeConnection([[door_row(Y=TOP + 19660 - 500, Heading=0)]])
+    monkeypatch.setattr(serverrows, "connect", lambda _connection: fake)
+    client = db_client(editing, tmp_path)
+    response = edit(client, {"kind": "rotate", "id": 1, "x": 20660, "y": 20160,
+                             "angle": 90, "rows": [{"table": "door", "key": "d1"}]})
+    assert response.status_code == 200, response.json()
+    fixture = response.json()["fixture"]
+    assert (fixture["x"], fixture["y"], fixture["angle"]) == (20660, 20160, 90)
+    values = response.json()["patches"][0]["values"]
+    # the door stood 500 north of the fixture: a quarter turn puts it 500 east
+    # of where the fixture now stands, and its heading turned with it
+    assert values["X"] == str(LEFT + 20660 + 500)
+    assert values["Y"] == str(TOP + 20160)
+    assert values["Heading"] == "1024"
+
+
 def test_a_row_move_is_zone_local_and_keeps_its_height(editing, tmp_path, monkeypatch):
     """A row op is zone-local like every other op — the viewer holds the rows
     in the fixtures' own space — while the row itself is written in the
