@@ -616,7 +616,14 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   and `adjacency.csv`. `dat` and `csv` carry identical bytes in the zones
   measured; **the client reads `csvNNN.mpk`** for the CSV entries (measured
   2026-10-11, W-1: a change in `dat` alone is ignored, the same change in
-  `csv` alone is visible), so a map mod patches `csv`.
+  `csv` alone is visible), so a map mod patches `csv`. A reader that means to
+  show what the game draws must do the same — **per entry, `csv` first and
+  `dat` as the fallback** for the entries only it has (`terrain.pcx`,
+  `offset.pcx`, `densemap`/`grassmap`/`shademap`/`shadow.pcx`); reading `dat`
+  first served an installed pack's pristine bytes (measured 2026-10-12, the
+  W-3 probe rows). An archive the client ships **empty**
+  (`ZONE009/csv009.mpk` is 0 bytes) reads as absent, not as an error — the
+  client cannot be reading it either.
 - **`terrain.pcx` / `offset.pcx`**: 8-bit, one-plane, RLE PCX, 256×256 for a
   65536-unit zone. The ground height is
   `terrain[y][x] × scalefactor + offset[y][x] × offsetfactor` — factors per

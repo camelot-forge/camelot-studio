@@ -14,10 +14,12 @@ Everything here is read-only, and every rule is measured rather than assumed
   on the type. An outdoor zone ships `terrain.pcx` + `offset.pcx` +
   `fixtures.csv` + `nifs.csv` + `bound.csv` + `sector.dat` + `zonejump.csv`;
   a dungeon ships `dungeon.chunk/.place/.prop`; a city `city.csv` +
-  `adjacency.csv`. `dat` and `csv` carry the same data in the zones measured,
+  adjacency.csv`. `dat` and `csv` carry the same data in the zones measured,
   and **the client reads `csvNNN.mpk`** (measured 2026-10-11, W-1); reads go
-  through `data_entry`, which takes `dat` and falls back to `csv` (reads do
-  not depend on the answer — writes do, and a map mod writes `csv`);
+  through `data_entry`, which takes `csv` and falls back to `dat` — the same
+  preference, so that a reader sees what an installed map mod changed (the
+  reverse order served the pristine `dat` bytes and hid a pack, measured
+  2026-10-12 on the W-3 probe rows);
 - a zone's folder may live under several roots: `zones/zoneNNN` (the classic
   tree), `frontiers/zones/zoneNNN` (zone163+), and the tutorial/housing trees;
 - a zone's ground *texture* is composed from up to six layers per patch (the
@@ -424,11 +426,19 @@ class Zone:
         return clientfs.resolve(folder, f"{logical}{self.info.zone_id:03d}.mpk")
 
     def entries(self, logical: str) -> list[str]:
-        """The entry names inside *logical*'s archive (lower-cased), [] if absent."""
+        """The entry names inside *logical*'s archive (lower-cased), [] if absent.
+
+        An archive the client ships empty or unreadable (`ZONE009/csv009.mpk`
+        is 0 bytes) reads as empty rather than raising: the client cannot be
+        reading it either, so callers fall back the way it does.
+        """
         path = self.archive(logical)
         if path is None:
             return []
-        archive = MpakArchive(path)
+        try:
+            archive = MpakArchive(path)
+        except MpakError:
+            return []
         try:
             return list(archive.entries)
         finally:
@@ -440,7 +450,10 @@ class Zone:
         if path is None:
             raise ZoneError(f"{self.name}: the client has no {logical} archive "
                             f"(zone{self.info.zone_id:03d})")
-        archive = MpakArchive(path)
+        try:
+            archive = MpakArchive(path)
+        except MpakError as error:
+            raise ZoneError(f"{self.name}: {error}") from error
         try:
             return archive.read(name)
         except MpakError as error:
@@ -449,18 +462,19 @@ class Zone:
             archive.close()
 
     def data_entry(self, name: str) -> bytes:
-        """One data entry, from `dat` and falling back to `csv`.
+        """One data entry, from `csv` and falling back to `dat`.
 
-        The two archives carry the same bytes in the zones measured; which one
-        the client prefers is the W-1 experiment. Reads do not depend on the
-        answer; writes will.
+        `csv` first, because that is the archive the client reads (W-1), and a
+        map mod writes `csv` — taking `dat` first served the pristine copy and
+        hid an installed pack. `dat` still answers: it carries the entries
+        `csv` does not (the `.pcx` maps), and some zone types ship it alone.
         """
-        if self.archive("dat") is not None:
+        if self.archive("csv") is not None:
             try:
-                return self.entry("dat", name)
+                return self.entry("csv", name)
             except ZoneError:
-                pass
-        return self.entry("csv", name)
+                pass        # an entry only `dat` has, or the empty csv009.mpk
+        return self.entry("dat", name)
 
     # -- the index's own kind, or the archives' ---------------------------------
 

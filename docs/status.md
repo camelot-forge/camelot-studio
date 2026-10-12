@@ -223,7 +223,13 @@ pebbles and grass blades — with the
 bake kept as the fallback for zones that ship no layers. Fixtures honour `Z`
 as authored and drop `Z = 0` + `Ground = 1`
 rows on the terrain; whether the client honours a non-zero `Z` under
-`Ground` is the **W-3** experiment. Verification: `core/tests/test_serve_world.py` (12 unit tests +
+`Ground` is the **W-3** experiment (its probe pack is installed, the in-game
+read is pending). The world reader mirrors the client's own archive
+preference since 2026-10-12 — `csv` first per entry, `dat` as the fallback
+(`Zone.data_entry`) — because taking `dat` first served an installed pack's
+pristine bytes and left its rows invisible; an archive the client ships empty
+(`ZONE009/csv009.mpk` is 0 bytes) reads as absent rather than as an error.
+Verification: `core/tests/test_serve_world.py` (12 unit tests +
 6 corpus tests) and `web/src/lib/world/{terrain,ground}.test.ts` (sampling
 vectors generated from the Python; heading, placement, triangulation and the
 composition model pinned).

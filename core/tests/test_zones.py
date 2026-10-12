@@ -250,6 +250,20 @@ def test_the_data_entry_falls_back_to_the_csv_archive(world):
     assert zone.data_entry("fixtures.csv") == FIXTURES
 
 
+def test_the_data_entry_prefers_the_csv_archive(world):
+    """The client reads `csv` (W-1), so a reader must: taking `dat` first
+    served the pristine bytes and left an installed map mod's rows invisible
+    (measured 2026-10-12, the W-3 probe rows installed into a real client)."""
+    patched = FIXTURES + b"3,11,Pine,30000,30000,0,0,100,0,0,0,1,0,0,3\r\n"
+    write_mpak(world + "/zones/zone000/csv000.mpk", "csv000.mpk", [
+        ("fixtures.csv", patched),
+    ])
+    zone = zones.WorldIndex(world).open(0)
+    assert zone.data_entry("fixtures.csv") == patched
+    assert [fixture.id for fixture in zone.fixtures()] == [1, 2, 3]
+    assert zone.data_entry("terrain.pcx") == _pcx(TERRAIN)   # `dat`-only entry
+
+
 def test_fixtures_are_typed_and_keep_their_row(world):
     fixtures = zones.WorldIndex(world).open(0).fixtures()
     assert [f.id for f in fixtures] == [1, 2]
