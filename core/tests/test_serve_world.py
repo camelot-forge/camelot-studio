@@ -4,6 +4,7 @@ Unit tests run against the synthetic client `test_zones.py` builds (shared
 through its `world` fixture helpers); the corpus tests at the end talk to the
 real client when `DAOC_CLIENT` is set, and are skipped otherwise.
 """
+import json
 import os
 import struct
 
@@ -169,6 +170,114 @@ def test_a_placeholder_zone_reports_a_warning_not_an_error(tmp_path):
     zone = response.json()
     assert zone["fixtures"] == []
     assert any("fixtures" in warning for warning in zone["warnings"])
+
+
+# --- the server's rows (read-only, spec §11 B1) -------------------------------
+
+def spawns_client(root, **config_kwargs) -> TestClient:
+    return TestClient(
+        create_app(ServeConfig(root=root, watch=False, open_browser=False, **config_kwargs)),
+        base_url="http://127.0.0.1",
+    )
+
+
+def test_a_zone_without_server_rows_says_so_and_still_answers(world):  # noqa: F811
+    """The DB layer is optional by design (spec §5): with no snapshot and no
+    live config the payload names the flag to start with, and the client's
+    world still renders as before."""
+    response = spawns_client(world).get("/api/v1/world/zone/0/spawns")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "none"
+    assert payload["counts"] == {"mob": 0, "worldobject": 0, "door": 0,
+                                 "path": 0, "pathpoints": 0}
+    assert any("--server-rows" in warning for warning in payload["warnings"])
+
+
+def test_the_spawns_route_reads_a_snapshot_in_zone_local_coordinates(tmp_path, world):  # noqa: F811
+    """Cotswold's rectangle is (16384, 24576) + 65536: a row at world
+    (16500, 24800) is local (116, 224) — the same space as the fixtures."""
+    snapshot = tmp_path / "rows.json"
+    snapshot.write_text(json.dumps({
+        "schema": "camelot.server-rows/1",
+        "source": {"kind": "mysql", "host": "localhost", "database": "opendaoc"},
+        "rows": {
+            "mob": [
+                {"Mob_ID": "m1", "Name": "a boar", "X": 16500, "Y": 24800,
+                 "Z": 100, "Region": 1, "Level": 3, "Model": 111, "Size": 40,
+                 "Heading": 2048, "PathID": "FarmPatrol"},
+                {"Mob_ID": "m2", "Name": "elsewhere", "X": 1, "Y": 1, "Z": 0},
+            ],
+            "worldobject": [
+                {"WorldObject_ID": "o1", "Name": "banner", "X": 16400,
+                 "Y": 24576, "Z": 0, "Model": 1315, "Heading": 0},
+            ],
+            "door": [
+                {"Door_ID": "d1", "Name": "gate", "Type": 0, "X": 17000,
+                 "Y": 25000, "Z": 50, "Heading": 1024},
+            ],
+            "path": [{"Path_ID": "p1", "PathID": "FarmPatrol", "PathType": 3}],
+            "pathpoints": [
+                {"PathPoints_ID": "pp1", "PathID": "FarmPatrol", "Step": 1,
+                 "X": 16000, "Y": 24000, "Z": 10, "MaxSpeed": 150, "WaitTime": 0},
+                {"PathPoints_ID": "pp2", "PathID": "FarmPatrol", "Step": 2,
+                 "X": 17000, "Y": 25000, "Z": 10, "MaxSpeed": 150, "WaitTime": 300},
+            ],
+        },
+    }))
+    payload = spawns_client(world, server_rows=snapshot).get(
+        "/api/v1/world/zone/0/spawns").json()
+    assert payload["source"].startswith("snapshot ")
+    assert payload["counts"] == {"mob": 1, "worldobject": 1, "door": 1,
+                                 "path": 1, "pathpoints": 2}
+    mob = payload["mobs"][0]
+    assert (mob["name"], mob["x"], mob["y"], mob["z"]) == ("a boar", 116, 224, 100)
+    assert mob["path"] == "FarmPatrol"
+    assert payload["objects"][0]["y"] == 0
+    assert payload["doors"][0]["x"] == 616  # 17000 - 16384
+    path = payload["paths"][0]
+    assert path["name"] == "FarmPatrol" and path["path_type"] == 3
+    # step 1 lies outside the rectangle (16000 < 16384): the patrol is kept
+    # whole rather than clipped at a guessed border
+    assert [point["step"] for point in path["points"]] == [1, 2]
+    assert path["points"][0]["x"] == -384
+    assert path["points"][1]["wait"] == 300
+
+
+def test_a_snapshot_from_a_future_schema_warns_instead_of_failing(tmp_path, world):  # noqa: F811
+    snapshot = tmp_path / "rows.json"
+    snapshot.write_text(json.dumps({"schema": "camelot.server-rows/99", "rows": {}}))
+    response = spawns_client(world, server_rows=snapshot).get("/api/v1/world/zone/0/spawns")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["counts"]["mob"] == 0
+    assert any("camelot.server-rows/99" in warning for warning in payload["warnings"])
+
+
+def test_the_live_path_asks_for_the_zone_rectangle(monkeypatch, tmp_path, world):  # noqa: F811
+    """`--db-config` reads the operator's MySQL through the server's own
+    config; the reader is injected, so the test runs without a database and
+    checks the rectangle it hands over is the zone's."""
+    from camelot import serverrows
+
+    config = tmp_path / "serverconfig.xml"
+    config.write_text(
+        "<DBConnectionString>Server=localhost;Port=3307;Database=opendaoc;"
+        "UserId=root;Password=x</DBConnectionString>")
+    seen = {}
+
+    def fake(connect_, x, y, width, height):
+        seen["rect"] = (x, y, width, height)
+        return {"mob": [{"Mob_ID": "m1", "Name": "a boar", "X": x + 10,
+                         "Y": y + 20, "Z": 0}],
+                "worldobject": [], "door": [], "path": [], "pathpoints": []}
+
+    monkeypatch.setattr(serverrows, "read_rows_in_rect", fake)
+    payload = spawns_client(world, db_config=config).get(
+        "/api/v1/world/zone/0/spawns").json()
+    assert seen["rect"] == (16384, 24576, 65536, 65536)
+    assert payload["source"].startswith("mysql ")
+    assert payload["mobs"][0]["x"] == 10
 
 
 # --- the terrain binary -------------------------------------------------------

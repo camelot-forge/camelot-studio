@@ -29,6 +29,7 @@ import json
 import os
 import struct
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from .. import clientfs, nifutil
+from .. import clientfs, nifutil, serverrows
 from ..dxt import dds_rgba
 from ..gamedata import SlotTexture
 from ..glb import pack_glb
@@ -55,6 +56,12 @@ from .models import (
     WorldJump,
     WorldPatches,
     WorldRegionSummary,
+    WorldSpawnDoor,
+    WorldSpawnMob,
+    WorldSpawnObject,
+    WorldSpawnPath,
+    WorldSpawnPoint,
+    WorldSpawns,
     WorldTerrain,
     WorldTextureLayer,
     WorldWater,
@@ -127,6 +134,80 @@ class World:
                         found.add(int(low[4:]))
             self._available = found
         return self._available
+
+
+# --- the server's rows --------------------------------------------------------
+
+class ServerRows:
+    """The server's own rows per zone — snapshot, or live MySQL (spec §5).
+
+    The viewer must work without a database: `--server-rows` reads an exported
+    snapshot and is pure file I/O; `--db-config` reads the operator's live
+    MySQL through the server's own config, TTL-cached (a spawn moved in game
+    appears on the next zone open, and panning does not re-query 2,500 rows
+    per frame). With neither, the payload says so instead of pretending the
+    world is empty.
+    """
+
+    #: How long a live zone's rows are reused.
+    LIVE_TTL = 15.0
+
+    def __init__(self, config: ServeConfig):
+        self.config = config
+        self._snapshot: serverrows.Snapshot | None = None
+        self._snapshot_key: tuple[str, float] | None = None
+        self._connection: dict[str, Any] | None = None
+        self._live: dict[int, tuple[float, dict[str, list[dict]]]] = {}
+
+    def source(self) -> str:
+        if self.config.server_rows is not None:
+            return f"snapshot {self.config.server_rows}"
+        if self.config.db_config is not None:
+            return f"mysql {self.config.db_config}"
+        return "none"
+
+    def for_zone(self, zone: Zone) -> tuple[dict[str, list[dict]], list[str]]:
+        """The zone's rows and any warning that explains what is missing."""
+        left, top, width, height = zone.info.world_rect
+        if self.config.server_rows is not None:
+            try:
+                snapshot = self._load_snapshot()
+            except serverrows.ServerRowsError as error:
+                return {}, [str(error)]
+            return snapshot.in_rect(left, top, width, height), []
+        if self.config.db_config is not None:
+            cached = self._live.get(zone.info.zone_id)
+            now = time.monotonic()
+            if cached is not None and now - cached[0] < self.LIVE_TTL:
+                return cached[1], []
+            try:
+                rows = self._live_rows(zone)
+            except serverrows.mysql_errors() as error:
+                # pymysql missing, DB down, bad row: the viewer says what
+                # broke and still draws the client's world.
+                return {}, [f"live database: {error}"]
+            self._live[zone.info.zone_id] = (now, rows)
+            return rows, []
+        return {}, [
+            ("no server rows configured: start with --server-rows <snapshot> "
+             "or --db-config <serverconfig.xml>")]
+
+    def _load_snapshot(self) -> serverrows.Snapshot:
+        """The snapshot on disk, re-read when its mtime moves (an operator
+        exporting again should not have to restart the daemon)."""
+        path = str(self.config.server_rows)
+        key = (path, _mtime(path))
+        if self._snapshot is None or self._snapshot_key != key:
+            self._snapshot = serverrows.Snapshot.load(path)
+            self._snapshot_key = key
+        return self._snapshot
+
+    def _live_rows(self, zone: Zone) -> dict[str, list[dict]]:
+        if self._connection is None:
+            self._connection = serverrows.parse_server_config(str(self.config.db_config))
+        left, top, width, height = zone.info.world_rect
+        return serverrows.read_rows_in_rect(
+            lambda: serverrows.connect(self._connection), left, top, width, height)
 
 
 # --- payloads -----------------------------------------------------------------
@@ -269,6 +350,73 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
         patches=_patches(world, zone),
         archives=archives,
         warnings=warnings,
+    )
+
+
+def spawns_payload(server_rows: ServerRows, world: World, zone_id: int) -> WorldSpawns:
+    """The zone's server rows, in zone-local coordinates like the fixtures."""
+    zone = world.zone(zone_id)
+    left, top, _width, _height = zone.info.world_rect
+    rows, warnings = server_rows.for_zone(zone)
+
+    def local(value: float, origin: float) -> float:
+        return float(value) - float(origin)
+
+    mobs = [
+        WorldSpawnMob(
+            id=str(row.get("Mob_ID", "")), class_type=row.get("ClassType") or "",
+            name=row.get("Name") or "", suffix=row.get("Suffix") or "",
+            guild=row.get("Guild") or "",
+            x=local(row["X"], left), y=local(row["Y"], top), z=row["Z"],
+            heading=row.get("Heading", 0), level=row.get("Level", 0),
+            realm=row.get("Realm", 0), model=row.get("Model", 0),
+            size=row.get("Size", 0), gender=row.get("Gender", 0),
+            flags=row.get("Flags", 0), aggro_level=row.get("AggroLevel", 0),
+            aggro_range=row.get("AggroRange", 0),
+            path=row.get("PathID") or None, npc_template=row.get("NPCTemplateID", 0),
+        )
+        for row in rows.get("mob", [])
+    ]
+    objects = [
+        WorldSpawnObject(
+            id=str(row.get("WorldObject_ID", "")), class_type=row.get("ClassType") or "",
+            name=row.get("Name") or "",
+            x=local(row["X"], left), y=local(row["Y"], top), z=row["Z"],
+            heading=row.get("Heading", 0), model=row.get("Model", 0),
+            emblem=row.get("Emblem", 0), realm=row.get("Realm", 0),
+        )
+        for row in rows.get("worldobject", [])
+    ]
+    doors = [
+        WorldSpawnDoor(
+            id=str(row.get("Door_ID", "")), name=row.get("Name") or "",
+            type=row.get("Type", 0),
+            x=local(row["X"], left), y=local(row["Y"], top), z=row["Z"],
+            heading=row.get("Heading", 0), level=row.get("Level", 0),
+            realm=row.get("Realm", 0), is_postern=bool(row.get("IsPostern", 0)),
+            locked=row.get("Locked", 0),
+        )
+        for row in rows.get("door", [])
+    ]
+
+    points_by_path: dict[str, list[WorldSpawnPoint]] = {}
+    for row in rows.get("pathpoints", []):
+        points_by_path.setdefault(row["PathID"], []).append(WorldSpawnPoint(
+            step=row.get("Step", 0), x=local(row["X"], left), y=local(row["Y"], top),
+            z=row["Z"], wait=row.get("WaitTime", 0), speed=row.get("MaxSpeed", 0)))
+    types = {row["PathID"]: row.get("PathType", 0) for row in rows.get("path", [])}
+    paths = [
+        WorldSpawnPath(name=name, path_type=types.get(name, 0),
+                       points=sorted(points, key=lambda point: point.step))
+        for name, points in sorted(points_by_path.items())
+    ]
+
+    return WorldSpawns(
+        source=server_rows.source(),
+        counts={"mob": len(mobs), "worldobject": len(objects), "door": len(doors),
+                "path": len(paths),
+                "pathpoints": sum(len(path.points) for path in paths)},
+        mobs=mobs, objects=objects, doors=doors, paths=paths, warnings=warnings,
     )
 
 
@@ -461,6 +609,7 @@ def _http(error: WorldError) -> HTTPException:
 def build_world_router(config: ServeConfig) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
     world = World(config)
+    server_rows = ServerRows(config)
 
     @router.get("/world/index", response_model=WorldIndexPayload)
     def world_index() -> WorldIndexPayload:
@@ -478,6 +627,18 @@ def build_world_router(config: ServeConfig) -> APIRouter:
         with a `warning` rather than failing the zone."""
         try:
             return zone_payload(world, zone_id)
+        except WorldUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except WorldError as error:
+            raise _http(error) from error
+
+    @router.get("/world/zone/{zone_id}/spawns", response_model=WorldSpawns)
+    def world_spawns(zone_id: int) -> WorldSpawns:
+        """The zone's server rows — mobs, statics, doors and patrols — from
+        the configured snapshot or live MySQL; read-only. Without either, the
+        payload says so and the client's world still renders."""
+        try:
+            return spawns_payload(server_rows, world, zone_id)
         except WorldUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
         except WorldError as error:

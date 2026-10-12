@@ -20,7 +20,8 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot mod build --dir DIR --client DIR --out P.tar.gz [--creatures N] [--used-models F]` | assemble a **mod pack** from an authoring directory (loose files, archive entries, table row ops, binary patch specs) |
 | `camelot client install P.tar.gz` / `uninstall MOD` / `status` / `verify` / `free-ids` | apply, remove, inspect and read back a pack's client half; list the model ids a mod may use |
 | `camelot client patch [--max-id N] [--restore]` | raise the client's model-id ceiling in place (unmanaged clients; `.orig` backup, byte-exact restore) |
-| `camelot serve [--root DIR] [--port N] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn) |
+| `camelot server export --out F [--config C\|--dsn D]` | export the server's world rows (`mob`/`worldobject`/`door`/`path`) to a snapshot the viewer reads; needs `pymysql` (extra `mysql`) |
+| `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only |
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
 client NIFs parsed (the two remaining are 10.1.0.0 housing files failing
@@ -472,10 +473,12 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
    (the world frame, the ground layer composition, the patch seams).
    **The agreed order for what follows** (operator + agent, 2026-10-11;
    the *why* and costs are the workspace spec's §11):
-   **(a)** the `Z` vs `Ground` experiment (W-3) — it fixes the editor's own
-   placement rule; **(b)** the **spawn layer, read-only** (a snapshot JSON or
-   the live MySQL: `mob`, `worldobject`, `door`, `path`/`pathpoints`) — value
-   for an operator now, and the DB plumbing for spawn editing later;
+   **(a)** the `Z` vs `Ground` experiment (W-3) — **done 2026-10-12**
+   (`Ground = 1` wins, measured in game); **(b)** the **spawn layer,
+   read-only** — **done 2026-10-12**: `/world` draws the server's `mob`,
+   `worldobject`, `door` and `path` rows from a snapshot (`--server-rows`) or
+   the live MySQL (`--db-config`), 2,544 mobs / 35 statics / 11 doors / 67
+   patrols in Camelot Hills (counts and shots in the workspace report);
    **(c)** the editor (gizmos, snap, add/remove, the undo journal, the
    authoring directory) **plus the publish path**; **(d)** the sky, fog and
    the day/night time (a slider first — the server owns the real clock,
@@ -509,4 +512,10 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 .venv/bin/camelot client install mymod.tar.gz --client "$DAOC_CLIENT"
 .venv/bin/camelot client verify --client "$DAOC_CLIENT"
 .venv/bin/camelot client free-ids --client "$DAOC_CLIENT"
+# The server's own world rows (mob/worldobject/door/path) in /world: export
+# them once from the server's MySQL (needs pymysql: pip install '.[mysql]'),
+# then serve the snapshot — or read the live DB through the server's config.
+.venv/bin/camelot server export --config /path/to/serverconfig.xml \
+  --out server-rows.json
+.venv/bin/camelot serve --root "$DAOC_CLIENT" --server-rows server-rows.json
 ```

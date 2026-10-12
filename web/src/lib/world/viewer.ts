@@ -6,7 +6,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { api, type WorldFixture, type WorldTextureLayer, type WorldZone } from '$lib/api/client';
+import { api, type WorldFixture, type WorldSpawns, type WorldTextureLayer, type WorldZone } from '$lib/api/client';
 import { loadFromGlb, textureFromDds, tintColor, textureSide } from '$lib/gltf/load';
 import { groundMaterial, groundSlots, type GroundSlot } from './ground';
 import {
@@ -23,6 +23,24 @@ import {
 /** Bounds/water/jumps sit a hair above the ground so they never z-fight it. */
 const OVERLAY_LIFT = 8;
 
+/** The soft dot the row points are drawn with (one texture, shared). */
+function dotSprite(): THREE.Texture {
+	const size = 64;
+	const canvas = document.createElement('canvas');
+	canvas.width = size;
+	canvas.height = size;
+	const context = canvas.getContext('2d')!;
+	const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+	gradient.addColorStop(0, 'rgba(255,255,255,1)');
+	gradient.addColorStop(0.55, 'rgba(255,255,255,0.85)');
+	gradient.addColorStop(1, 'rgba(255,255,255,0)');
+	context.fillStyle = gradient;
+	context.fillRect(0, 0, size, size);
+	const texture = new THREE.CanvasTexture(canvas);
+	texture.needsUpdate = true;
+	return texture;
+}
+
 function pad(value: number): string {
 	return String(value).padStart(2, '0');
 }
@@ -30,6 +48,10 @@ function pad(value: number): string {
 export interface WorldToggles {
 	fixtures: boolean;
 	ground: boolean;
+	spawns: boolean;
+	statics: boolean;
+	doors: boolean;
+	patrols: boolean;
 	bounds: boolean;
 	water: boolean;
 	jumps: boolean;
@@ -60,10 +82,16 @@ export class WorldViewer {
 	private groups = {
 		ground: new THREE.Group(),
 		fixtures: new THREE.Group(),
+		spawns: new THREE.Group(),
+		statics: new THREE.Group(),
+		doors: new THREE.Group(),
+		patrols: new THREE.Group(),
 		bounds: new THREE.Group(),
 		water: new THREE.Group(),
 		jumps: new THREE.Group()
 	};
+	private dot: THREE.Texture;
+	private spawnCounts = { mobs: 0, statics: 0, doors: 0, patrols: 0, patrolPoints: 0 };
 	private meshCache = new Map<string, LoadedMesh>();
 	private groundTextures = new Map<string, THREE.Texture>();
 	private terrain: TerrainData | null = null;
@@ -77,6 +105,7 @@ export class WorldViewer {
 
 	constructor(canvas: HTMLCanvasElement) {
 		this.canvas = canvas;
+		this.dot = dotSprite();
 		this.scene.background = new THREE.Color(0x0f1418);
 		this.scene.fog = new THREE.Fog(0x0f1418, 60000, 160000);
 		this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -123,6 +152,10 @@ export class WorldViewer {
 	setToggles(toggles: WorldToggles): void {
 		this.groups.fixtures.visible = toggles.fixtures;
 		this.groups.ground.visible = toggles.ground;
+		this.groups.spawns.visible = toggles.spawns;
+		this.groups.statics.visible = toggles.statics;
+		this.groups.doors.visible = toggles.doors;
+		this.groups.patrols.visible = toggles.patrols;
 		this.groups.bounds.visible = toggles.bounds;
 		this.groups.water.visible = toggles.water;
 		this.groups.jumps.visible = toggles.jumps;
@@ -138,6 +171,11 @@ export class WorldViewer {
 			ground: this.groups.ground.children.length,
 			fixtureGroups: this.groups.fixtures.children.length,
 			fixtureInstances: instances,
+			mobs: this.spawnCounts.mobs,
+			statics: this.spawnCounts.statics,
+			doors: this.spawnCounts.doors,
+			patrols: this.spawnCounts.patrols,
+			patrolPoints: this.spawnCounts.patrolPoints,
 			bounds: this.groups.bounds.children.length,
 			water: this.groups.water.children.length,
 			jumps: this.groups.jumps.children.length,
@@ -226,6 +264,7 @@ export class WorldViewer {
 		this.marker.visible = false;
 		this.texturedPatches = 0;
 		this.composedPatches = 0;
+		this.spawnCounts = { mobs: 0, statics: 0, doors: 0, patrols: 0, patrolPoints: 0 };
 		for (const texture of this.groundTextures.values()) texture.dispose();
 		this.groundTextures.clear();
 		for (const group of Object.values(this.groups)) {
@@ -255,6 +294,61 @@ export class WorldViewer {
 		if (token !== this.token) return;
 		this.buildOverlays(zone, data);
 		this.frameZone(data);
+	}
+
+	/** The server's rows for the zone just loaded (spec §11 B1): mobs, statics,
+	 * doors and patrols, in the same zone-local space as the fixtures. Drawn as
+	 * points — a mob row is a position the server owns, not an actor with a
+	 * pose — and a patrol as its whole line (the daemon keeps it unclipped).
+	 * Call after `show`, which clears the groups. */
+	showSpawns(spawns: WorldSpawns): void {
+		this.spawnCounts.mobs = spawns.mobs.length;
+		this.spawnCounts.statics = spawns.objects.length;
+		this.spawnCounts.doors = spawns.doors.length;
+		const mobs = this.points(spawns.mobs, 0xe0b23e, 90);
+		if (mobs) this.groups.spawns.add(mobs);
+		const statics = this.points(spawns.objects, 0x64b5f6, 150);
+		if (statics) this.groups.statics.add(statics);
+		const doors = this.points(spawns.doors, 0xef5350, 220);
+		if (doors) this.groups.doors.add(doors);
+		for (const path of spawns.paths) {
+			if (path.points.length < 2) continue;
+			const line = new THREE.Line(
+				new THREE.BufferGeometry().setFromPoints(
+					path.points.map((point) => new THREE.Vector3(point.x, point.z, point.y))
+				),
+				new THREE.LineBasicMaterial({ color: 0x8fd07a })
+			);
+			line.name = `patrol-${path.name}`;
+			line.frustumCulled = false;
+			this.groups.patrols.add(line);
+			this.spawnCounts.patrols += 1;
+			this.spawnCounts.patrolPoints += path.points.length;
+		}
+	}
+
+	private points(rows: Array<{ x: number; y: number; z: number }>, color: number,
+		size: number): THREE.Points | null {
+		if (!rows.length) return null;
+		const geometry = new THREE.BufferGeometry();
+		geometry.setAttribute(
+			'position',
+			new THREE.Float32BufferAttribute(rows.flatMap((row) => [row.x, row.z, row.y]), 3)
+		);
+		const cloud = new THREE.Points(
+			geometry,
+			new THREE.PointsMaterial({
+				color,
+				size,
+				sizeAttenuation: true,
+				map: this.dot,
+				transparent: true,
+				alphaTest: 0.1,
+				depthWrite: false
+			})
+		);
+		cloud.frustumCulled = false; // the points span the zone
+		return cloud;
 	}
 
 	private buildGround(zoneId: number, zone: WorldZone, data: TerrainData, token: number): void {

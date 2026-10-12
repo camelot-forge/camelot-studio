@@ -42,9 +42,20 @@ class ServeConfig:
     token: str | None = None
     static_dir: Path | None = None
 
+    #: The server's world rows (spec §5): a snapshot exported from the
+    #: operator's MySQL (`camelot server export`), or the server's own
+    #: `serverconfig.xml` for a live read. Neither set: the viewer says so,
+    #: and the client's world still renders.
+    server_rows: Path | None = None
+    db_config: Path | None = None
+
     def __post_init__(self) -> None:
         self.root = Path(self.root).expanduser().resolve()
         self.cache_dir = Path(self.cache_dir).expanduser()
+        if self.server_rows is not None:
+            self.server_rows = Path(self.server_rows).expanduser()
+        if self.db_config is not None:
+            self.db_config = Path(self.db_config).expanduser()
 
     @property
     def is_loopback(self) -> bool:

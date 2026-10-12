@@ -214,6 +214,84 @@ export interface WorldZone {
 	warnings: string[];
 }
 
+// --- the server's rows (Phase 6.4's read half) --------------------------------
+// Field names are the server's own columns, lowercased (see the daemon's
+// `serverrows.py`): no client-side vocabulary is invented for them.
+
+export interface WorldSpawnMob {
+	id: string;
+	class_type: string;
+	name: string;
+	suffix: string;
+	guild: string;
+	x: number;
+	y: number;
+	z: number;
+	heading: number;
+	level: number;
+	realm: number;
+	model: number;
+	size: number;
+	gender: number;
+	flags: number;
+	aggro_level: number;
+	aggro_range: number;
+	path: string | null;
+	npc_template: number;
+}
+
+export interface WorldSpawnObject {
+	id: string;
+	class_type: string;
+	name: string;
+	x: number;
+	y: number;
+	z: number;
+	heading: number;
+	model: number;
+	emblem: number;
+	realm: number;
+}
+
+export interface WorldSpawnDoor {
+	id: string;
+	name: string;
+	type: number;
+	x: number;
+	y: number;
+	z: number;
+	heading: number;
+	level: number;
+	realm: number;
+	is_postern: boolean;
+	locked: number;
+}
+
+export interface WorldSpawnPoint {
+	step: number;
+	x: number;
+	y: number;
+	z: number;
+	wait: number;
+	speed: number;
+}
+
+export interface WorldSpawnPath {
+	name: string;
+	path_type: number;
+	points: WorldSpawnPoint[];
+}
+
+export interface WorldSpawns {
+	source: string;
+	counts: Record<string, number>;
+	mobs: WorldSpawnMob[];
+	objects: WorldSpawnObject[];
+	doors: WorldSpawnDoor[];
+	paths: WorldSpawnPath[];
+	warnings: string[];
+}
+
 const BASE_KEY = 'camelot.apiBase';
 
 function normalize(base: string): string {
@@ -332,6 +410,8 @@ export const api = {
 	worldIndex: (signal?: AbortSignal) => get<WorldIndex>('/world/index', signal),
 	worldZone: (zoneId: number, signal?: AbortSignal) =>
 		get<WorldZone>(`/world/zone/${zoneId}`, signal),
+	worldSpawns: (zoneId: number, signal?: AbortSignal) =>
+		get<WorldSpawns>(`/world/zone/${zoneId}/spawns`, signal),
 	worldTerrainUrl: (zoneId: number) => `${getApiBase()}/api/v1/world/zone/${zoneId}/terrain`,
 	worldMeshUrl: (zoneId: number, name: string) =>
 		`${getApiBase()}/api/v1/world/zone/${zoneId}/mesh/${encodeURIComponent(name)}`,

@@ -213,3 +213,95 @@ class WorldZoneInfo(BaseModel):
     patches: WorldPatches | None = None
     archives: dict[str, WorldArchive] = {}
     warnings: list[str] = []
+
+
+class WorldSpawnMob(BaseModel):
+    """One `mob` row inside the zone, in zone-local x/y/z.
+
+    The field names are the server's own columns, lowercased — `id` is
+    `Mob_ID`, `path` is `PathID` (the patrol a mob walks, when it does). No
+    vocabulary is invented, and `z` is the row's own: a flying mob stays in
+    the air rather than being snapped to a terrain the row never saw.
+    """
+
+    id: str
+    class_type: str = ""
+    name: str = ""
+    suffix: str = ""
+    guild: str = ""
+    x: float
+    y: float
+    z: float
+    heading: int = 0
+    level: int = 0
+    realm: int = 0
+    model: int = 0
+    size: int = 0
+    gender: int = 0
+    flags: int = 0
+    aggro_level: int = 0
+    aggro_range: int = 0
+    path: str | None = None
+    npc_template: int = 0
+
+
+class WorldSpawnObject(BaseModel):
+    """One `worldobject` row: a server static, `model` a client `objects.csv` id."""
+
+    id: str
+    class_type: str = ""
+    name: str = ""
+    x: float
+    y: float
+    z: float
+    heading: int = 0
+    model: int = 0
+    emblem: int = 0
+    realm: int = 0
+
+
+class WorldSpawnDoor(BaseModel):
+    """One `door` row — a gate is a *server* object, not a client fixture."""
+
+    id: str
+    name: str = ""
+    type: int = 0
+    x: float
+    y: float
+    z: float
+    heading: int = 0
+    level: int = 0
+    realm: int = 0
+    is_postern: bool = False
+    locked: int = 0
+
+
+class WorldSpawnPoint(BaseModel):
+    """One `pathpoints` row of a patrol, in zone-local x/y/z."""
+
+    step: int
+    x: float
+    y: float
+    z: float
+    wait: int = 0
+    speed: int = 0
+
+
+class WorldSpawnPath(BaseModel):
+    """A patrol, kept whole once one of its points is inside the zone."""
+
+    name: str
+    path_type: int = 0
+    points: list[WorldSpawnPoint] = []
+
+
+class WorldSpawns(BaseModel):
+    """The server's rows for one zone — the read half of 6.4 (spec §11 B1)."""
+
+    source: str
+    counts: dict[str, int] = {}
+    mobs: list[WorldSpawnMob] = []
+    objects: list[WorldSpawnObject] = []
+    doors: list[WorldSpawnDoor] = []
+    paths: list[WorldSpawnPath] = []
+    warnings: list[str] = []

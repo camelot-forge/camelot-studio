@@ -287,6 +287,28 @@ def _default_static_dir() -> str | None:
     return build if os.path.exists(os.path.join(build, "index.html")) else None
 
 
+def cmd_server(args) -> int:
+    from . import serverrows
+
+    if bool(args.config) == bool(args.dsn):
+        print("error: pass exactly one of --config or --dsn", file=sys.stderr)
+        return 2
+    try:
+        connection = (serverrows.parse_server_config(args.config) if args.config
+                      else serverrows.parse_dsn(args.dsn))
+        snapshot = serverrows.export_snapshot(connection, args.out)
+    except serverrows.ServerRowsError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    except serverrows.mysql_errors() as error:
+        # the driver's own errors (a dead socket, a bad row); ours above
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    counts = ", ".join(f"{name} {count:,}" for name, count in snapshot.counts().items())
+    print(f"wrote {args.out}: {counts}")
+    return 0
+
+
 def cmd_serve(args) -> int:
     from .serve.config import (
         DEFAULT_HOST,
@@ -326,6 +348,8 @@ def cmd_serve(args) -> int:
         open_browser=not args.no_open,
         watch=not args.no_watch,
         static_dir=static_dir,
+        server_rows=args.server_rows,
+        db_config=args.db_config,
     )
     app = create_app(cfg)
 
@@ -912,10 +936,23 @@ def main(argv=None) -> int:
     p.add_argument("--static", help="built viewer directory (default: web/build)")
     p.add_argument("--no-open", action="store_true", help="do not open the browser")
     p.add_argument("--no-watch", action="store_true", help="disable filesystem watching")
+    p.add_argument("--server-rows",
+                   help="snapshot exported from the server DB (camelot server export)")
+    p.add_argument("--db-config",
+                   help="the server's own serverconfig.xml: read the live MySQL")
     p.add_argument("--allow-remote", action="store_true",
                    help="allow binding a non-loopback host (unsafe)")
     p.add_argument("--log-level", default="info")
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("server",
+                       help="the server's world rows (mob/worldobject/door/path)")
+    sp = p.add_subparsers(dest="server_cmd", required=True)
+    ep = sp.add_parser("export", help="export the world rows to a snapshot the viewer reads")
+    ep.add_argument("--out", required=True, help="snapshot file to write")
+    ep.add_argument("--config", help="the server's own serverconfig.xml (DBConnectionString)")
+    ep.add_argument("--dsn", help="mysql://user:password@host:port/database instead")
+    p.set_defaults(func=cmd_server)
 
     args = ap.parse_args(argv)
     return args.func(args)

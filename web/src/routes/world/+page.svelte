@@ -4,7 +4,13 @@
 	// and pick an object to inspect and recentre on (the editor's first slice).
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
-	import { api, type WorldFixture, type WorldIndex, type WorldZone } from '$lib/api/client';
+	import {
+		api,
+		type WorldFixture,
+		type WorldIndex,
+		type WorldSpawns,
+		type WorldZone
+	} from '$lib/api/client';
 	import { WorldViewer } from '$lib/world/viewer';
 	import { LoaderCircle, Crosshair } from '@lucide/svelte';
 
@@ -14,10 +20,21 @@
 	let regionId = $state<number | null>(null);
 	let zoneId = $state<number | null>(null);
 	let zone = $state<WorldZone | null>(null);
+	let spawns = $state<WorldSpawns | null>(null);
 	let status = $state('loading the client index…');
 	let error = $state<string | null>(null);
 	let busy = $state(false);
-	let toggles = $state({ ground: true, fixtures: true, bounds: false, water: true, jumps: false });
+	let toggles = $state({
+		ground: true,
+		fixtures: true,
+		spawns: true,
+		statics: true,
+		doors: true,
+		patrols: true,
+		bounds: false,
+		water: true,
+		jumps: false
+	});
 	let query = $state('');
 	let fixtureQuery = $state('');
 	let selected = $state<WorldFixture | null>(null);
@@ -97,10 +114,16 @@
 		status = `loading ${zoneRow.name}…`;
 		zoneId = zoneRow.id;
 		selected = null;
+		spawns = null;
 		try {
-			const loaded = await api.worldZone(zoneRow.id);
+			const [loaded, rows] = await Promise.all([
+				api.worldZone(zoneRow.id),
+				api.worldSpawns(zoneRow.id).catch(() => null)
+			]);
 			zone = loaded;
+			spawns = rows;
 			await viewer.show(zoneRow.id, loaded);
+			if (rows) viewer.showSpawns(rows);
 			status = `${loaded.info.name} — ${loaded.fixtures.length} fixtures, ${loaded.catalog.length} catalog entries`;
 			// The headless screenshot harness reads this; it also makes the
 			// load deterministic to wait on.
@@ -113,6 +136,8 @@
 				water: loaded.water.length,
 				jumps: loaded.jumps.length,
 				layers: loaded.patches?.textures.length ?? 0,
+				spawns: rows?.counts ?? null,
+				spawnSource: rows?.source ?? null,
 				...viewer.stats()
 			};
 			(window as unknown as { __worldStats?: () => object }).__worldStats = () => ({
@@ -228,15 +253,28 @@
 					<dd>{zone.bounds.length} · water {zone.water.length} · jumps {zone.jumps.length}</dd>
 					<dt>ground</dt>
 					<dd>{zone.patches?.textures.length ?? 0} layer sheets</dd>
+					<dt>server</dt>
+					<dd>
+						{#if spawns}
+							{spawns.counts.mob} mobs · {spawns.counts.worldobject} statics · {spawns.counts.door} doors
+							· {spawns.counts.path} patrols
+						{:else}
+							(response missing)
+						{/if}
+					</dd>
 				</dl>
-				{#if zone.warnings.length}
-					<p class="warn">{zone.warnings.join(' · ')}</p>
+				{#if zone.warnings.length || spawns?.warnings.length}
+					<p class="warn">{[...zone.warnings, ...(spawns?.warnings ?? [])].join(' · ')}</p>
 				{/if}
 			</section>
 
 			<section class="layers">
 				<label><input type="checkbox" bind:checked={toggles.ground} /> ground</label>
 				<label><input type="checkbox" bind:checked={toggles.fixtures} /> fixtures</label>
+				<label><input type="checkbox" bind:checked={toggles.spawns} /> mobs</label>
+				<label><input type="checkbox" bind:checked={toggles.statics} /> statics</label>
+				<label><input type="checkbox" bind:checked={toggles.doors} /> doors</label>
+				<label><input type="checkbox" bind:checked={toggles.patrols} /> patrols</label>
 				<label><input type="checkbox" bind:checked={toggles.bounds} /> bounds</label>
 				<label><input type="checkbox" bind:checked={toggles.water} /> water</label>
 				<label><input type="checkbox" bind:checked={toggles.jumps} /> jumps</label>
