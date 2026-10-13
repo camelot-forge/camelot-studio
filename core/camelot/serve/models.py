@@ -106,6 +106,36 @@ class WorldIndexPayload(BaseModel):
     regions: list[WorldRegionSummary]
 
 
+class WorldSearchHit(BaseModel):
+    """One fixture a region-wide search found: where it stands, and which zone
+    holds it — the panel opens that zone and selects it."""
+
+    zone: int
+    zone_name: str
+    id: int
+    name: str
+    nif_id: int
+    filename: str = ""
+    x: float
+    y: float
+    z: float
+    ground: bool
+
+
+class WorldSearch(BaseModel):
+    """A region's fixtures matching a query (C1: "all the Bindstones").
+
+    `scanned` is how many zones were actually read: the answer says what it
+    looked at, not only what it found.
+    """
+
+    query: str
+    region: int | None = None
+    scanned: int = 0
+    limit: int = 200
+    matches: list[WorldSearchHit] = []
+
+
 class WorldTerrain(BaseModel):
     """The heightmap's shape and factors; the bytes come from `url`."""
 

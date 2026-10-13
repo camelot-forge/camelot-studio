@@ -87,6 +87,29 @@ export interface AssetQuery {
 
 // --- the world (Phase 6.2) ----------------------------------------------------
 
+export interface WorldSearchHit {
+	zone: number;
+	zone_name: string;
+	id: number;
+	name: string;
+	nif_id: number;
+	filename: string;
+	x: number;
+	y: number;
+	z: number;
+	ground: boolean;
+}
+
+/** A region-wide fixture search (C1): the matches, and how many zones the
+ * daemon actually read to answer. */
+export interface WorldSearch {
+	query: string;
+	region: number | null;
+	scanned: number;
+	limit: number;
+	matches: WorldSearchHit[];
+}
+
 export interface WorldZoneSummary {
 	id: number;
 	name: string;
@@ -510,6 +533,10 @@ export const api = {
 		get<WorldZone>(`/world/zone/${zoneId}`, signal),
 	worldSpawns: (zoneId: number, signal?: AbortSignal) =>
 		get<WorldSpawns>(`/world/zone/${zoneId}/spawns`, signal),
+	worldSearch: (q: string, region?: number | null, limit?: number) =>
+		get<WorldSearch>(
+			`/world/search?q=${encodeURIComponent(q)}${region != null ? `&region=${region}` : ''}${limit ? `&limit=${limit}` : ''}`
+		),
 	worldTerrainUrl: (zoneId: number) => `${getApiBase()}/api/v1/world/zone/${zoneId}/terrain`,
 	worldMeshUrl: (zoneId: number, name: string) =>
 		`${getApiBase()}/api/v1/world/zone/${zoneId}/mesh/${encodeURIComponent(name)}`,

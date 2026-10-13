@@ -57,6 +57,8 @@ from .models import (
     WorldJump,
     WorldPatches,
     WorldRegionSummary,
+    WorldSearch,
+    WorldSearchHit,
     WorldSpawnDoor,
     WorldSpawnMob,
     WorldSpawnObject,
@@ -250,6 +252,73 @@ def index_payload(world: World) -> WorldIndexPayload:
         for region, ids in sorted(by_region.items())
     ]
     return WorldIndexPayload(zones=zones, regions=regions)
+
+
+def search_payload(world: World, query: str, region: int | None, limit: int) -> WorldSearch:
+    """The fixtures of a region (or of every available zone) whose name, file
+    or id matches — C1's question ("every Bindstone") answered without opening
+    zones by hand.
+
+    One zone costs a `csvNNN.mpk` read (measured: 19 ms on the operator's own
+    client, and the zone objects are cached after), so a whole region is about
+    a second's work. The journal's view is what is searched: what the editor
+    shows is what a search finds.
+    """
+    needle = query.strip().lower()
+    if not needle:
+        raise WorldError("a search needs a name, a file or an id")
+    index = world.index()
+    available = world.available_ids()
+    wanted: set[int] | None = None
+    if region is not None:
+        wanted = {info.zone_id for info in index.zones_of(region)}
+        if not wanted:
+            raise WorldError(f"no zone in region {region}")
+    matches: list[WorldSearchHit] = []
+    scanned = 0
+    for info in sorted(index.zones.values(), key=lambda i: i.zone_id):
+        if info.zone_id not in available:
+            continue
+        if wanted is not None and info.zone_id not in wanted:
+            continue
+        zone = world.zone(info.zone_id)
+        try:
+            rows, _warnings = _zone_fixtures(world, zone)
+            filenames = {entry.id: entry.filename for entry in _catalog(zone)}
+        except (WorldError, ZoneError):
+            # a zone the client lists but does not ship: nothing to search, and
+            # it does not count as read
+            continue
+        scanned += 1
+        for row in rows:
+            filename = filenames.get(row.nif_id, "")
+            if not (
+                needle in (row.name or "").lower()
+                or str(row.id) == needle
+                or needle in filename.lower()
+            ):
+                continue
+            matches.append(
+                WorldSearchHit(
+                    zone=info.zone_id,
+                    zone_name=info.name,
+                    id=row.id,
+                    name=row.name or "",
+                    nif_id=row.nif_id,
+                    filename=filename,
+                    x=row.x,
+                    y=row.y,
+                    z=row.z,
+                    ground=row.ground,
+                )
+            )
+            if len(matches) >= limit:
+                break
+        if len(matches) >= limit:
+            break
+    return WorldSearch(
+        query=query, region=region, scanned=scanned, limit=limit, matches=matches
+    )
 
 
 def _fixture(row) -> WorldFixture:
@@ -649,6 +718,16 @@ def build_world_router(config: ServeConfig) -> APIRouter:
             return index_payload(world)
         except WorldUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @router.get("/world/search", response_model=WorldSearch)
+    def world_search(q: str = "", region: int | None = None, limit: int = 200) -> WorldSearch:
+        """Every fixture of a region whose name, file or id matches (C1)."""
+        try:
+            return search_payload(world, q, region, max(1, min(limit, 1000)))
+        except WorldUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except WorldError as error:
+            raise _http(error) from error
 
     @router.get("/world/zone/{zone_id}", response_model=WorldZoneInfo)
     def world_zone(zone_id: int) -> WorldZoneInfo:

@@ -11,6 +11,7 @@ import struct
 import pytest
 from fastapi.testclient import TestClient
 from test_zones import (  # the synthetic client, one definition
+    FIXTURES,
     SECTOR,
     TERRAIN,
     _pcx,
@@ -82,6 +83,38 @@ def test_the_index_lists_zones_and_groups_them_by_region(world):  # noqa: F811
     assert regions[1]["zones"] == [0, 1]
     assert regions[1]["available"] == 2
     assert regions[1]["settings"] == {"entry_music": "2"}
+
+
+@pytest.fixture
+def searchable(world):  # noqa: F811  (the fixture from test_zones)
+    """The synthetic client with `fixtures.csv` in zone 0 — what a search reads."""
+    from camelot.mpak import write_mpak
+
+    write_mpak(os.path.join(world, "zones", "zone000", "csv000.mpk"), "csv000.mpk",
+               [("fixtures.csv", FIXTURES)])
+    return world
+
+
+def test_a_region_search_finds_fixtures_by_name_id_or_file(searchable):
+    """C1: "every Farm House of the region" is a question the daemon answers
+    without the operator opening zones by hand — and it says how many zones it
+    actually read, not only what it found."""
+    client = client_for(searchable)
+    by_name = client.get("/api/v1/world/search", params={"q": "farm"}).json()
+    assert by_name["scanned"] >= 1
+    assert [(hit["zone"], hit["id"], hit["name"]) for hit in by_name["matches"]] == [
+        (0, 1, "Farm House")
+    ]
+    assert by_name["matches"][0]["filename"] == "bfarmhouse.nif"
+    by_file = client.get("/api/v1/world/search", params={"q": "bpinea"}).json()
+    assert [hit["id"] for hit in by_file["matches"]] == [2]
+    by_id = client.get("/api/v1/world/search", params={"q": "2"}).json()
+    assert [hit["id"] for hit in by_id["matches"]] == [2]
+    nothing = client.get("/api/v1/world/search", params={"q": "nothing-like-it"}).json()
+    assert nothing["matches"] == []
+    assert client.get("/api/v1/world/search", params={"q": ""}).status_code == 404
+    assert client.get("/api/v1/world/search",
+                      params={"q": "farm", "region": 999}).status_code == 404
 
 
 def test_a_root_that_is_not_a_client_answers_503(tmp_path):
