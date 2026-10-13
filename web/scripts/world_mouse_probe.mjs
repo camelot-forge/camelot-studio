@@ -329,7 +329,9 @@ const keysBeforeMove = await patchedKeys();
 const moveFrom = { x: middle.x, y: middle.y };
 const moveTo = { x: middle.x + 200, y: middle.y + 120 };
 const anchor = await groundAt(moveFrom.x, moveFrom.y);
+const moveStarted = Date.now();
 await drag('middle', moveFrom, moveTo, 10);
+console.log(`the move's drag + commit took ${Date.now() - moveStarted} ms`);
 const afterMove = await snapshot();
 const movedItems = moved(beforeMove, afterMove);
 console.log(
@@ -690,6 +692,66 @@ await page.evaluate(
 );
 await drag('right', moveFrom, { x: moveFrom.x + 40, y: moveFrom.y + 20 }, 4);
 check('the scene shuts the context menu', await page.evaluate('window.__ctx'));
+
+// 12. the cursor readout, the measure tool, the region search, the linter ------
+await page.mouse.move(moveFrom.x, moveFrom.y);
+await page.waitForTimeout(300);
+const hover = (await state()).cursor;
+const ground = await groundAt(moveFrom.x, moveFrom.y);
+check(
+	'the panel reads the ground under the pointer',
+	hover !== null &&
+		ground !== null &&
+		Math.abs(hover.x - ground.x) <= 2 &&
+		Math.abs(hover.y - ground.y) <= 2,
+	JSON.stringify({ hover, ground })
+);
+
+const measureAt = async (x, y) => {
+	await page.mouse.move(x, y);
+	await page.mouse.down({ button: 'left' });
+	await page.mouse.up({ button: 'left' });
+	await page.waitForTimeout(350);
+};
+await page.getByRole('button', { name: 'measure', exact: true }).click();
+await measureAt(moveFrom.x - 120, moveFrom.y);
+await measureAt(moveFrom.x + 120, moveFrom.y);
+const measured = (await state()).measure;
+const measureA = await groundAt(moveFrom.x - 120, moveFrom.y);
+const measureB = await groundAt(moveFrom.x + 120, moveFrom.y);
+check(
+	'two clicks give the ground distance between them',
+	measured !== null &&
+		measureA !== null &&
+		measureB !== null &&
+		Math.abs(measured.distance - Math.hypot(measureB.x - measureA.x, measureB.y - measureA.y)) <= 2,
+	JSON.stringify({
+		measured,
+		want:
+			measureA && measureB
+				? Math.round(Math.hypot(measureB.x - measureA.x, measureB.y - measureA.y))
+				: null
+	})
+);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+check('Escape lets the measurement go', (await state()).measure === null);
+await page.getByRole('button', { name: 'move', exact: true }).click();
+
+await page.fill('section.search input[type=search]', 'stone');
+await page.getByRole('button', { name: 'find', exact: true }).click();
+await page.waitForFunction('window.__worldEditor().search !== null', { timeout: 60000 });
+const found = (await state()).search;
+check(
+	'the region search answers with matches',
+	typeof found === 'number' && found > 0,
+	String(found)
+);
+
+await page.getByRole('button', { name: 'check', exact: true }).click();
+await page.waitForTimeout(500);
+const linted = (await state()).findings;
+check('the linter answers with a count', typeof linted === 'number', String(linted));
 
 // 11. revert: the journal empties ----------------------------------------------
 await page.getByRole('button', { name: 'revert' }).click();

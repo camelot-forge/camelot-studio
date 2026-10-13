@@ -85,8 +85,18 @@ interface PickGroup {
 	local: THREE.Matrix4;
 }
 
-export type EditMode = 'select' | 'move' | 'rotate' | 'scale' | 'add';
+export type EditMode = 'select' | 'move' | 'rotate' | 'scale' | 'add' | 'measure';
 export type EditKind = 'move' | 'rotate' | 'scale' | 'height';
+
+/** A measurement: two points on the ground, and what lies between them. */
+export interface Measure {
+	a: { x: number; y: number; z: number };
+	b: { x: number; y: number; z: number };
+	distance: number;
+	dx: number;
+	dy: number;
+	dz: number;
+}
 
 /** Snap steps: the zone's own subtile (65536 / 256, measured from the
  * terrain grid), 15 degrees and 5 percent — editor conveniences, named. */
@@ -212,6 +222,21 @@ export function rotateAbout(
 	return { x: pivot.x + dx * cos - dy * sin, y: pivot.y + dx * sin + dy * cos };
 }
 
+/** One thing the zone's own checks found (C2). The rule is named in `detail`:
+ * a linter that hides its threshold is a fortune teller. */
+export interface LintFinding {
+	kind: 'outside' | 'buried' | 'floating';
+	what: string;
+	at: [number, number, number];
+	detail: string;
+	fixture?: WorldFixture;
+	row?: RowPick;
+}
+
+/** The linter's own thresholds, in the zone's units. */
+const LINT_BURIED = 16;
+const LINT_FLOATING = 2000;
+
 /** A gesture in flight. `from`/`at` are screen points — what tells a click from
  * a drag and what drives the vertical gestures; the grab's own frame lives
  * below. One gesture is no other gesture's business. */
@@ -300,6 +325,11 @@ export class WorldViewer {
 
 	private marker = new THREE.Group();
 	private rings = new THREE.Group();
+	private measureGroup = new THREE.Group();
+	/** The two points of the measure tool, and the last pointer readout. */
+	private measureA: { x: number; y: number; z: number } | null = null;
+	private measureB: { x: number; y: number; z: number } | null = null;
+	private hoverAt = 0;
 	private ringGeometry = new THREE.RingGeometry(150, 210, 40);
 	private ringMaterial = new THREE.MeshBasicMaterial({
 		color: 0x67e8f9,
@@ -325,6 +355,10 @@ export class WorldViewer {
 	onRowEdit: ((kind: EditKind, rows: RowEdit[]) => void) | null = null;
 	onSelect: ((selection: Selection) => void) | null = null;
 	onPick: ((point: { x: number; y: number; z: number }) => void) | null = null;
+	/** The ground under the pointer, as it moves (the panel's own readout). */
+	onHover: ((point: { x: number; y: number; z: number } | null) => void) | null = null;
+	/** The measure tool's two points, whenever they change. */
+	onMeasure: ((measure: Measure | null) => void) | null = null;
 	private token = 0;
 	private frame = 0;
 
@@ -344,7 +378,7 @@ export class WorldViewer {
 		for (const group of Object.values(this.groups)) this.scene.add(group);
 		this.marker.visible = false;
 		this.buildMarker();
-		this.scene.add(this.marker, this.rings);
+		this.scene.add(this.marker, this.rings, this.measureGroup);
 		this.marquee = document.createElement('div');
 		Object.assign(this.marquee.style, {
 			position: 'absolute',
@@ -393,6 +427,7 @@ export class WorldViewer {
 		canvas.addEventListener('pointermove', (event) => this.onMove(event), { signal });
 		canvas.addEventListener('pointerup', (event) => this.onUp(event), { signal });
 		canvas.addEventListener('pointercancel', () => this.endPointer(), { signal });
+		canvas.addEventListener('pointerleave', () => this.onHover?.(null), { signal });
 		canvas.addEventListener('dblclick', (event) => this.onDoubleClick(event), { signal });
 	}
 
@@ -404,31 +439,185 @@ export class WorldViewer {
 		};
 	}
 
+	/** The ground under the pointer, for the panel's readout — at most every
+	 * 40 ms (a raycast per pointer event would be wasted work). */
+	private reportHover(event: PointerEvent): void {
+		if (!this.onHover) return;
+		const now = performance.now();
+		if (now - this.hoverAt < 40) return;
+		this.hoverAt = now;
+		const ndc = this.ndcOf(event);
+		this.onHover(this.pickGround(ndc.x, ndc.y));
+	}
+
+	// -- the measure tool -------------------------------------------------------
+
+	/** One click of the measure tool: the first point, then the second, then a
+	 * fresh first — the gesture every map tool has. */
+	private measurePoint(point: { x: number; y: number; z: number }): void {
+		if (!this.measureA || this.measureB) {
+			this.measureA = point;
+			this.measureB = null;
+		} else {
+			this.measureB = point;
+		}
+		this.drawMeasure();
+		this.onMeasure?.(this.measureView);
+	}
+
+	get measureView(): Measure | null {
+		const a = this.measureA;
+		const b = this.measureB;
+		if (!a || !b) return null;
+		return {
+			a,
+			b,
+			distance: Math.hypot(b.x - a.x, b.y - a.y),
+			dx: b.x - a.x,
+			dy: b.y - a.y,
+			dz: b.z - a.z
+		};
+	}
+
+	/** Let the measurement go (Escape, or the panel's own clear). */
+	clearMeasure(): void {
+		this.measureA = null;
+		this.measureB = null;
+		this.drawMeasure();
+		this.onMeasure?.(null);
+	}
+
+	private drawMeasure(): void {
+		for (const child of [...this.measureGroup.children]) {
+			this.measureGroup.remove(child);
+			// the rings share the selection's geometry and material: only the
+			// segment's own geometry goes with the child
+			if ((child as THREE.Line).isLine) (child as THREE.Line).geometry.dispose();
+		}
+		for (const point of [this.measureA, this.measureB]) {
+			if (!point) continue;
+			const ring = new THREE.Mesh(this.ringGeometry, this.ringMaterial);
+			ring.rotation.x = -Math.PI / 2;
+			ring.position.set(point.x, point.z + 12, point.y);
+			this.measureGroup.add(ring);
+		}
+		if (!this.measureA || !this.measureB) return;
+		const line = new THREE.Line(
+			new THREE.BufferGeometry().setFromPoints([
+				new THREE.Vector3(this.measureA.x, this.measureA.z + 12, this.measureA.y),
+				new THREE.Vector3(this.measureB.x, this.measureB.z + 12, this.measureB.y)
+			]),
+			new THREE.LineBasicMaterial({ color: 0x67e8f9, depthTest: false })
+		);
+		line.renderOrder = 2;
+		this.measureGroup.add(line);
+	}
+
+	/** The zone's own checks (C2): what stands outside its bounds, what the
+	 * terrain buries, what floats far above it. Every finding names its rule. */
+	lint(): LintFinding[] {
+		if (!this.terrain) return [];
+		const terrain = this.terrain;
+		const outside = (x: number, y: number) => x < 0 || y < 0 || x > ZONE_SIZE || y > ZONE_SIZE;
+		const findings: LintFinding[] = [];
+		for (const group of this.picks) {
+			for (const fixture of group.fixtures) {
+				if (!fixture.nif_id) continue;
+				const at = fixturePlacement(terrain, fixture).position;
+				const what = `fixture #${fixture.id}${fixture.name ? ` ${fixture.name}` : ''}`;
+				if (outside(fixture.x, fixture.y)) {
+					findings.push({
+						kind: 'outside',
+						what,
+						at,
+						fixture,
+						detail: `outside the zone (${Math.round(fixture.x)}, ${Math.round(fixture.y)})`
+					});
+				}
+				if (fixture.ground) continue; // the client drops a ground row on the terrain (W-3)
+				const dz = at[1] - terrain.heightAt(fixture.x, fixture.y);
+				if (dz < -LINT_BURIED) {
+					findings.push({
+						kind: 'buried',
+						what,
+						at,
+						fixture,
+						detail: `${Math.round(-dz)} units under the terrain`
+					});
+				} else if (dz > LINT_FLOATING) {
+					findings.push({
+						kind: 'floating',
+						what,
+						at,
+						fixture,
+						detail: `${Math.round(dz)} units above the terrain`
+					});
+				}
+			}
+		}
+		for (const cloud of this.rowClouds) {
+			for (const row of cloud.rows) {
+				const at: [number, number, number] = [row.x, row.z, row.y];
+				const what = `${cloud.table} ${row.id.slice(0, 8)}${row.name ? ` ${row.name}` : ''}`;
+				const pick = { table: cloud.table, id: row.id };
+				if (outside(row.x, row.y)) {
+					findings.push({
+						kind: 'outside',
+						what,
+						at,
+						row: pick,
+						detail: `outside the zone (${Math.round(row.x)}, ${Math.round(row.y)})`
+					});
+				}
+				const dz = row.z - terrain.heightAt(row.x, row.y);
+				if (dz < -LINT_BURIED) {
+					findings.push({
+						kind: 'buried',
+						what,
+						at,
+						row: pick,
+						detail: `${Math.round(-dz)} units under the terrain`
+					});
+				} else if (dz > LINT_FLOATING) {
+					findings.push({
+						kind: 'floating',
+						what,
+						at,
+						row: pick,
+						detail: `${Math.round(dz)} units above the terrain`
+					});
+				}
+			}
+		}
+		return findings;
+	}
+
 	private onDown(event: PointerEvent): void {
 		const ndc = this.ndcOf(event);
+		// shift+left drags the map in every mode: the camera is never a tool's
+		// prisoner (a shift+left *click* still adds to the selection, see `onUp`)
+		if (event.button === 0 && event.shiftKey) {
+			event.preventDefault();
+			this.canvas.setPointerCapture(event.pointerId);
+			this.gesture = { ...this.pointerBase(event), kind: 'pan' };
+			return;
+		}
 		if (event.button === 0 && this.editMode === 'add') {
 			const point = this.pickGround(ndc.x, ndc.y);
 			if (point) this.onPick?.(point);
 			return;
 		}
+		if (event.button === 0 && this.editMode === 'measure') {
+			const point = this.pickGround(ndc.x, ndc.y);
+			if (point) this.measurePoint(point);
+			return;
+		}
 		// the middle button must never start the browser's autoscroll
 		event.preventDefault();
 		this.canvas.setPointerCapture(event.pointerId);
-		const base = {
-			pointerId: event.pointerId,
-			button: event.button,
-			from: { x: event.clientX, y: event.clientY },
-			at: { x: event.clientX, y: event.clientY },
-			moved: false
-		};
+		const base = this.pointerBase(event);
 		if (event.button === 2) {
 			this.gesture = { ...base, kind: event.shiftKey ? 'pan' : 'orbit' };
-			return;
-		}
-		// shift+left drags the map (a shift+left *click* still adds to the
-		// selection: the threshold decides, see `onUp`)
-		if (event.button === 0 && event.shiftKey) {
-			this.gesture = { ...base, kind: 'pan' };
 			return;
 		}
 		if (event.button === 0 || event.button === 1) {
@@ -514,7 +703,10 @@ export class WorldViewer {
 
 	private onMove(event: PointerEvent): void {
 		const gesture = this.gesture;
-		if (!gesture || gesture.pointerId !== event.pointerId) return;
+		if (!gesture || gesture.pointerId !== event.pointerId) {
+			this.reportHover(event);
+			return;
+		}
 		const dx = event.clientX - gesture.at.x;
 		const dy = event.clientY - gesture.at.y;
 		gesture.at = { x: event.clientX, y: event.clientY };
@@ -811,6 +1003,23 @@ export class WorldViewer {
 	}
 
 	// -- the gestures -----------------------------------------------------------
+
+	/** The pointer-down bookkeeping every gesture starts from. */
+	private pointerBase(event: PointerEvent): {
+		pointerId: number;
+		button: number;
+		from: { x: number; y: number };
+		at: { x: number; y: number };
+		moved: boolean;
+	} {
+		return {
+			pointerId: event.pointerId,
+			button: event.button,
+			from: { x: event.clientX, y: event.clientY },
+			at: { x: event.clientX, y: event.clientY },
+			moved: false
+		};
+	}
 
 	/** Arm the ground click (`add`): every other gesture is a mouse button. */
 	setEditMode(mode: EditMode, snap = true): void {
@@ -1630,6 +1839,9 @@ export class WorldViewer {
 		this.gesture = null;
 		this.marker.visible = false;
 		for (const child of [...this.rings.children]) this.rings.remove(child);
+		this.measureA = null;
+		this.measureB = null;
+		this.drawMeasure();
 		this.texturedPatches = 0;
 		this.composedPatches = 0;
 		this.spawnCounts = { mobs: 0, statics: 0, doors: 0, patrols: 0, patrolPoints: 0 };
@@ -2046,6 +2258,11 @@ export class WorldViewer {
 	focus(x: number, y: number, distance = ZONE_UNIT * 1.5): void {
 		const z = this.terrain ? this.terrain.heightAt(x, y) : 0;
 		this.lookAtPoint([x, z, y], distance);
+	}
+
+	/** Move the camera to a point and keep the zoom (the panel's "go to"). */
+	focusPoint(x: number, y: number): void {
+		this.focus(x, y, this.orbit.distance);
 	}
 
 	/** Stand on a circle around a zone-local point and look at it: azimuth 0 is

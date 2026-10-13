@@ -8,8 +8,11 @@
 		api,
 		type EditorEdit,
 		type EditorState,
+		type SpawnTable,
 		type WorldFixture,
 		type WorldIndex,
+		type WorldSearch,
+		type WorldSearchHit,
 		type WorldSpawnDoor,
 		type WorldSpawnMob,
 		type WorldSpawnObject,
@@ -21,6 +24,8 @@
 		type EditKind,
 		type EditMode,
 		type FixtureEdit,
+		type LintFinding,
+		type Measure,
 		type RowEdit,
 		type RowPick,
 		type RowProposal
@@ -72,10 +77,28 @@
 			title: 'a drag on the selection turns it 15° about its own middle'
 		},
 		{ id: 'scale', label: 'scale', title: 'a drag on the selection resizes it 5%' },
-		{ id: 'add', label: 'add', title: 'click the ground, then pick a catalog entry' }
+		{ id: 'add', label: 'add', title: 'click the ground, then pick a catalog entry' },
+		{
+			id: 'measure',
+			label: 'measure',
+			title: 'click two points on the ground: the panel shows the distance between them'
+		}
 	] as const;
 	let editMode = $state<EditMode>('move');
 	let snap = $state(true);
+	/** The ground under the pointer, and the measure tool's own two points. */
+	let cursor = $state<{ x: number; y: number; z: number } | null>(null);
+	let measure = $state<Measure | null>(null);
+	/** The "go to" fields: the panel's own way to travel without hunting. */
+	let goX = $state(0);
+	let goY = $state(0);
+	/** C1's regional search: what the daemon found, and what it read to find it. */
+	let searchQuery = $state('');
+	let searching = $state(false);
+	let searchResult = $state<WorldSearch | null>(null);
+	let searchError = $state<string | null>(null);
+	/** C2's findings for the zone on screen (null = the check was not run). */
+	let findings = $state<LintFinding[] | null>(null);
 	let addPoint = $state<{ x: number; y: number; z: number } | null>(null);
 	let addQuery = $state('');
 	let edit = $state<EditorState | null>(null);
@@ -99,15 +122,23 @@
 	// Written = in the server's database; the rest is the journal's promise.
 	const writtenRows = $derived(editPatches.filter((patch) => patch.applied === true).length);
 	const editClient = $derived(edit?.client ?? null);
-	/** Everything the journal holds, across the session's zones. */
-	const sessionOps = $derived((edit?.zones ?? []).reduce((sum, zone) => sum + zone.ops.length, 0));
-	/** The ops the last publish covered: what the client already carries. */
-	const publishedOps = $derived((edit?.published?.ops as number | undefined) ?? 0);
-	/** What a publish would still write: ops the client does not hold yet, and
-	 * rows nothing wrote to the database yet. The journal itself may be larger —
-	 * written rows stay in it, their originals are its business. */
-	const changes = $derived(Math.max(0, sessionOps - publishedOps) + (editRows - writtenRows));
-	/** Like a repository: unpublished changes exist, or they do not. */
+	/** The objects a save would still write: the *items* the journal owes, never
+	 * the gestures — a group moved five times is five objects, not twenty-five
+	 * ops. A publish empties the fixture ops (the pack now carries them), so the
+	 * count falls back to zero by itself; the rows are those the database has
+	 * not been given yet. */
+	const unsavedFixtures = $derived(
+		new Set((edit?.zones ?? []).flatMap((zone) => zone.ops).map((op) => op.id)).size
+	);
+	const unsavedRows = $derived(
+		new Set(
+			editPatches
+				.filter((patch) => patch.applied !== true)
+				.map((patch) => `${patch.table}:${patch.key}`)
+		).size
+	);
+	const changes = $derived(unsavedFixtures + unsavedRows);
+	/** Like a repository: unsaved changes exist, or they do not. */
 	const dirty = $derived(changes > 0);
 	// The client's half is the client's own authority: `revert` cannot touch it.
 	const clientNote = $derived.by(() => {
@@ -184,13 +215,22 @@
 		viewer.onPick = (point) => {
 			addPoint = point;
 		};
+		viewer.onHover = (point) => {
+			cursor = point;
+		};
+		viewer.onMeasure = (value) => {
+			measure = value;
+		};
 		const observer = new ResizeObserver(() => viewer?.resize());
 		observer.observe(canvasEl.parentElement!);
 		const onKey = (event: KeyboardEvent) => {
 			const target = event.target as HTMLElement | null;
 			if (target && /input|select|textarea/i.test(target.tagName)) return;
 			if (event.key === 'f') viewer?.focusSelection();
-			if (event.key === 'Escape') selectFrom({ fixtures: [], rows: [] });
+			if (event.key === 'Escape') {
+				selectFrom({ fixtures: [], rows: [] });
+				viewer?.clearMeasure();
+			}
 			if (event.key === 'Delete' || event.key === 'Backspace') void removeSelection();
 		};
 		window.addEventListener('keydown', onKey);
@@ -241,6 +281,67 @@
 	$effect(() => {
 		viewer?.setEditMode(editMode, snap);
 	});
+
+	/** The "go to" fields follow the selection: the usual next stop is where the
+	 * thing you just picked stands. */
+	$effect(() => {
+		const fixture = selected;
+		if (!fixture) return;
+		goX = Math.round(fixture.x);
+		goY = Math.round(fixture.y);
+	});
+
+	function goTo() {
+		viewer?.focusPoint(goX, goY);
+	}
+
+	/** C1: the region's fixtures matching a name, a file or an id — the daemon
+	 * reads the zones and says how many it looked at. */
+	async function runSearch() {
+		const query = searchQuery.trim();
+		if (searching || !query) return;
+		searching = true;
+		searchError = null;
+		try {
+			searchResult = await api.worldSearch(query, regionId, 300);
+		} catch (e) {
+			searchResult = null;
+			searchError = e instanceof Error ? e.message : String(e);
+		} finally {
+			searching = false;
+		}
+	}
+
+	/** A hit: open its zone when it is not the one on screen, then select and
+	 * frame it. */
+	async function goToHit(hit: WorldSearchHit) {
+		if (hit.zone !== zoneId) {
+			const row = index?.zones.find((entry) => entry.id === hit.zone);
+			if (!row) return;
+			await open(row);
+		}
+		const found = zone?.fixtures.find((fixture) => fixture.id === hit.id);
+		if (!found) return;
+		selectFixture(found);
+		viewer?.focusFixture(found);
+	}
+
+	/** C2: the zone's own checks — outside the bounds, buried, floating. */
+	function runLint() {
+		findings = viewer?.lint() ?? [];
+	}
+
+	function goToFinding(finding: LintFinding) {
+		if (finding.fixture) {
+			selectFixture(finding.fixture);
+			viewer?.focusFixture(finding.fixture);
+			return;
+		}
+		if (finding.row) {
+			selectRow(finding.row);
+			viewer?.focusPoint(finding.at[0], finding.at[2]);
+		}
+	}
 
 	async function open(zoneRow: { id: number; name: string; available: boolean }) {
 		if (!viewer || !zoneRow.available || busy) return;
@@ -318,6 +419,17 @@
 					distance: Math.round(row.distance)
 				})),
 				carry,
+				cursor: cursor ? { x: Math.round(cursor.x), y: Math.round(cursor.y) } : null,
+				measure: measure
+					? {
+							distance: Math.round(measure.distance),
+							dx: Math.round(measure.dx),
+							dy: Math.round(measure.dy),
+							dz: Math.round(measure.dz)
+						}
+					: null,
+				search: searchResult ? searchResult.matches.length : null,
+				findings: findings ? findings.length : null,
 				selection: {
 					fixtures: viewer?.selectionView.fixtures.map((fixture) => fixture.id) ?? [],
 					rows: viewer?.selectionView.rows.map((row) => row.id) ?? []
@@ -411,9 +523,47 @@
 		return next;
 	}
 
+	/** The daemon's own patch, applied to the rows the page already holds.
+	 *
+	 * A patch's values are the journal's truth and the gesture has already drawn
+	 * them: re-reading the zone's spawns here costs a full payload and a rebuild
+	 * of every cloud *per op*, so a five-item move landed its rows one by one, a
+	 * round trip apart. Returns false when a patched row is not held (a re-read
+	 * is then the honest answer). */
+	function applyPatches(patches: Record<string, unknown>[]): boolean {
+		if (!spawns || !zone) return false;
+		const rect = zone.info.world_rect;
+		let complete = true;
+		for (const patch of patches) {
+			const table = String(patch.table) as SpawnTable;
+			const key = String(patch.key);
+			const values = (patch.values ?? {}) as Record<string, string>;
+			if (patch.deleted === true) {
+				// a removal takes the row *out* of the payload: the honest answer is
+				// a re-read (rare, and never on a gesture's hot path)
+				complete = false;
+				continue;
+			}
+			const row = rowOf(spawns, { table, id: key });
+			if (!row) {
+				complete = false;
+				continue;
+			}
+			if (values.X !== undefined) row.x = Number(values.X) - rect[0];
+			if (values.Y !== undefined) row.y = Number(values.Y) - rect[1];
+			if (values.Z !== undefined) row.z = Number(values.Z);
+			if (values.Heading !== undefined && 'heading' in row) {
+				row.heading = Number(values.Heading);
+			}
+			viewer?.updateRow({ table, id: key }, false);
+		}
+		return complete;
+	}
+
 	/** One edit, through the daemon (D2): the answer is the row as it stands,
-	 * plus whatever server rows the op carried (B2). */
-	async function applyEdit(op: Record<string, unknown>): Promise<boolean> {
+	 * plus whatever server rows the op carried (B2). `refresh` is false inside a
+	 * batch — a gesture's ops land as one change, and its state is read once. */
+	async function applyEdit(op: Record<string, unknown>, refresh = true): Promise<boolean> {
 		// the buttons and the gestures share one writer: wait for whatever runs,
 		// never drop an op on the floor
 		while (busyEdit) await new Promise((resolve) => setTimeout(resolve, 25));
@@ -432,11 +582,12 @@
 					viewer?.updateFixture(shown, false);
 				}
 			}
-			// A patch is part of what the zone is now: the viewer must show the
-			// rows where the journal puts them, not where the database has them.
-			if (result.patches.length) await reloadSpawns();
+			// A patch is part of what the zone is now, and the daemon just said
+			// which: the rows take its values in place — what the gesture drew *is*
+			// what the journal holds, so nothing has to be re-read.
+			if (result.patches.length && !applyPatches(result.patches)) await reloadSpawns();
 			editStatus = describe(op, result);
-			edit = await api.worldEdit();
+			if (refresh) edit = await api.worldEdit();
 			return true;
 		} catch (e) {
 			editError = e instanceof Error ? e.message : String(e);
@@ -472,18 +623,23 @@
 			for (const edit of edits) {
 				// A scale moves nothing, so it carries nothing either.
 				const pairs = carry && op !== 'scale' ? edit.carried.map((row) => ({ ...row })) : [];
-				const ok = await applyEdit({
-					kind: op,
-					id: edit.id,
-					x: edit.x,
-					y: edit.y,
-					z: edit.z,
-					angle: edit.angle,
-					scale: edit.scale,
-					...(pairs.length ? { rows: pairs } : {})
-				});
+				const ok = await applyEdit(
+					{
+						kind: op,
+						id: edit.id,
+						x: edit.x,
+						y: edit.y,
+						z: edit.z,
+						angle: edit.angle,
+						scale: edit.scale,
+						...(pairs.length ? { rows: pairs } : {})
+					},
+					false
+				);
 				if (!ok) break;
 			}
+			// the batch's ops landed as one change: the panel reads the state once
+			edit = await api.worldEdit();
 		});
 	}
 
@@ -536,8 +692,10 @@
 						: kind === 'height'
 							? { kind: 'row-move', table: row.table, key: row.key, x: row.x, y: row.y, z: row.z }
 							: { kind: 'row-move', table: row.table, key: row.key, x: row.x, y: row.y };
-				if (!(await applyEdit(op))) break;
+				if (!(await applyEdit(op, false))) break;
 			}
+			// the batch's ops landed as one change: the panel reads the state once
+			edit = await api.worldEdit();
 		});
 	}
 
@@ -889,7 +1047,7 @@
 				>
 					<h2>Editor <span class="dim">{edit.mod.id}</span></h2>
 					<span class="state" class:on={dirty}>
-						{dirty ? `${changes} unpublished` : 'published'}
+						{dirty ? `${changes} not saved` : 'saved'}
 					</span>
 					<button
 						type="button"
@@ -916,6 +1074,108 @@
 								<input type="checkbox" bind:checked={snap} /> snap
 							</label>
 						</div>
+						<div class="row tools">
+							<span class="readout" title="the ground under the pointer">
+								{cursor
+									? `${Math.round(cursor.x)}, ${Math.round(cursor.y)} · z ${Math.round(cursor.z)}`
+									: '—'}
+							</span>
+							<label>x <input type="number" bind:value={goX} /></label>
+							<label>y <input type="number" bind:value={goY} /></label>
+							<button type="button" onclick={goTo} title="move the camera there">go</button>
+						</div>
+						{#if measure}
+							<div class="row tools">
+								<span class="readout" title="the measure tool's two points">
+									{Math.round(measure.distance)} u · dx {Math.round(measure.dx)}, dy {Math.round(
+										measure.dy
+									)}, dz {Math.round(measure.dz)}
+								</span>
+								<button
+									type="button"
+									onclick={() => viewer?.clearMeasure()}
+									title="let the measurement go (Escape)"
+								>
+									clear
+								</button>
+							</div>
+						{/if}
+						<section class="search">
+							<div class="row tools">
+								<input
+									type="search"
+									bind:value={searchQuery}
+									placeholder="name, file or id — the region"
+									onkeydown={(e) => e.key === 'Enter' && runSearch()}
+								/>
+								<button
+									type="button"
+									onclick={runSearch}
+									disabled={searching}
+									title="search the region"
+								>
+									{searching ? '…' : 'find'}
+								</button>
+							</div>
+							{#if searchError}<p class="warn">{searchError}</p>{/if}
+							{#if searchResult}
+								<p class="hint">
+									{searchResult.matches.length}
+									{searchResult.matches.length === 1 ? 'match' : 'matches'} in
+									{searchResult.scanned} zone{searchResult.scanned === 1 ? '' : 's'} read{searchResult
+										.matches.length >= searchResult.limit
+										? ` (capped at ${searchResult.limit})`
+										: ''}
+								</p>
+								<ul class="hits">
+									{#each searchResult.matches as hit (`${hit.zone}:${hit.id}`)}
+										<li>
+											<button
+												type="button"
+												onclick={() => goToHit(hit)}
+												title="open its zone and frame it"
+											>
+												<span class="zname">{hit.name || '(unnamed)'}</span>
+												<span class="zmeta">{hit.zone_name} · #{hit.id}</span>
+											</button>
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</section>
+						<div class="row tools">
+							<button
+								type="button"
+								onclick={runLint}
+								title="what stands outside the zone's bounds, under the terrain, or far above it"
+							>
+								check
+							</button>
+							{#if findings}
+								<span class="readout">
+									{findings.length} finding{findings.length === 1 ? '' : 's'}
+								</span>
+								<button type="button" onclick={() => (findings = null)} title="hide them">
+									clear
+								</button>
+							{/if}
+						</div>
+						{#if findings && findings.length}
+							<ul class="hits">
+								{#each findings as finding, index (index)}
+									<li>
+										<button
+											type="button"
+											onclick={() => goToFinding(finding)}
+											title="select it and frame it"
+										>
+											<span class="zname">{finding.what}</span>
+											<span class="zmeta">{finding.detail}</span>
+										</button>
+									</li>
+								{/each}
+							</ul>
+						{/if}
 						<div class="row">
 							<button
 								type="button"
@@ -939,9 +1199,9 @@
 								class:on={dirty}
 								onclick={apply}
 								disabled={busyEdit || !changes}
-								title="write the edits: the client's files and the server's rows"
+								title="save the session: the client's files and the server's rows (the game reads them after /reload)"
 							>
-								publish{dirty ? ` (${changes})` : ''}
+								save{dirty ? ` (${changes})` : ''}
 							</button>
 							<button
 								type="button"
@@ -1428,6 +1688,57 @@
 	}
 	.panel .controls {
 		line-height: 1.7;
+	}
+	.panel .tools {
+		gap: 6px;
+		font: 10px monospace;
+		color: #7f8a86;
+	}
+	.panel .tools label {
+		display: flex;
+		gap: 3px;
+		align-items: center;
+	}
+	.panel .tools input {
+		width: 64px;
+		padding: 2px 4px;
+		border: 1px solid #2a3438;
+		border-radius: 4px;
+		background: #10161a;
+		color: inherit;
+		font: 11px monospace;
+	}
+	.panel .readout {
+		flex: 1;
+		color: #cfe8e0;
+	}
+	.panel .search input[type='search'] {
+		flex: 1;
+	}
+	.panel .hits {
+		max-height: 22dvh;
+		overflow-y: auto;
+		margin: 4px 0 0;
+		padding: 0;
+		list-style: none;
+	}
+	.panel .hits button {
+		display: flex;
+		justify-content: space-between;
+		gap: 8px;
+		width: 100%;
+		border: none;
+		background: none;
+		color: #cfe8e0;
+		font-size: 11px;
+		padding: 2px 4px;
+		text-align: left;
+	}
+	.panel .hits button:hover {
+		background: #1b2427;
+	}
+	.panel .hits .zmeta {
+		color: #7f8a86;
 	}
 	.panel code {
 		color: #cfe8e0;
