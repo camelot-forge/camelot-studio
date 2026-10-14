@@ -232,7 +232,12 @@
 	</AppBar>
 
 	<main class="stage">
-		<Dock title="Character" sub={`${raceName} ${genderLabel}`} icon={SlidersHorizontal}>
+		<Dock
+			id="builder.rail"
+			title="Character"
+			sub={`${raceName} ${genderLabel}`}
+			icon={SlidersHorizontal}
+		>
 			<section class="section">
 				<h4>Gender</h4>
 				<div class="segmented" role="group" aria-label="Gender">
@@ -370,7 +375,13 @@
 			{/if}
 		</div>
 
-		<Dock title="Inspect" sub={`${raceName} · ${genderLabel}`} icon={UserRound} side="right">
+		<Dock
+			id="builder.inspector"
+			title="Inspect"
+			sub={`${raceName} · ${genderLabel}`}
+			icon={UserRound}
+			side="right"
+		>
 			<CharacterCard race={raceName} gender={genderLabel} {pick} {tables} />
 			{#if model}
 				<EquipmentCard meshNames={model.meshNames} {material} />

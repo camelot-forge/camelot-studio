@@ -239,7 +239,7 @@ const sceneIsJournal = async (movedItems, label) => {
 await page.goto(`${base}/world`, { waitUntil: 'load' });
 // the session is emptied *before* a zone is opened: a payload read while the
 // journal still held an earlier run's ops would be stale from the first frame
-await page.waitForFunction('document.querySelectorAll("aside select option").length > 0', {
+await page.waitForFunction('document.querySelectorAll(".dock select option").length > 0', {
 	timeout: 120000
 });
 await page.evaluate('(async () => await fetch("/api/v1/world/mod/revert", { method: "POST" }))()');
@@ -422,7 +422,9 @@ check(
 await page.getByTitle('256 units, 15°, 5%, 16 up').click();
 
 // 5. rotate: every item turns by the same angle about the same pivot -----------
-await page.getByRole('button', { name: 'rotate', exact: true }).click();
+// The tools are reached by their own shortcut (the strip's titles carry the
+// prose): a title is a sentence, not a name.
+await page.keyboard.press('e');
 const keysBeforeRotate = await patchedKeys();
 const beforeRotate = await snapshot();
 const selectedRowKeys = await selectedRows();
@@ -535,7 +537,7 @@ check(
 await sceneIsJournal(moved(beforeRotate, afterRotate), 'rotate');
 
 // 6. scale: one factor for all -------------------------------------------------
-await page.getByRole('button', { name: 'scale', exact: true }).click();
+await page.keyboard.press('r');
 const beforeScale = await snapshot();
 await drag('middle', moveFrom, { x: moveFrom.x, y: moveFrom.y - 120 }, 8);
 const afterScale = await snapshot();
@@ -555,7 +557,7 @@ check(
 	`factor ${factor.toFixed(4)}: ${scaled.map((row) => `${row.was}->${row.now}`).join(' ')}`
 );
 await sceneIsJournal(moved(beforeScale, afterScale), 'scale');
-await page.getByRole('button', { name: 'move', exact: true }).click();
+await page.keyboard.press('w');
 
 // 7. height: one step for all --------------------------------------------------
 const free = await page.evaluate(`(async () => {
@@ -599,12 +601,46 @@ check(
 );
 
 // 8b. the panel's own fields are edits too -------------------------------------
-await page.mouse.move(moveFrom.x, moveFrom.y);
-await page.mouse.down({ button: 'left' });
-await page.mouse.up({ button: 'left' });
+// The fixture is *aimed at*, not hoped for: the gestures above moved the scene, so
+// the click goes on a fixture's own position — and the picker is asked what stands
+// there before the button goes down (a click on empty ground clears the selection
+// and would quietly skip this whole section).
+const aim = await page.evaluate(`(() => {
+	const v = window.__worldViewer;
+	const rect = { left: ${canvasBox.x}, top: ${canvasBox.y}, width: ${canvasBox.width}, height: ${canvasBox.height} };
+	const offsets = [[0, 0], [0, -16], [16, 0], [-16, 0], [0, 16]];
+	let best = null;
+	for (const f of v.items().fixtures) {
+		const at = v.screenAt(f.x, f.y, f.ground ? undefined : f.z);
+		for (const [dx, dy] of offsets) {
+			const p = { x: at.x + dx, y: at.y + dy };
+			const ndc = {
+				x: ((p.x - rect.left) / rect.width) * 2 - 1,
+				y: -(((p.y - rect.top) / rect.height) * 2 - 1)
+			};
+			const hit = v.pick(ndc.x, ndc.y);
+			if (!hit || !hit.fixture || hit.fixture.id !== f.id) continue;
+			const d = Math.hypot(p.x - ${middle.x}, p.y - ${middle.y});
+			if (best === null || d < best.d) best = { id: f.id, d: Math.round(d), x: p.x, y: p.y };
+			break;
+		}
+	}
+	return best;
+})()`);
+if (aim) {
+	await page.mouse.move(aim.x, aim.y);
+	await page.mouse.down({ button: 'left' });
+	await page.mouse.up({ button: 'left' });
+}
 await settle();
 const beforeType = await snapshot();
 const pickedForType = await selectedFixtures();
+console.log('picked for typing:', JSON.stringify({ aim, selected: pickedForType }));
+check(
+	'a click on its own spot selects the fixture',
+	Boolean(aim) && pickedForType.includes(aim.id),
+	JSON.stringify({ aim, selected: pickedForType })
+);
 if (pickedForType.length) {
 	const id = pickedForType[0];
 	const was = beforeType.fixtures.get(id);
@@ -645,7 +681,13 @@ if (pickedForType.length) {
 // 8c. Del removes the selection, and the journal records it --------------------
 await page.evaluate('document.activeElement && document.activeElement.blur()');
 const doomed = (await selectedFixtures())[0];
+// A removal is a write like any other: wait for it to land (the entry, then the
+// scene the page reloads from it), never for a fixed delay.
+const mopsBefore = (await state()).mops;
 await page.keyboard.press('Delete');
+await page
+	.waitForFunction((n) => window.__worldEditor().mops > n, mopsBefore, { timeout: 60000 })
+	.catch(() => {});
 await settle();
 const afterDelete = await snapshot();
 check(
@@ -713,7 +755,7 @@ const measureAt = async (x, y) => {
 	await page.mouse.up({ button: 'left' });
 	await page.waitForTimeout(350);
 };
-await page.getByRole('button', { name: 'measure', exact: true }).click();
+await page.keyboard.press('m');
 await measureAt(moveFrom.x - 120, moveFrom.y);
 await measureAt(moveFrom.x + 120, moveFrom.y);
 const measured = (await state()).measure;
@@ -736,9 +778,9 @@ check(
 await page.keyboard.press('Escape');
 await page.waitForTimeout(300);
 check('Escape lets the measurement go', (await state()).measure === null);
-await page.getByRole('button', { name: 'move', exact: true }).click();
+await page.keyboard.press('w');
 
-await page.fill('section.search input[type=search]', 'stone');
+await page.getByPlaceholder('name, file or id — the region').fill('stone');
 await page.getByRole('button', { name: 'find', exact: true }).click();
 await page.waitForFunction('window.__worldEditor().search !== null', { timeout: 60000 });
 const found = (await state()).search;
@@ -754,6 +796,8 @@ const linted = (await state()).findings;
 check('the linter answers with a count', typeof linted === 'number', String(linted));
 
 // 11. revert: the journal empties ----------------------------------------------
+// The publish chain lives in the Journal tab of the editor's own dock.
+await page.getByRole('button', { name: /^Journal/ }).click();
 await page.getByRole('button', { name: 'revert' }).click();
 await page.waitForFunction(
 	'window.__worldEditor().mops === 0 && window.__worldEditor().rows === 0',
@@ -767,7 +811,7 @@ check('revert empties the journal', done.mops === 0 && done.rows === 0, JSON.str
 await page.screenshot({ path: `${outDir}/panel.png`, ...SHOT });
 console.log(
 	'panel:',
-	(await page.locator('section.panel').first().innerText()).replace(/\n+/g, ' | ').slice(0, 300)
+	(await page.locator('.dock.right').first().innerText()).replace(/\n+/g, ' | ').slice(0, 300)
 );
 console.log('console errors:', errors.length ? errors : 'none');
 check('no console errors', errors.length === 0, errors.join(' / '));

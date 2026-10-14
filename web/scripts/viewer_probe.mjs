@@ -44,10 +44,10 @@ const canvas = async () => (await page.locator('.viewer canvas').screenshot()).t
 const settle = (ms = 600) => page.waitForTimeout(ms);
 
 await page.goto(base, { waitUntil: 'load' });
-await page.waitForSelector('.library .row', { timeout: 60000 });
-await page.fill('.library input[type=search]', figure);
+await page.waitForSelector('.dock.left .row', { timeout: 60000 });
+await page.fill('.dock.left input[type=search]', figure);
 await settle(900);
-await page.click('.library .row');
+await page.click('.dock.left .row');
 await page.waitForSelector('.viewer canvas', { timeout: 60000 });
 await page.waitForSelector('.dock.right .card', { timeout: 60000 });
 await settle(5000);
@@ -68,7 +68,7 @@ check(
 	(await text('.appbar nav')) === 'FiguresBuilderWorld',
 	JSON.stringify(await text('.appbar nav'))
 );
-check('the library dock is titled', (await text('.library .dock-head .name')) === 'Library');
+check('the library dock is titled', (await text('.dock.left .dock-head .name')) === 'Library');
 check('the inspector dock is titled', (await text('.dock.right .dock-head .name')) === 'Inspect');
 
 const stripTitles = await page.evaluate(() =>

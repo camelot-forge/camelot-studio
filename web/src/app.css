@@ -406,6 +406,15 @@ a {
 	gap: 10px;
 	padding: 14px 16px;
 	border-bottom: 1px solid var(--border);
+	/* A head is chrome: a press on it drags the dock, it never selects text. */
+	user-select: none;
+	cursor: default;
+}
+.dock.floating .dock-head {
+	cursor: grab;
+}
+.dock.floating .dock-head:active {
+	cursor: grabbing;
 }
 .dock-head .logo {
 	display: inline-flex;
@@ -437,14 +446,25 @@ a {
 	text-overflow: ellipsis;
 }
 
-/* ---- Dock (le rail du builder, la bibliothèque, l'inspecteur) ---- */
+/* ---- Dock (le rail du builder, la bibliothèque, l'inspecteur, le monde) ---- */
+/* Une seule charpente : une tête, des onglets s'il y en a, un corps, un pied.
+   La largeur, l'épingle et la place (quand il flotte) appartiennent à
+   l'opérateur : `Dock.svelte` les mémorise par dock. */
 .dock {
+	position: relative;
 	display: flex;
 	flex-direction: column;
-	width: var(--w-dock);
-	min-width: var(--w-dock);
 	background: var(--surface-2);
 	min-height: 0;
+}
+.dock.floating {
+	position: absolute;
+	z-index: 6;
+	border: 1px solid var(--border-input);
+	border-radius: var(--r-dock);
+	box-shadow: 0 18px 44px rgb(0 0 0 / 55%);
+	max-height: calc(100% - 24px);
+	overflow: hidden;
 }
 .dock.left {
 	border-right: 1px solid var(--border);
@@ -460,6 +480,100 @@ a {
 	padding: 14px;
 	overflow-y: auto;
 	min-height: 0;
+}
+.dock-body.no-scroll {
+	overflow: hidden;
+	padding: 0;
+	gap: 0;
+}
+.dock-foot {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 12px 14px;
+	border-top: 1px solid var(--border);
+}
+.dock .pin {
+	display: grid;
+	place-items: center;
+	width: 26px;
+	height: 26px;
+	margin-left: auto;
+	flex: 0 0 auto;
+	border-radius: var(--r-sm);
+	color: var(--text-4);
+}
+.dock .pin:hover {
+	background: var(--surface-input);
+	color: var(--text);
+}
+.dock .pin.on {
+	background: var(--accent-tint-14);
+	color: var(--accent);
+}
+/* La poignée de redimensionnement : sur le bord intérieur du dock. */
+.dock-grip {
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 8px;
+	height: 64px;
+	border-radius: 4px;
+	background: transparent;
+	cursor: col-resize;
+	z-index: 1;
+}
+.dock.left .dock-grip {
+	right: -4px;
+}
+.dock.right .dock-grip {
+	left: -4px;
+}
+.dock-grip:hover,
+.dock-grip:active {
+	background: var(--accent-tint-14);
+}
+/* Les onglets d'un dock (Inspect / Journal). */
+.dock-tabs {
+	display: flex;
+	gap: 2px;
+	padding: 8px 10px 0;
+	border-bottom: 1px solid var(--border);
+}
+.dock-tabs button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: var(--h-control-md);
+	padding: 0 12px;
+	border-bottom: 2px solid transparent;
+	font-size: var(--fs-dense);
+	color: var(--text-3);
+}
+.dock-tabs button:hover:not(.on) {
+	color: var(--text);
+}
+.dock-tabs button.on {
+	color: var(--accent);
+	border-bottom-color: var(--accent);
+}
+/* Le compteur d'un onglet (ce qui n'est pas encore publié, par exemple). */
+.badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 18px;
+	height: 18px;
+	padding: 0 5px;
+	border-radius: var(--r-pill);
+	background: var(--accent-tint-14);
+	color: var(--accent);
+	font-size: var(--fs-label);
+	font-variant-numeric: tabular-nums;
+}
+.badge.warn {
+	background: var(--warn-tint);
+	color: var(--warn-text);
 }
 
 /* ---- Sections (le rail du builder) ---- */

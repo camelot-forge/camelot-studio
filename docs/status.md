@@ -643,6 +643,46 @@ re-assembling, the state select, the count in the foot, the two cards, the
 strip/transport/status bar shared with the viewer, a snapshot PNG and the
 GLB export re-parsed). `pnpm test/check/lint/build` green — **check is now 0
 errors and 0 warnings**.
+
+**The dock system, and the world editor's Journal (same day).** “My UI, not
+ours” is now a mechanism: one `Dock.svelte` carries every panel — the figures'
+library and inspector, the builder's rail and inspector, the world's navigator
+and editor — with a **resize grip** on its inner edge (260–640 px, drag;
+double-click resets), a **pin** that lets it float over the scene (dragged by
+its head) and a per-dock memory in `camelot.dock.<id>` (width, pin, spot), so
+a layout survives a reload. `app.css` gained the frame, the tab strip and the
+badge. Two things the browser taught it: a press on a dock's head started a
+**native text drag**, whose `pointercancel` ended the gesture after one move
+(fixed with `preventDefault`, `user-select: none`, and treating
+`pointercancel` as a release) — and a floating dock needs its own track, so
+the world's navigator and the figures' docks now live beside the stage, not
+over it.
+
+**The world page was rebuilt around them, as draft 1 drew it.** The left
+column is the **Navigator** (client status, region, zone search and list, the
+go-to and region search, the zone's own counts, layers, fixtures, the lint
+check); the right one is the **Editor**, a dock with two tabs — **Inspect**
+(the selection's own fields, its ground-row z rule spelled out, the rows it
+carries, the add flow) and **Journal** — and the app bar carries the session
+chip, **undo** and **save**. The journal tab is the readable history the
+draft asked for: one line per op, with **both sides** (`expect` / `originals`
+on one side, what was written on the other), grouped per zone, the server
+rows beside them, the count in the tab's badge, and the publish chain
+(build / revert / restore all) with the reload hints and the pack line under
+it. `lib/world/journal.ts` holds the reading, unit-tested (11 tests). The
+last hex palette went with it: the page now uses the same tokens and dock
+grammar as the rest of the studio, mono included.
+
+Verified in the browser: `web/scripts/dock_probe.mjs` — **28 checks**, all
+green (head/grip/pin on both pages, the width floor and the remembered width,
+floating out of the flow, dragging by the head, the spot surviving a reload,
+the world's tabs and their badge, a fixture picked in the navigator landing
+in the inspector, a typed field journaling one fixture op **and the 31 rows
+it carries**, the head's count matching the daemon's, the journal line read
+with both sides, Delete removing and journaling, and the session left clean).
+The three older harnesses still pass (46 viewer + 32 builder + the world
+grammar probe, whose tool clicks now go through the keys the strip
+documents).
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.

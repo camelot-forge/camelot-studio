@@ -45,7 +45,7 @@
 	const sub = $derived(origin ? `${model.name} · ${origin}` : model.name);
 </script>
 
-<Dock title="Inspect" {sub} icon={PanelRight} side="right">
+<Dock id="figures.inspector" title="Inspect" {sub} icon={PanelRight} side="right">
 	<ModelCard {model} {origin} />
 	{#if model.character}
 		{#key model.character}

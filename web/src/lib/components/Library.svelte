@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { Database, FileBox, RefreshCw, Search, WifiOff } from '@lucide/svelte';
 	import { api, type AssetSummary, type Health, type RootInfo } from '$lib/api/client';
+	import Dock from './Dock.svelte';
 
 	interface Props {
 		onselect: (asset: AssetSummary) => void;
@@ -101,23 +102,28 @@
 	const totalPages = $derived(Math.max(1, Math.ceil(total / limit)));
 </script>
 
-<aside class="library">
-	<header class="dock-head">
-		<span class="logo" aria-hidden="true"><Database size={15} /></span>
-		<div class="titles">
-			<span class="name">Library</span>
-			<span class="sub">
-				{#if status === 'online' && info}
-					{info.total.toLocaleString()} assets · {info.archives.toLocaleString()} archives
-				{:else if status === 'offline'}
-					daemon offline
-				{:else}
-					connecting…
-				{/if}
-			</span>
-		</div>
-	</header>
+{#snippet foot()}
+	<button class="btn btn--ghost" disabled={page <= 1} onclick={() => go(-1)}>‹</button>
+	<span class="nums">{page} / {totalPages}</span>
+	<button class="btn btn--ghost" disabled={page >= totalPages} onclick={() => go(1)}>›</button>
+	<button class="btn btn--ghost" onclick={refresh} aria-label="Refresh">
+		<RefreshCw size={14} class={loading ? 'spin' : ''} />
+	</button>
+	{#if health}<span class="build" title="daemon build">{health.version}@{health.build}</span>{/if}
+{/snippet}
 
+<Dock
+	id="figures.library"
+	title="Library"
+	sub={status === 'online' && info
+		? `${info.total.toLocaleString()} assets · ${info.archives.toLocaleString()} archives`
+		: status === 'offline'
+			? 'daemon offline'
+			: 'connecting…'}
+	icon={Database}
+	scroll={false}
+	foot={status === 'offline' ? undefined : foot}
+>
 	{#if status === 'offline'}
 		<div class="offline">
 			<WifiOff size={20} />
@@ -180,30 +186,10 @@
 				</button>
 			{/each}
 		</div>
-
-		<footer>
-			<button class="btn btn--ghost" disabled={page <= 1} onclick={() => go(-1)}>‹</button>
-			<span class="nums">{page} / {totalPages}</span>
-			<button class="btn btn--ghost" disabled={page >= totalPages} onclick={() => go(1)}>›</button>
-			<button class="btn btn--ghost" onclick={refresh} aria-label="Refresh">
-				<RefreshCw size={14} class={loading ? 'spin' : ''} />
-			</button>
-			{#if health}<span class="build" title="daemon build">{health.version}@{health.build}</span
-				>{/if}
-		</footer>
 	{/if}
-</aside>
+</Dock>
 
 <style>
-	.library {
-		width: 320px;
-		min-width: 320px;
-		display: flex;
-		flex-direction: column;
-		border-right: 1px solid var(--border);
-		background: var(--surface-2);
-		min-height: 0;
-	}
 	.controls {
 		display: flex;
 		flex-direction: column;
@@ -288,21 +274,12 @@
 		letter-spacing: 0.04em;
 		color: var(--text-4);
 	}
-	footer {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		padding: 8px 10px;
-		border-top: 1px solid var(--border);
-		font-size: 12px;
-		color: var(--text-3);
-	}
-	footer .nums {
+	.nums {
 		margin: 0 6px;
 	}
-	footer .build {
+	.build {
 		margin-left: auto;
-		font-size: 10px;
+		font-size: var(--fs-label);
 		font-variant-numeric: tabular-nums;
 		color: var(--text-3);
 	}
@@ -312,6 +289,7 @@
 		align-items: center;
 		gap: 10px;
 		padding: 40px 24px;
+		overflow-y: auto;
 		text-align: center;
 		color: var(--text-3);
 	}

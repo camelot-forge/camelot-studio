@@ -4,6 +4,7 @@
 	// and pick an object to inspect and recentre on (the editor's first slice).
 	import { onMount } from 'svelte';
 	import AppBar from '$lib/components/AppBar.svelte';
+	import Dock from '$lib/components/Dock.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import {
 		api,
@@ -32,17 +33,20 @@
 		type RowProposal
 	} from '$lib/world/viewer';
 	import {
+		Compass,
 		Crosshair,
 		Globe2,
 		LoaderCircle,
 		Magnet,
 		MousePointer2,
 		Move,
+		PanelRight,
 		Plus,
 		RotateCw,
 		Ruler,
 		Scaling
 	} from '@lucide/svelte';
+	import { journalView } from '$lib/world/journal';
 
 	let canvasEl = $state<HTMLCanvasElement | null>(null);
 	let viewer: WorldViewer | null = null;
@@ -148,7 +152,7 @@
 	let busyEdit = $state(false);
 	/** The floating panel: closed until something is selected or the panel is
 	 * asked for, and it remembers where the operator put it. */
-	let panel = $state({ open: false, x: 0, y: 0, dragging: false });
+	let tab = $state<'inspect' | 'journal'>('inspect');
 
 	// The server rows (B2/W-4's first half): the leading row, the rows the
 	// selected fixture would carry, and whether to carry them.
@@ -181,6 +185,8 @@
 	const changes = $derived(unsavedFixtures + unsavedRows);
 	/** Like a repository: unsaved changes exist, or they do not. */
 	const dirty = $derived(changes > 0);
+	/** The journal, read the way the operator reads it (lib/world/journal). */
+	const journals = $derived(journalView({ zones: edit?.zones ?? [], rows: edit?.rows ?? [] }));
 	// The client's half is the client's own authority: `revert` cannot touch it.
 	const clientNote = $derived.by(() => {
 		const client = edit?.client;
@@ -280,17 +286,6 @@
 			if (event.key === 'Delete' || event.key === 'Backspace') void removeSelection();
 		};
 		window.addEventListener('keydown', onKey);
-		const saved = window.localStorage.getItem('camelot.editorPanel');
-		const parent = canvasEl.parentElement;
-		if (saved) {
-			const parsed = JSON.parse(saved) as { x: number; y: number };
-			panel.x = parsed.x;
-			panel.y = parsed.y;
-		} else {
-			// top right, out of the way of the zone's own middle
-			panel.x = Math.max(12, (parent?.clientWidth ?? 900) - 372);
-			panel.y = 12;
-		}
 		api
 			.worldIndex()
 			.then((loaded) => {
@@ -513,7 +508,7 @@
 			!known && selection.rows.length ? selection.rows[selection.rows.length - 1] : null;
 		selectionCount = selection.fixtures.length + selection.rows.length;
 		proposals = known ? (viewer?.carriedRows(known.id) ?? []) : [];
-		if (selectionCount) panel.open = true;
+		if (selectionCount) tab = 'inspect';
 	}
 
 	/** The page's own selection paths (the lists) go through the viewer, so
@@ -933,34 +928,10 @@
 	}
 
 	/** Drop the selection where the ground was last clicked (the add flow's own
-	 * point, kept as the panel's "move here"). */
+	 * point, kept as the inspector's "move here"). */
 	function moveHere() {
 		if (!addPoint || !viewer) return;
 		viewer.moveSelection(addPoint);
-	}
-
-	// -- the floating panel: drag it by its header, remember where ---------------
-
-	function panelDown(event: PointerEvent) {
-		const target = event.target as HTMLElement;
-		if (target.closest('button') || target.closest('input')) return;
-		panel.dragging = true;
-		const from = { x: event.clientX, y: event.clientY, px: panel.x, py: panel.y };
-		const move = (moveEvent: PointerEvent) => {
-			panel.x = from.px + (moveEvent.clientX - from.x);
-			panel.y = from.py + (moveEvent.clientY - from.y);
-		};
-		const up = () => {
-			panel.dragging = false;
-			window.removeEventListener('pointermove', move);
-			window.removeEventListener('pointerup', up);
-			window.localStorage.setItem(
-				'camelot.editorPanel',
-				JSON.stringify({ x: panel.x, y: panel.y })
-			);
-		};
-		window.addEventListener('pointermove', move);
-		window.addEventListener('pointerup', up);
 	}
 
 	function kindLabel(kind: string): string {
@@ -975,9 +946,43 @@
 		contextIcon={Globe2}
 		contextLabel={zone?.info.name ?? ''}
 		contextMeta={zone ? `region ${zone.info.region}` : ''}
-	/>
+	>
+		{#snippet actions()}
+			{#if editing && edit}
+				<span
+					class="session"
+					class:on={dirty}
+					title="what the session still holds, and where it stands"
+				>
+					{dirty ? `${changes} not saved` : 'saved'}
+				</span>
+				<button
+					class="btn btn--secondary"
+					onclick={undo}
+					disabled={(!editOps && !editRows) || busyEdit}
+					title="drop the journal's last op (server rows first)"
+				>
+					undo
+				</button>
+				<button
+					class="btn btn--primary"
+					onclick={apply}
+					disabled={busyEdit || !changes}
+					title="save the session: the client's files and the server's rows (the game reads them after /reload)"
+				>
+					save{dirty ? ` (${changes})` : ''}
+				</button>
+			{/if}
+		{/snippet}
+	</AppBar>
+
 	<div class="world">
-		<aside>
+		<Dock
+			id="world.navigator"
+			title="Navigator"
+			sub={index ? `${index.zones.length} zones · region ${regionId}` : 'reading the client…'}
+			icon={Compass}
+		>
 			<p class="status" class:err={error !== null}>{error ?? status}</p>
 
 			{#if index}
@@ -1012,73 +1017,162 @@
 						</li>
 					{/each}
 				</ul>
-			{/if}
 
-			{#if zone}
-				<section class="info">
-					<h2>{zone.info.name}</h2>
-					<dl>
-						<dt>zone</dt>
-						<dd>{zone.info.id} · {kindLabel(zone.info.kind)}</dd>
-						<dt>fixtures</dt>
-						<dd>{zone.fixtures.length}</dd>
-						<dt>catalog</dt>
-						<dd>{zone.catalog.filter((c) => c.mesh).length} / {zone.catalog.length} with meshes</dd>
-						<dt>bounds</dt>
-						<dd>{zone.bounds.length} · water {zone.water.length} · jumps {zone.jumps.length}</dd>
-						<dt>ground</dt>
-						<dd>{zone.patches?.textures.length ?? 0} layer sheets</dd>
-						<dt>server</dt>
-						<dd>
-							{#if spawns}
-								{spawns.counts.mob} mobs · {spawns.counts.worldobject} statics · {spawns.counts
-									.door} doors · {spawns.counts.path} patrols
-							{:else}
-								(response missing)
-							{/if}
-						</dd>
-					</dl>
-					{#if zone.warnings.length || spawns?.warnings.length}
-						<p class="warn">{[...zone.warnings, ...(spawns?.warnings ?? [])].join(' · ')}</p>
+				<section class="section">
+					<h4>Go to</h4>
+					<div class="row tools">
+						<label>x <input type="number" bind:value={goX} /></label>
+						<label>y <input type="number" bind:value={goY} /></label>
+						<button type="button" onclick={goTo} title="move the camera there">go</button>
+					</div>
+					<div class="row tools">
+						<input
+							type="search"
+							bind:value={searchQuery}
+							placeholder="name, file or id — the region"
+							onkeydown={(e) => e.key === 'Enter' && runSearch()}
+						/>
+						<button
+							type="button"
+							onclick={runSearch}
+							disabled={searching}
+							title="search the region"
+						>
+							{searching ? '…' : 'find'}
+						</button>
+					</div>
+					{#if searchError}<p class="warn">{searchError}</p>{/if}
+					{#if searchResult}
+						<p class="hint">
+							{searchResult.matches.length}
+							{searchResult.matches.length === 1 ? 'match' : 'matches'} in
+							{searchResult.scanned} zone{searchResult.scanned === 1 ? '' : 's'} read{searchResult
+								.matches.length >= searchResult.limit
+								? ` (capped at ${searchResult.limit})`
+								: ''}
+						</p>
+						<ul class="hits">
+							{#each searchResult.matches as hit (`${hit.zone}:${hit.id}`)}
+								<li>
+									<button
+										type="button"
+										onclick={() => goToHit(hit)}
+										title="open its zone and frame it"
+									>
+										<span class="zname">{hit.name || '(unnamed)'}</span>
+										<span class="zmeta">{hit.zone_name} · #{hit.id}</span>
+									</button>
+								</li>
+							{/each}
+						</ul>
 					{/if}
 				</section>
 
-				<section class="layers">
-					<label><input type="checkbox" bind:checked={toggles.ground} /> ground</label>
-					<label><input type="checkbox" bind:checked={toggles.fixtures} /> fixtures</label>
-					<label><input type="checkbox" bind:checked={toggles.spawns} /> mobs</label>
-					<label><input type="checkbox" bind:checked={toggles.statics} /> statics</label>
-					<label><input type="checkbox" bind:checked={toggles.doors} /> doors</label>
-					<label><input type="checkbox" bind:checked={toggles.patrols} /> patrols</label>
-					<label><input type="checkbox" bind:checked={toggles.bounds} /> bounds</label>
-					<label><input type="checkbox" bind:checked={toggles.water} /> water</label>
-					<label><input type="checkbox" bind:checked={toggles.jumps} /> jumps</label>
-				</section>
+				{#if zone}
+					<section class="info">
+						<h2>{zone.info.name}</h2>
+						<dl>
+							<dt>zone</dt>
+							<dd>{zone.info.id} · {kindLabel(zone.info.kind)}</dd>
+							<dt>fixtures</dt>
+							<dd>{zone.fixtures.length}</dd>
+							<dt>catalog</dt>
+							<dd>
+								{zone.catalog.filter((c) => c.mesh).length} / {zone.catalog.length} with meshes
+							</dd>
+							<dt>bounds</dt>
+							<dd>{zone.bounds.length} · water {zone.water.length} · jumps {zone.jumps.length}</dd>
+							<dt>ground</dt>
+							<dd>{zone.patches?.textures.length ?? 0} layer sheets</dd>
+							<dt>server</dt>
+							<dd>
+								{#if spawns}
+									{spawns.counts.mob} mobs · {spawns.counts.worldobject} statics · {spawns.counts
+										.door} doors · {spawns.counts.path} patrols
+								{:else}
+									(response missing)
+								{/if}
+							</dd>
+						</dl>
+						{#if zone.warnings.length || spawns?.warnings.length}
+							<p class="warn">{[...zone.warnings, ...(spawns?.warnings ?? [])].join(' · ')}</p>
+						{/if}
+					</section>
 
-				<section class="fixtures">
-					<label class="field">
-						<span>Fixtures</span>
-						<input type="search" bind:value={fixtureQuery} placeholder="name, file or id" />
-					</label>
-					<ul>
-						{#each fixtureRows as fixture (fixture.id)}
-							<li>
-								<button
-									type="button"
-									class:active={fixture.id === selected?.id}
-									onclick={() => selectFixture(fixture)}
-									ondblclick={() => focusFixture(fixture)}
-									title="click to select, double-click to focus"
-								>
-									<span class="zname">{fixture.name || '(unnamed)'}</span>
-									<span class="zmeta">{fixture.x.toFixed(0)}, {fixture.y.toFixed(0)}</span>
+					<section class="layers">
+						<label><input type="checkbox" bind:checked={toggles.ground} /> ground</label>
+						<label><input type="checkbox" bind:checked={toggles.fixtures} /> fixtures</label>
+						<label><input type="checkbox" bind:checked={toggles.spawns} /> mobs</label>
+						<label><input type="checkbox" bind:checked={toggles.statics} /> statics</label>
+						<label><input type="checkbox" bind:checked={toggles.doors} /> doors</label>
+						<label><input type="checkbox" bind:checked={toggles.patrols} /> patrols</label>
+						<label><input type="checkbox" bind:checked={toggles.bounds} /> bounds</label>
+						<label><input type="checkbox" bind:checked={toggles.water} /> water</label>
+						<label><input type="checkbox" bind:checked={toggles.jumps} /> jumps</label>
+					</section>
+
+					<section class="fixtures">
+						<label class="field">
+							<span>Fixtures</span>
+							<input type="search" bind:value={fixtureQuery} placeholder="name, file or id" />
+						</label>
+						<ul>
+							{#each fixtureRows as fixture (fixture.id)}
+								<li>
+									<button
+										type="button"
+										class:active={fixture.id === selected?.id}
+										onclick={() => selectFixture(fixture)}
+										ondblclick={() => focusFixture(fixture)}
+										title="click to select, double-click to focus"
+									>
+										<span class="zname">{fixture.name || '(unnamed)'}</span>
+										<span class="zmeta">{fixture.x.toFixed(0)}, {fixture.y.toFixed(0)}</span>
+									</button>
+								</li>
+							{/each}
+						</ul>
+					</section>
+
+					<section class="section">
+						<h4>Check</h4>
+						<div class="row tools">
+							<button
+								type="button"
+								onclick={runLint}
+								title="what stands outside the zone's bounds, under the terrain, or far above it"
+							>
+								check
+							</button>
+							{#if findings}
+								<span class="readout">
+									{findings.length} finding{findings.length === 1 ? '' : 's'}
+								</span>
+								<button type="button" onclick={() => (findings = null)} title="hide them">
+									clear
 								</button>
-							</li>
-						{/each}
-					</ul>
-				</section>
+							{/if}
+						</div>
+						{#if findings && findings.length}
+							<ul class="hits">
+								{#each findings as finding, index (index)}
+									<li>
+										<button
+											type="button"
+											onclick={() => goToFinding(finding)}
+											title="select it and frame it"
+										>
+											<span class="zname">{finding.what}</span>
+											<span class="zmeta">{finding.detail}</span>
+										</button>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					</section>
+				{/if}
 			{/if}
-		</aside>
+		</Dock>
 
 		<div class="stage">
 			<div class="tools-dock">
@@ -1141,346 +1235,321 @@
 			{#if busy}
 				<div class="busy"><LoaderCircle class="spin" size={20} /> loading…</div>
 			{/if}
+		</div>
 
-			{#if editing && edit}
-				<section class="panel" class:dirty style="left: {panel.x}px; top: {panel.y}px">
-					<header
-						role="toolbar"
-						tabindex="-1"
-						onpointerdown={panelDown}
-						title="drag to move the panel"
-					>
-						<h2>Editor <span class="dim">{edit.mod.id}</span></h2>
-						<span class="state" class:on={dirty}>
-							{dirty ? `${changes} not saved` : 'saved'}
-						</span>
-						<button
-							type="button"
-							onclick={() => (panel.open = !panel.open)}
-							title={panel.open ? 'collapse' : 'expand'}
-						>
-							{panel.open ? '–' : '+'}
-						</button>
-					</header>
-					{#if panel.open}
-						<div class="body">
-							<div class="row tools">
-								<label>x <input type="number" bind:value={goX} /></label>
-								<label>y <input type="number" bind:value={goY} /></label>
-								<button type="button" onclick={goTo} title="move the camera there">go</button>
-							</div>
-							<section class="search">
-								<div class="row tools">
-									<input
-										type="search"
-										bind:value={searchQuery}
-										placeholder="name, file or id — the region"
-										onkeydown={(e) => e.key === 'Enter' && runSearch()}
-									/>
-									<button
-										type="button"
-										onclick={runSearch}
-										disabled={searching}
-										title="search the region"
+		{#if editing && edit}
+			{#snippet editorTabs()}
+				<button type="button" class:on={tab === 'inspect'} onclick={() => (tab = 'inspect')}>
+					Inspect
+				</button>
+				<button
+					type="button"
+					class:on={tab === 'journal'}
+					onclick={() => (tab = 'journal')}
+					title="the session's own history, and what a save would publish"
+				>
+					Journal
+					{#if changes}<span class="badge" class:warn={dirty}>{changes}</span>{/if}
+				</button>
+			{/snippet}
+			<Dock
+				id="world.editor"
+				title="Editor"
+				sub={dirty ? `${edit.mod.id} · ${changes} not saved` : `${edit.mod.id} · saved`}
+				icon={PanelRight}
+				side="right"
+				tabs={editorTabs}
+			>
+				{#if tab === 'inspect'}
+					{#if selected}
+						<section class="context">
+							<h3>
+								Fixture <span class="dim">#{selected.id}</span>
+								{selectionCount > 1 ? `· ${selectionCount} selected` : ''}
+							</h3>
+							<p class="hint">
+								{selected.name || '(unnamed)'} · {catalogOf.get(selected.nif_id)?.filename ??
+									`nif ${selected.nif_id}`} · {selected.ground ? 'ground' : 'free'}
+							</p>
+							<div class="fields">
+								<label
+									>x <input
+										type="number"
+										value={selected.x.toFixed(0)}
+										onchange={(e) => setFixtureField('x', e.currentTarget.value)}
+									/></label
+								>
+								<label
+									>y <input
+										type="number"
+										value={selected.y.toFixed(0)}
+										onchange={(e) => setFixtureField('y', e.currentTarget.value)}
+									/></label
+								>
+								{#if !selected.ground}
+									<label
+										>z <input
+											type="number"
+											value={selected.z.toFixed(0)}
+											onchange={(e) => setFixtureField('z', e.currentTarget.value)}
+										/></label
 									>
-										{searching ? '…' : 'find'}
-									</button>
-								</div>
-								{#if searchError}<p class="warn">{searchError}</p>{/if}
-								{#if searchResult}
-									<p class="hint">
-										{searchResult.matches.length}
-										{searchResult.matches.length === 1 ? 'match' : 'matches'} in
-										{searchResult.scanned} zone{searchResult.scanned === 1 ? '' : 's'} read{searchResult
-											.matches.length >= searchResult.limit
-											? ` (capped at ${searchResult.limit})`
-											: ''}
-									</p>
-									<ul class="hits">
-										{#each searchResult.matches as hit (`${hit.zone}:${hit.id}`)}
-											<li>
-												<button
-													type="button"
-													onclick={() => goToHit(hit)}
-													title="open its zone and frame it"
-												>
-													<span class="zname">{hit.name || '(unnamed)'}</span>
-													<span class="zmeta">{hit.zone_name} · #{hit.id}</span>
-												</button>
-											</li>
-										{/each}
-									</ul>
 								{/if}
-							</section>
-							<div class="row tools">
+								<label
+									>A <input
+										type="number"
+										value={selected.angle.toFixed(0)}
+										onchange={(e) => setFixtureField('angle', e.currentTarget.value)}
+									/></label
+								>
+								<button type="button" title="−15°" onclick={() => nudgeAngle(-15)}>↺</button>
+								<button type="button" title="+15°" onclick={() => nudgeAngle(15)}>↻</button>
+								<label
+									>scale <input
+										type="number"
+										value={selected.scale.toFixed(0)}
+										onchange={(e) => setFixtureField('scale', e.currentTarget.value)}
+									/></label
+								>
+							</div>
+							<div class="row">
+								<button type="button" onclick={() => viewer?.focusSelection()}>
+									<Crosshair size={13} /> Focus (F)
+								</button>
 								<button
 									type="button"
-									onclick={runLint}
-									title="what stands outside the zone's bounds, under the terrain, or far above it"
+									onclick={moveHere}
+									disabled={!addPoint}
+									title="drop the selection on the last ground click (add mode)"
 								>
-									check
+									move here
 								</button>
-								{#if findings}
-									<span class="readout">
-										{findings.length} finding{findings.length === 1 ? '' : 's'}
-									</span>
-									<button type="button" onclick={() => (findings = null)} title="hide them">
-										clear
-									</button>
-								{/if}
+								<button class="danger" type="button" onclick={removeSelection}> remove </button>
 							</div>
-							{#if findings && findings.length}
-								<ul class="hits">
-									{#each findings as finding, index (index)}
+							{#if selected.ground}
+								<p class="hint">
+									a ground row's <code>z</code> belongs to the terrain: the editor writes the position
+									and the client drops it on the ground (W-3, measured in game).
+								</p>
+							{/if}
+							{#if proposals.length}
+								<label class="snap">
+									<input type="checkbox" bind:checked={carry} /> carry {proposals.length} server row{proposals.length >
+									1
+										? 's'
+										: ''}
+								</label>
+								<p class="hint">inside this object's own meshes: {carriedNote}</p>
+								<ul class="addlist">
+									{#each proposals as row (row.table + ':' + row.key)}
 										<li>
 											<button
 												type="button"
-												onclick={() => goToFinding(finding)}
-												title="select it and frame it"
+												onclick={() => selectRow({ table: row.table, id: row.key })}
 											>
-												<span class="zname">{finding.what}</span>
-												<span class="zmeta">{finding.detail}</span>
+												<span class="zname">{row.name || '(unnamed)'}</span>
+												<span class="zmeta">{row.table}</span>
 											</button>
 										</li>
 									{/each}
 								</ul>
 							{/if}
+						</section>
+					{:else if selectedRow && selectedSpawn}
+						<section class="context">
+							<h3>{selectedRow.table} <span class="dim">{selectedRow.id.slice(0, 8)}</span></h3>
+							<p class="hint">{selectedSpawn.name || '(unnamed)'}</p>
+							<div class="fields">
+								<label
+									>x <input
+										type="number"
+										value={selectedSpawn.x.toFixed(0)}
+										onchange={(e) => setRowField('x', e.currentTarget.value)}
+									/></label
+								>
+								<label
+									>y <input
+										type="number"
+										value={selectedSpawn.y.toFixed(0)}
+										onchange={(e) => setRowField('y', e.currentTarget.value)}
+									/></label
+								>
+								<label
+									>z <input
+										type="number"
+										value={selectedSpawn.z.toFixed(0)}
+										onchange={(e) => setRowField('z', e.currentTarget.value)}
+									/></label
+								>
+								<label
+									>heading <input
+										type="number"
+										value={selectedSpawn.heading}
+										onchange={(e) => setRowField('heading', e.currentTarget.value)}
+									/></label
+								>
+								<button type="button" title="−15°" onclick={() => nudgeAngle(-15)}>↺</button>
+								<button type="button" title="+15°" onclick={() => nudgeAngle(15)}>↻</button>
+							</div>
 							<div class="row">
 								<button
 									type="button"
-									onclick={undo}
-									disabled={(!editOps && !editRows) || busyEdit}
-									title="drop the journal's last op (server rows first)"
+									onclick={moveHere}
+									disabled={!addPoint}
+									title="drop the row on the last ground click (add mode)"
 								>
-									undo
+									move here
 								</button>
-								<button
-									type="button"
-									onclick={build}
-									disabled={busyEdit || !changes}
-									title="assemble the authoring directory and run mod build"
-								>
-									build
-								</button>
-								<button
-									type="button"
-									class="publish"
-									class:on={dirty}
-									onclick={apply}
-									disabled={busyEdit || !changes}
-									title="save the session: the client's files and the server's rows (the game reads them after /reload)"
-								>
-									save{dirty ? ` (${changes})` : ''}
-								</button>
-								<button
-									type="button"
-									onclick={revert}
-									disabled={busyEdit}
-									title="empty the journal (the client half, if installed, stays — restore all takes it too)"
-								>
-									revert
-								</button>
-								<button
-									class="danger"
-									type="button"
-									onclick={restore}
-									disabled={busyEdit || (!changes && !editClient?.installed)}
-									title="put everything back: the client half, the server rows, the journal"
-								>
-									restore all
-								</button>
+								<button class="danger" type="button" onclick={removeSelection}>remove</button>
 							</div>
+						</section>
+					{:else}
+						<p class="hint">
+							Nothing selected. Click a fixture, a door or a mob in the scene — or pick one in the
+							Navigator — and its own fields land here.
+						</p>
+					{/if}
+
+					{#if editMode === 'add'}
+						<section class="context">
+							<h3>Add</h3>
 							<p class="hint">
-								{clientNote} · journal: {editOps} fixture op{editOps === 1 ? '' : 's'},
-								{editRows} row patch{editRows === 1 ? '' : 'es'}{writtenRows
-									? ` (${writtenRows} written)`
-									: ''}
+								{addPoint
+									? `add at ${addPoint.x.toFixed(0)}, ${addPoint.y.toFixed(0)}`
+									: 'click the ground to aim'}
 							</p>
-							{#if writtenRows || editClient?.installed}
-								<p class="hint">
-									the running game reads the database at startup: in game <code>/reload doors</code
-									>,
-									<code>/reload mob</code>, <code>/reload object</code> (region {zone?.info.region})
-									<button type="button" class="link" onclick={copyCommands}>copy</button>
-								</p>
-							{/if}
-							{#if edit.pack}
-								<p class="hint">
-									pack {(edit.pack.size / 1000).toFixed(0)} kB · {new Date(
-										edit.pack.modified * 1000
-									).toLocaleTimeString()}
-								</p>
-							{/if}
-							{#if editStatus}<p class="hint">{editStatus}</p>{/if}
-							{#if editError}<p class="warn">{editError}</p>{/if}
-
-							{#if selected}
-								<section class="context">
-									<h3>
-										Fixture <span class="dim">#{selected.id}</span>
-										{selectionCount > 1 ? `· ${selectionCount} selected` : ''}
-									</h3>
-									<p class="hint">
-										{selected.name || '(unnamed)'} · {catalogOf.get(selected.nif_id)?.filename ??
-											`nif ${selected.nif_id}`} · {selected.ground ? 'ground' : 'free'}
-									</p>
-									<div class="fields">
-										<label
-											>x <input
-												type="number"
-												value={selected.x.toFixed(0)}
-												onchange={(e) => setFixtureField('x', e.currentTarget.value)}
-											/></label
-										>
-										<label
-											>y <input
-												type="number"
-												value={selected.y.toFixed(0)}
-												onchange={(e) => setFixtureField('y', e.currentTarget.value)}
-											/></label
-										>
-										{#if !selected.ground}
-											<label
-												>z <input
-													type="number"
-													value={selected.z.toFixed(0)}
-													onchange={(e) => setFixtureField('z', e.currentTarget.value)}
-												/></label
-											>
-										{/if}
-										<label
-											>A <input
-												type="number"
-												value={selected.angle.toFixed(0)}
-												onchange={(e) => setFixtureField('angle', e.currentTarget.value)}
-											/></label
-										>
-										<button type="button" title="−15°" onclick={() => nudgeAngle(-15)}>↺</button>
-										<button type="button" title="+15°" onclick={() => nudgeAngle(15)}>↻</button>
-										<label
-											>scale <input
-												type="number"
-												value={selected.scale.toFixed(0)}
-												onchange={(e) => setFixtureField('scale', e.currentTarget.value)}
-											/></label
-										>
-									</div>
-									<div class="row">
-										<button type="button" onclick={() => viewer?.focusSelection()}>
-											<Crosshair size={13} /> Focus (F)
-										</button>
+							<input type="search" bind:value={addQuery} placeholder="catalog: file or name" />
+							<ul class="addlist">
+								{#each catalogRows as entry (entry.id)}
+									<li>
 										<button
 											type="button"
-											onclick={moveHere}
-											disabled={!addPoint}
-											title="drop the selection on the last ground click (add mode)"
+											disabled={!addPoint || busyEdit}
+											onclick={() => addCatalog(entry)}
 										>
-											move here
+											<span class="zname">{entry.filename}</span>
+											<span class="zmeta">{entry.name}</span>
 										</button>
-										<button class="danger" type="button" onclick={removeSelection}> remove </button>
-									</div>
-									{#if proposals.length}
-										<label class="snap">
-											<input type="checkbox" bind:checked={carry} /> carry {proposals.length} server row{proposals.length >
-											1
-												? 's'
-												: ''}
-										</label>
-										<p class="hint">inside this object's own meshes: {carriedNote}</p>
-										<ul class="addlist">
-											{#each proposals as row (row.table + ':' + row.key)}
-												<li>
-													<button
-														type="button"
-														onclick={() => selectRow({ table: row.table, id: row.key })}
-													>
-														<span class="zname">{row.name || '(unnamed)'}</span>
-														<span class="zmeta">{row.table}</span>
-													</button>
-												</li>
-											{/each}
-										</ul>
-									{/if}
-								</section>
-							{:else if selectedRow && selectedSpawn}
-								<section class="context">
-									<h3>{selectedRow.table} <span class="dim">{selectedRow.id.slice(0, 8)}</span></h3>
-									<p class="hint">{selectedSpawn.name || '(unnamed)'}</p>
-									<div class="fields">
-										<label
-											>x <input
-												type="number"
-												value={selectedSpawn.x.toFixed(0)}
-												onchange={(e) => setRowField('x', e.currentTarget.value)}
-											/></label
+									</li>
+								{/each}
+							</ul>
+						</section>
+					{/if}
+				{:else}
+					{#if journals.count === 0}
+						<p class="hint">
+							Nothing journalled: the scene is what the client ships. A gesture, a field or a
+							removal writes one line here — and none of it reaches the files until <strong
+								>save</strong
+							>.
+						</p>
+					{:else}
+						{#each journals.zones as journalZone (journalZone.id)}
+							{#if journalZone.entries.length}
+								<section class="section">
+									<h4>
+										Zone {journalZone.id}
+										<span class="card-meta"
+											>{journalZone.entries.length} op{journalZone.entries.length === 1
+												? ''
+												: 's'}</span
 										>
-										<label
-											>y <input
-												type="number"
-												value={selectedSpawn.y.toFixed(0)}
-												onchange={(e) => setRowField('y', e.currentTarget.value)}
-											/></label
-										>
-										<label
-											>z <input
-												type="number"
-												value={selectedSpawn.z.toFixed(0)}
-												onchange={(e) => setRowField('z', e.currentTarget.value)}
-											/></label
-										>
-										<label
-											>heading <input
-												type="number"
-												value={selectedSpawn.heading}
-												onchange={(e) => setRowField('heading', e.currentTarget.value)}
-											/></label
-										>
-										<button type="button" title="−15°" onclick={() => nudgeAngle(-15)}>↺</button>
-										<button type="button" title="+15°" onclick={() => nudgeAngle(15)}>↻</button>
-									</div>
-									<div class="row">
-										<button
-											type="button"
-											onclick={moveHere}
-											disabled={!addPoint}
-											title="drop the row on the last ground click (add mode)"
-										>
-											move here
-										</button>
-										<button class="danger" type="button" onclick={removeSelection}>remove</button>
-									</div>
-								</section>
-							{/if}
-
-							{#if editMode === 'add'}
-								<section class="context">
-									<p class="hint">
-										{addPoint
-											? `add at ${addPoint.x.toFixed(0)}, ${addPoint.y.toFixed(0)}`
-											: 'click the ground to aim'}
-									</p>
-									<input type="search" bind:value={addQuery} placeholder="catalog: file or name" />
-									<ul class="addlist">
-										{#each catalogRows as entry (entry.id)}
-											<li>
-												<button
-													type="button"
-													disabled={!addPoint || busyEdit}
-													onclick={() => addCatalog(entry)}
-												>
-													<span class="zname">{entry.filename}</span>
-													<span class="zmeta">{entry.name}</span>
-												</button>
+									</h4>
+									<ul class="journal">
+										{#each journalZone.entries as entry, index (index)}
+											<li class="entry">
+												<span class="jkind">{entry.kind}</span>
+												<span class="jtarget">{entry.target}</span>
+												<span class="jdiff">
+													{#if entry.before}<s>{entry.before}</s><span class="arrow">→</span
+														>{/if}{entry.after}
+												</span>
+												{#if entry.note}<span class="jnote">{entry.note}</span>{/if}
 											</li>
 										{/each}
 									</ul>
 								</section>
 							{/if}
-						</div>
+						{/each}
+						{#if journals.rows.length}
+							<section class="section">
+								<h4>
+									Server rows
+									<span class="card-meta"
+										>{journals.rows.length} patch{journals.rows.length === 1 ? '' : 'es'}</span
+									>
+								</h4>
+								<ul class="journal">
+									{#each journals.rows as entry, index (index)}
+										<li class="entry">
+											<span class="jkind">{entry.kind}</span>
+											<span class="jtarget">{entry.target}</span>
+											<span class="jdiff">
+												{#if entry.before}<s>{entry.before}</s><span class="arrow">→</span
+													>{/if}{entry.after}
+											</span>
+										</li>
+									{/each}
+								</ul>
+							</section>
+						{/if}
 					{/if}
-				</section>
-			{/if}
-		</div>
+
+					<section class="section">
+						<h4>Publish <span class="card-meta">{clientNote}</span></h4>
+						<div class="row">
+							<button
+								type="button"
+								onclick={build}
+								disabled={busyEdit || !changes}
+								title="assemble the authoring directory and run mod build"
+							>
+								build
+							</button>
+							<button
+								type="button"
+								onclick={revert}
+								disabled={busyEdit}
+								title="empty the journal (the client half, if installed, stays — restore all takes it too)"
+							>
+								revert
+							</button>
+							<button
+								class="danger"
+								type="button"
+								onclick={restore}
+								disabled={busyEdit || (!changes && !editClient?.installed)}
+								title="put everything back: the client half, the server rows, the journal"
+							>
+								restore all
+							</button>
+						</div>
+						<p class="hint">
+							journal: {editOps} fixture op{editOps === 1 ? '' : 's'},
+							{editRows} row patch{editRows === 1 ? '' : 'es'}{writtenRows
+								? ` (${writtenRows} written)`
+								: ''}
+						</p>
+						{#if writtenRows || editClient?.installed}
+							<p class="hint">
+								the running game reads the database at startup: in game <code>/reload doors</code>,
+								<code>/reload mob</code>, <code>/reload object</code> (region {zone?.info.region})
+								<button type="button" class="link" onclick={copyCommands}>copy</button>
+							</p>
+						{/if}
+						{#if edit.pack}
+							<p class="hint">
+								pack {(edit.pack.size / 1000).toFixed(0)} kB · {new Date(
+									edit.pack.modified * 1000
+								).toLocaleTimeString()}
+							</p>
+						{/if}
+						{#if editStatus}<p class="hint">{editStatus}</p>{/if}
+						{#if editError}<p class="warn">{editError}</p>{/if}
+					</section>
+				{/if}
+			</Dock>
+		{/if}
 	</div>
 
 	<StatusBar>
@@ -1537,23 +1606,11 @@
 		display: flex;
 		flex-direction: column;
 		height: 100dvh;
-		background: var(--bg, #141414);
-		color: var(--text-1, #e8e8e8);
 	}
 	.world {
 		flex: 1;
 		display: flex;
 		min-height: 0;
-	}
-	aside {
-		width: 330px;
-		min-width: 270px;
-		overflow-y: auto;
-		padding: 14px;
-		border-right: 1px solid #2a2a2a;
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
 	}
 	.stage {
 		flex: 1;
@@ -1561,7 +1618,7 @@
 		min-width: 0;
 	}
 	/* The floating tools (the drafts' strip): the modes and the snap live here —
-	 * the panel keeps what a *selection* needs, the strip what a *gesture* needs.
+	 * the docks keep what a *selection* needs, the strip what a *gesture* needs.
 	 * The strip's own look is shared with the figure viewer (app.css). */
 	.tools-dock {
 		position: absolute;
@@ -1577,274 +1634,213 @@
 		height: 100%;
 		display: block;
 	}
-	h2 {
-		font-size: 14px;
-		margin: 8px 0 4px;
+	/* The session's own state, in the app bar beside the two actions it colours. */
+	.session {
+		display: inline-flex;
+		align-items: center;
+		height: var(--h-control-md);
+		padding: 0 10px;
+		border: 1px solid var(--border-input);
+		border-radius: var(--r-md);
+		background: var(--surface-input);
+		font-size: var(--fs-small);
+		color: var(--text-3);
+	}
+	.session.on {
+		border-color: var(--warn-border);
+		background: var(--warn-tint);
+		color: var(--warn-text);
 	}
 	.status {
-		margin: 0;
-		font-size: 11px;
+		font-size: var(--fs-small);
 		line-height: 1.4;
-		color: #9aa4a0;
+		color: var(--text-3);
 	}
 	.status.err {
-		color: #ff8f8f;
+		color: var(--danger-text);
 	}
 	.field {
 		display: flex;
 		flex-direction: column;
 		gap: 3px;
-		font-size: 11px;
-		color: #9aa4a0;
+		font-size: var(--fs-label);
+		color: var(--text-4);
 	}
 	select,
 	input[type='search'] {
-		background: #1c1f1e;
-		color: inherit;
-		border: 1px solid #333;
-		border-radius: 5px;
+		width: 100%;
+		background: var(--surface-input);
+		color: var(--text);
+		border: 1px solid var(--border-input);
+		border-radius: var(--r-sm);
 		padding: 5px 6px;
 		font: inherit;
+		font-size: var(--fs-dense);
+	}
+	select:hover,
+	input[type='search']:hover {
+		border-color: var(--border-hover);
 	}
 	ul {
 		list-style: none;
-		margin: 0;
-		padding: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
 	}
 	.zones {
-		max-height: 30dvh;
+		max-height: 24dvh;
 		overflow-y: auto;
 	}
 	.fixtures ul {
-		max-height: 32dvh;
+		max-height: 24dvh;
 		overflow-y: auto;
 	}
-	button {
+	/* The zone, fixture, hit and catalog rows: one button per line. */
+	ul button {
 		width: 100%;
 		display: flex;
 		justify-content: space-between;
 		gap: 8px;
-		background: none;
-		border: 1px solid transparent;
-		border-radius: 5px;
-		color: inherit;
 		padding: 4px 6px;
-		cursor: pointer;
-		font: inherit;
+		border: 1px solid transparent;
+		border-radius: var(--r-sm);
+		color: var(--text-2);
+		font-size: var(--fs-dense);
 		text-align: left;
 	}
-	button:hover {
-		background: #1e2320;
+	ul button:hover {
+		background: var(--surface-input);
+		color: var(--text);
 	}
-	button.active {
-		border-color: #2dd4a7;
-		background: #17302a;
+	ul button.active {
+		border-color: var(--accent);
+		background: var(--accent-tint-12);
+		color: var(--accent);
 	}
-	button.unavailable {
+	ul button.unavailable {
 		opacity: 0.45;
 		cursor: default;
 	}
+	ul button:disabled {
+		color: var(--text-4);
+		cursor: not-allowed;
+	}
+	.zname {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
 	.zmeta {
-		color: #7f8a86;
-		font-size: 10.5px;
+		color: var(--text-4);
+		font-size: var(--fs-label);
+		white-space: nowrap;
+	}
+	.info h2 {
+		font-size: var(--fs-body);
+		margin-bottom: 6px;
 	}
 	.info dl {
 		display: grid;
-		grid-template-columns: 56px 1fr;
+		grid-template-columns: 62px 1fr;
 		gap: 2px 8px;
-		margin: 0;
-		font-size: 11px;
+		font-size: var(--fs-small);
 	}
 	.info dt {
-		color: #7f8a86;
+		color: var(--text-4);
 	}
 	.info dd {
 		margin: 0;
+		color: var(--text-2);
 	}
 	.dim {
-		color: #7f8a86;
+		color: var(--text-4);
 	}
 	.warn {
-		font-size: 10.5px;
+		font-size: var(--fs-label);
 		line-height: 1.4;
-		color: #ffd166;
+		color: var(--warn-text);
 	}
 	.hint {
-		margin: 0;
-		font-size: 10.5px;
+		font-size: var(--fs-small);
 		line-height: 1.5;
-		color: #7f8a86;
+		color: var(--text-4);
 	}
 	.layers {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 8px;
-		font-size: 11px;
+		font-size: var(--fs-small);
+		color: var(--text-2);
 	}
 	.layers label {
 		display: flex;
 		gap: 4px;
 		align-items: center;
+		cursor: pointer;
 	}
-
-	/* The editor's own window, over the scene: drag it by its header. */
-	.panel {
-		position: absolute;
-		width: 350px;
-		max-height: calc(100% - 24px);
-		display: flex;
-		flex-direction: column;
-		background: rgba(14, 18, 21, 0.94);
-		border: 1px solid #2a3438;
-		border-radius: 8px;
-		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-		backdrop-filter: blur(4px);
-		z-index: 10;
+	.layers input {
+		accent-color: var(--accent);
 	}
-	.panel.dirty {
-		border-color: #6b5a25;
-	}
-	.panel header {
-		display: flex;
-		gap: 8px;
-		align-items: center;
-		padding: 8px 10px;
-		border-bottom: 1px solid #222b2e;
-		cursor: grab;
-	}
-	.panel header:active {
-		cursor: grabbing;
-	}
-	.panel h2 {
-		margin: 0;
-		font-size: 12px;
-		font-weight: 600;
-		flex: 1;
-	}
-	.panel .state {
-		font-size: 10.5px;
-		color: #7f8a86;
-	}
-	.panel .state.on {
-		color: #ffd166;
-	}
-	.panel header button {
-		width: auto;
-		padding: 1px 7px;
-		border-color: #333;
-		font-size: 12px;
-	}
-	.panel .body {
-		overflow-y: auto;
-		padding: 10px;
+	/* The selection's own block, in the inspector. */
+	.context {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
 	}
-	.panel .context {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		padding-top: 8px;
-		border-top: 1px solid #222b2e;
-	}
-	.panel h3 {
-		margin: 0;
-		font-size: 11px;
+	.context h3 {
+		font-size: var(--fs-dense);
 		font-weight: 600;
-		color: #cfe8e0;
+		color: var(--text);
 	}
-	.panel .row {
+	.row {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 4px;
 		align-items: center;
 	}
-	.panel .row button {
+	.row button {
 		width: auto;
-		padding: 3px 8px;
-		border-color: #333;
-		font-size: 11px;
+		padding: 4px 8px;
+		border: 1px solid var(--border-input);
+		border-radius: var(--r-sm);
+		background: var(--surface-input);
+		color: var(--text-2);
+		font-size: var(--fs-small);
 	}
-	.panel button.danger {
-		border-color: #7a2f2f;
-		color: #ff8f8f;
+	.row button:hover:not(:disabled) {
+		border-color: var(--border-hover);
+		color: var(--text);
 	}
-	.panel button.publish.on {
-		border-color: #6b5a25;
-		color: #ffd166;
-		background: #2a2415;
+	.row button:disabled {
+		color: var(--text-4);
+		cursor: not-allowed;
 	}
-	.panel button.link {
-		border: none;
-		background: none;
-		color: #2dd4a7;
-		padding: 0 3px;
-		text-decoration: underline;
+	.row button.danger {
+		border-color: var(--danger-border);
+		color: var(--danger-text);
 	}
-	.panel input[type='search'] {
-		font-size: 11px;
-	}
-	.panel .addlist {
-		max-height: 20dvh;
-		overflow-y: auto;
-	}
-	.panel .tools {
+	.row.tools {
 		gap: 6px;
-		font-size: 10.5px;
-		color: #7f8a86;
+		font-size: var(--fs-label);
+		color: var(--text-4);
 	}
-	.panel .tools label {
+	.row.tools label {
 		display: flex;
 		gap: 3px;
 		align-items: center;
 	}
-	.panel .tools input {
+	.row.tools input {
 		width: 64px;
-		padding: 2px 4px;
-		border: 1px solid #2a3438;
-		border-radius: 4px;
-		background: #10161a;
-		color: inherit;
-		font-size: 11.5px;
+		padding: 3px 4px;
+		border: 1px solid var(--border-input);
+		border-radius: var(--r-xs);
+		background: var(--surface-input);
+		color: var(--text);
+		font-size: var(--fs-small);
 	}
-	.panel .readout {
+	.readout {
 		flex: 1;
-		color: #cfe8e0;
-	}
-	.panel .search input[type='search'] {
-		flex: 1;
-	}
-	.panel .hits {
-		max-height: 22dvh;
-		overflow-y: auto;
-		margin: 4px 0 0;
-		padding: 0;
-		list-style: none;
-	}
-	.panel .hits button {
-		display: flex;
-		justify-content: space-between;
-		gap: 8px;
-		width: 100%;
-		border: none;
-		background: none;
-		color: #cfe8e0;
-		font-size: 11px;
-		padding: 2px 4px;
-		text-align: left;
-	}
-	.panel .hits button:hover {
-		background: #1b2427;
-	}
-	.panel .hits .zmeta {
-		color: #7f8a86;
-	}
-	.panel code {
-		color: #cfe8e0;
+		color: var(--text-2);
 	}
 	.fields {
 		display: flex;
@@ -1855,17 +1851,107 @@
 		display: flex;
 		gap: 3px;
 		align-items: center;
-		font-size: var(--fs-label, 10.5px);
-		color: #7f8a86;
+		font-size: var(--fs-label);
+		color: var(--text-3);
 	}
 	.fields input {
 		width: 68px;
-		padding: 2px 4px;
-		border: 1px solid #2a3438;
-		border-radius: 4px;
-		background: #10161a;
-		color: inherit;
-		font-size: 11.5px;
+		padding: 3px 4px;
+		border: 1px solid var(--border-input);
+		border-radius: var(--r-xs);
+		background: var(--surface-input);
+		color: var(--text);
+		font-size: var(--fs-small);
+	}
+	.hits {
+		max-height: 22dvh;
+		overflow-y: auto;
+	}
+	.hits button {
+		display: flex;
+		justify-content: space-between;
+		gap: 8px;
+		width: 100%;
+		padding: 3px 4px;
+		border: none;
+		background: none;
+		color: var(--text-2);
+		font-size: var(--fs-small);
+		text-align: left;
+	}
+	.hits button:hover {
+		background: var(--surface-input);
+		color: var(--text);
+	}
+	.addlist {
+		max-height: 20dvh;
+		overflow-y: auto;
+	}
+	.snap {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: var(--fs-small);
+		color: var(--text-2);
+		cursor: pointer;
+	}
+	.snap input {
+		accent-color: var(--accent);
+	}
+	button.link {
+		width: auto;
+		border: none;
+		background: none;
+		padding: 0 3px;
+		color: var(--accent);
+		font-size: inherit;
+		text-decoration: underline;
+	}
+	/* The journal, read as a history: what changed, and what it was. */
+	.journal {
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+	.entry {
+		display: grid;
+		grid-template-columns: 52px minmax(0, 1fr);
+		gap: 2px 8px;
+		padding: 5px 6px;
+		border-radius: var(--r-sm);
+		font-size: var(--fs-small);
+	}
+	.entry:hover {
+		background: var(--surface-input);
+	}
+	.jkind {
+		font-size: var(--fs-label);
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--text-4);
+	}
+	.jtarget {
+		color: var(--text-2);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.jdiff {
+		grid-column: 2;
+		color: var(--text-2);
+		font-variant-numeric: tabular-nums;
+	}
+	.jdiff s {
+		color: var(--text-4);
+	}
+	.arrow {
+		padding: 0 4px;
+		color: var(--text-4);
+	}
+	.jnote {
+		grid-column: 2;
+		font-size: var(--fs-label);
+		color: var(--text-4);
 	}
 	.busy {
 		position: absolute;
@@ -1875,8 +1961,8 @@
 		display: flex;
 		gap: 8px;
 		align-items: center;
-		font-size: 12px;
-		color: var(--accent, #2dd4a7);
+		font-size: var(--fs-dense);
+		color: var(--accent);
 	}
 	:global(.spin) {
 		animation: spin 0.9s linear infinite;
