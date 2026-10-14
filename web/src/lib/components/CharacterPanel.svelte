@@ -4,8 +4,12 @@
 
 	interface Props {
 		rig: CharacterRig;
+		/** What the dock calls this card: the figure viewer shows the equipment
+		 * under “Character”, the builder under “Equipment”. */
+		title?: string;
+		meta?: string;
 	}
-	let { rig }: Props = $props();
+	let { rig, title = 'Character', meta = '' }: Props = $props();
 
 	// User overrides per slot index (mesh visibility is three.js state, not
 	// reactive): absent = the rig's default, -1 = slot hidden.
@@ -30,8 +34,9 @@
 
 <section class="card">
 	<h3>
-		<UserRound size={14} /> Character
-		<span class="card-meta">{rig.slots.length} slots</span>
+		<UserRound size={14} />
+		{title}
+		<span class="card-meta">{meta || `${rig.slots.length} slots`}</span>
 	</h3>
 	<p class="hint">
 		Player base figure — pick the visible equipment variant per slot. Off hides the slot (naked /

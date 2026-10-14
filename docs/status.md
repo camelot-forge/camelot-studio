@@ -612,6 +612,37 @@ finished one-shot did nothing (it now starts over). `web/src/lib/transport.ts`
 and `lib/inspect.ts` are unit-tested (105 web tests). Next: **slice 3b — the
 builder's rail and its own inspector**, then the journal tab and the dock
 system (resize grip + pin).
+
+**Slice 3b (same day): the character builder.** The rail is now a dock of the
+same grammar (head, sections, foot) with the drafts' four sections: the gender
+segment, **the 18 races** with their realm tags (the draft said 15 — the
+daemon's roster has 18, so the meta reads what the list holds), the appearance
+steppers as a `− value +` row (`1 / 7`), and gear & state. The foot carries the
+operator's **Randomize / Reset** (new) and the size of the space they sample:
+“114,688 combinations — every pick re-assembles the figure”, computed per race
+by `lib/appearance.ts` (`combinationCount`, `randomAppearance`,
+`clampAppearance` — a race switch pulls every pick back into the new range
+instead of leaving a face index pointing nowhere; 13 unit tests). The
+inspector shows the **Character** summary (race, gender, face, hair + colour,
+skin, eye, cloak) and **Equipment**, which lists the pieces the assembled
+figure actually carries (Eye / Head / Hair / Gloves / Arms / Boots / Legs /
+Body) in the material asked for — read-only on purpose: the assembly picks one
+piece per slot, and the per-variant picker belongs to a *base* figure (the
+figures page still offers it). The viewport is the viewer's own: same strip,
+same transport, same gestures, same status-bar grammar, and **Export glTF is
+the primary action** (the shared `lib/gltf/export.ts` now serves both pages).
+The three pre-existing `svelte-check` warnings are gone: the race list is real
+buttons and two dead selectors left. The daemon's character route now names a
+refused state the way the asset route does (measured on race 4/true: 0 of its
+164 slots are refused — the fig3 rig binds them all, so the builder's refusal
+note is a safety net, not a common case). Verified in the browser by
+`web/scripts/builder_probe.mjs` — **32 checks**, all green (sections and race
+list, the gender switch, a stepper re-assembling, a colour pick only
+re-forming its sheet, Randomize inside every range, Reset, the armour material
+re-assembling, the state select, the count in the foot, the two cards, the
+strip/transport/status bar shared with the viewer, a snapshot PNG and the
+GLB export re-parsed). `pnpm test/check/lint/build` green — **check is now 0
+errors and 0 warnings**.
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.

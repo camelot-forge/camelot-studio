@@ -49,7 +49,7 @@ await page.fill('.library input[type=search]', figure);
 await settle(900);
 await page.click('.library .row');
 await page.waitForSelector('.viewer canvas', { timeout: 60000 });
-await page.waitForSelector('.inspector .card', { timeout: 60000 });
+await page.waitForSelector('.dock.right .card', { timeout: 60000 });
 await settle(5000);
 await shot('viewer-01-loaded');
 
@@ -69,7 +69,7 @@ check(
 	JSON.stringify(await text('.appbar nav'))
 );
 check('the library dock is titled', (await text('.library .dock-head .name')) === 'Library');
-check('the inspector dock is titled', (await text('.inspector .dock-head .name')) === 'Inspect');
+check('the inspector dock is titled', (await text('.dock.right .dock-head .name')) === 'Inspect');
 
 const stripTitles = await page.evaluate(() =>
 	[...document.querySelectorAll('.strip .tool')].map((b) => b.getAttribute('title') ?? '')
@@ -155,7 +155,7 @@ check(
 // --- the inspector's cards ---------------------------------------------------
 
 const cards = await page.evaluate(() =>
-	[...document.querySelectorAll('.inspector .card > h3')].map((h) =>
+	[...document.querySelectorAll('.dock.right .card > h3')].map((h) =>
 		h.textContent.replace(/\s+/g, ' ').trim()
 	)
 );
@@ -171,7 +171,7 @@ check(
 
 const model = await page.evaluate(() =>
 	Object.fromEntries(
-		[...document.querySelectorAll('.inspector .card:first-of-type .meta > div')].map((row) => [
+		[...document.querySelectorAll('.dock.right .card:first-of-type .meta > div')].map((row) => [
 			row.querySelector('dt').textContent.trim(),
 			row.querySelector('dd').textContent.trim()
 		])
@@ -186,14 +186,14 @@ check('the Model card counts the rig', Number(model.Bones) > 0, model.Bones);
 
 const anim = await page.evaluate(() => ({
 	meta: document
-		.querySelectorAll('.inspector .card')[1]
+		.querySelectorAll('.dock.right .card')[1]
 		.querySelector('.card-meta')
 		.textContent.trim(),
-	rows: [...document.querySelectorAll('.inspector .states .state')].map((r) =>
+	rows: [...document.querySelectorAll('.dock.right .states .state')].map((r) =>
 		r.textContent.replace(/\s+/g, ' ').trim()
 	),
 	disclosure: document
-		.querySelectorAll('.inspector .card')[1]
+		.querySelectorAll('.dock.right .card')[1]
 		.querySelector('.link')
 		?.textContent?.replace(/\s+/g, ' ')
 		.trim()
@@ -221,16 +221,16 @@ check(
 
 const bones = await page.evaluate(() => ({
 	meta: document
-		.querySelectorAll('.inspector .card')[2]
+		.querySelectorAll('.dock.right .card')[2]
 		.querySelector('.card-meta')
 		.textContent.trim(),
-	rows: document.querySelectorAll('.inspector .bones .bone').length,
+	rows: document.querySelectorAll('.dock.right .bones .bone').length,
 	first: document
-		.querySelector('.inspector .bones .bone')
+		.querySelector('.dock.right .bones .bone')
 		?.textContent?.replace(/\s+/g, ' ')
 		.trim(),
-	search: !!document.querySelector('.inspector .search input'),
-	eye: !!document.querySelector('.inspector .eye')
+	search: !!document.querySelector('.dock.right .search input'),
+	eye: !!document.querySelector('.dock.right .eye')
 }));
 check(
 	'the Bones card lists the rig with its channels',
@@ -240,11 +240,11 @@ check(
 check('the Bones card carries search and the overlay eye', bones.search && bones.eye);
 
 const filtered = await page.evaluate(async () => {
-	const input = document.querySelector('.inspector .search input');
+	const input = document.querySelector('.dock.right .search input');
 	input.value = '13';
 	input.dispatchEvent(new Event('input', { bubbles: true }));
 	await new Promise((r) => setTimeout(r, 300));
-	return [...document.querySelectorAll('.inspector .bones .bone')].map((b) =>
+	return [...document.querySelectorAll('.dock.right .bones .bone')].map((b) =>
 		b.textContent.replace(/\s+/g, ' ').trim()
 	);
 });
@@ -254,25 +254,25 @@ check(
 	filtered.join(' | ')
 );
 await page.evaluate(() => {
-	const input = document.querySelector('.inspector .search input');
+	const input = document.querySelector('.dock.right .search input');
 	input.value = '';
 	input.dispatchEvent(new Event('input', { bubbles: true }));
 });
 
-const skins = await text('.inspector .card:last-of-type');
+const skins = await text('.dock.right .card:last-of-type');
 check('the Skins card names the mesh slots', /skin 0 \S+\.\w{3,4}/.test(skins ?? ''), skins);
 
 // --- playable / refused states ------------------------------------------------
 
 const refused = await page.evaluate(async () => {
-	document.querySelectorAll('.inspector .card')[1].querySelector('.link').click();
+	document.querySelectorAll('.dock.right .card')[1].querySelector('.link').click();
 	await new Promise((r) => setTimeout(r, 400));
-	const rows = [...document.querySelectorAll('.inspector .states .state')];
+	const rows = [...document.querySelectorAll('.dock.right .states .state')];
 	const row = rows.find((r) => r.textContent.includes('EM Dance'));
 	if (!row) return { rows: rows.length, found: false };
 	row.click();
 	await new Promise((r) => setTimeout(r, 5000));
-	const item = [...document.querySelectorAll('.inspector .states li')].find((li) =>
+	const item = [...document.querySelectorAll('.dock.right .states li')].find((li) =>
 		li.textContent.includes('EM Dance')
 	);
 	return {
@@ -298,7 +298,7 @@ const play = () =>
 
 await play();
 const played = await page.evaluate(async () => {
-	const row = [...document.querySelectorAll('.inspector .states .state')].find((r) =>
+	const row = [...document.querySelectorAll('.dock.right .states .state')].find((r) =>
 		r.textContent.trim().startsWith('Run')
 	);
 	row.click();
@@ -309,10 +309,10 @@ const played = await page.evaluate(async () => {
 		status: document.querySelector('.statusbar .end').textContent.replace(/\s+/g, ' ').trim(),
 		active:
 			document
-				.querySelector('.inspector .states .state.on')
+				.querySelector('.dock.right .states .state.on')
 				?.textContent?.replace(/\s+/g, ' ')
 				.trim() ?? null,
-		lit: document.querySelectorAll('.inspector .states .state.on').length
+		lit: document.querySelectorAll('.dock.right .states .state.on').length
 	};
 });
 check(
@@ -334,7 +334,7 @@ check(
 
 await play();
 const clampClip = await page.evaluate(async () => {
-	const row = [...document.querySelectorAll('.inspector .states .state')].find((r) =>
+	const row = [...document.querySelectorAll('.dock.right .states .state')].find((r) =>
 		r.textContent.trim().startsWith('Death')
 	);
 	row.click();
@@ -439,7 +439,7 @@ const overlay = await page.evaluate(async () => {
 		);
 	byTitle('wireframe').click();
 	await new Promise((r) => setTimeout(r, 1200));
-	const eye = document.querySelector('.inspector .eye');
+	const eye = document.querySelector('.dock.right .eye');
 	const bonesOff = eye.getAttribute('aria-pressed');
 	eye.click();
 	await new Promise((r) => setTimeout(r, 1200));
@@ -455,7 +455,7 @@ await page.evaluate(async () => {
 			(b.getAttribute('title') ?? '').includes(needle)
 		);
 	byTitle('wireframe').click();
-	document.querySelector('.inspector .eye').click();
+	document.querySelector('.dock.right .eye').click();
 	await new Promise((r) => setTimeout(r, 600));
 });
 

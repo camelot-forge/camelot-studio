@@ -1,28 +1,43 @@
 <script lang="ts">
-	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
+	import { Minus, Plus } from '@lucide/svelte';
 
 	interface Props {
+		/** What the row is called: the two buttons' own labels. */
+		name: string;
 		value: number;
 		min?: number;
 		max: number;
+		/** The read-out; the drafts' "3 / 7" by default. */
 		label?: (value: number) => string;
 		onchange?: (value: number) => void;
 	}
-	let { value, min = 1, max = 1, label, onchange }: Props = $props();
+	let { name, value, min = 1, max = 1, label, onchange }: Props = $props();
 
-	const change = (v: number) => {
-		if (v < min || v > max) return;
-		onchange?.(v);
-	};
+	function change(next: number) {
+		if (next < min || next > max) return;
+		onchange?.(next);
+	}
 </script>
 
 <div class="stepper">
-	<button aria-label="previous" disabled={value <= min} onclick={() => change(value - 1)}>
-		<ChevronLeft size={14} />
+	<button
+		type="button"
+		class="step"
+		aria-label={`${name}: previous`}
+		disabled={value <= min}
+		onclick={() => change(value - 1)}
+	>
+		<Minus size={14} />
 	</button>
-	<span class="value">{label ? label(value) : value}</span>
-	<button aria-label="next" disabled={value >= max} onclick={() => change(value + 1)}>
-		<ChevronRight size={14} />
+	<span class="value nums">{label ? label(value) : `${value} / ${max}`}</span>
+	<button
+		type="button"
+		class="step"
+		aria-label={`${name}: next`}
+		disabled={value >= max}
+		onclick={() => change(value + 1)}
+	>
+		<Plus size={14} />
 	</button>
 </div>
 
@@ -30,29 +45,40 @@
 	.stepper {
 		display: flex;
 		align-items: center;
-		gap: 6px;
-		flex: 1;
-		justify-content: space-between;
+		gap: 8px;
+		margin-left: auto;
 	}
-	button {
-		width: 22px;
-		height: 22px;
-		border-radius: 6px;
-		border: 1px solid var(--border);
-		background: var(--surface-2);
-		color: var(--text);
+	.step {
 		display: grid;
 		place-items: center;
-		cursor: pointer;
+		width: 26px;
+		height: 26px;
+		border: 1px solid var(--border-input);
+		border-radius: var(--r-sm);
+		background: var(--surface-input);
+		color: var(--text-2);
+		transition:
+			border-color var(--dur) var(--ease),
+			color var(--dur) var(--ease);
 	}
-	button:disabled {
-		opacity: 0.4;
-		cursor: default;
+	.step:hover:not(:disabled) {
+		border-color: var(--border-hover);
+		color: var(--text);
+	}
+	.step:disabled {
+		color: var(--text-4);
+		cursor: not-allowed;
 	}
 	.value {
-		font-size: 12px;
-		color: var(--text);
-		text-align: center;
-		min-width: 42px;
+		display: grid;
+		place-items: center;
+		min-width: 64px;
+		height: 36px;
+		padding: 0 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--r-sm);
+		background: var(--surface);
+		font-size: var(--fs-dense);
+		color: var(--text-2);
 	}
 </style>

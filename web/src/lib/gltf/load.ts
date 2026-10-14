@@ -59,6 +59,9 @@ export interface CharacterRig {
 export interface LoadedModel {
 	scene: THREE.Group;
 	name: string;
+	/** The glTF document's own mesh names, in document order — the loader's
+	 * names, before three.js sanitizes them (`Body1:0` would read `Body10`). */
+	meshNames: string[];
 	meshCount: number;
 	triangleCount: number;
 	skinJson: SkinJson | null;
@@ -407,6 +410,7 @@ export async function loadFromGlb(buf: ArrayBuffer, name: string): Promise<Loade
 	const model: LoadedModel = {
 		scene,
 		name,
+		meshNames: meshes.map((m) => m.name ?? '').filter(Boolean),
 		meshCount: meshCount(scene),
 		triangleCount: triangleCount(scene),
 		skinJson: null,
@@ -463,6 +467,7 @@ export async function loadFromFiles(files: File[]): Promise<LoadedModel> {
 	return {
 		scene,
 		name: gltf.name,
+		meshNames: (json.meshes ?? []).map((m: { name?: string }) => m.name ?? '').filter(Boolean),
 		meshCount: meshCount(scene),
 		triangleCount: triangleCount(scene),
 		skinJson,

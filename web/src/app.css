@@ -437,6 +437,113 @@ a {
 	text-overflow: ellipsis;
 }
 
+/* ---- Dock (le rail du builder, la bibliothèque, l'inspecteur) ---- */
+.dock {
+	display: flex;
+	flex-direction: column;
+	width: var(--w-dock);
+	min-width: var(--w-dock);
+	background: var(--surface-2);
+	min-height: 0;
+}
+.dock.left {
+	border-right: 1px solid var(--border);
+}
+.dock.right {
+	border-left: 1px solid var(--border);
+}
+.dock-body {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	padding: 14px;
+	overflow-y: auto;
+	min-height: 0;
+}
+
+/* ---- Sections (le rail du builder) ---- */
+.section {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.section > h4 {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: var(--fs-label);
+	font-weight: 500;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--text-4);
+}
+.section > h4 .card-meta {
+	margin-left: auto;
+	font-size: var(--fs-small);
+	font-weight: 400;
+	letter-spacing: 0;
+	text-transform: none;
+}
+
+/* ---- Segmented (Male/Female, un seul allumé) ---- */
+.segmented {
+	display: flex;
+	gap: 4px;
+	padding: 4px;
+	border: 1px solid var(--border-input);
+	border-radius: var(--r-lg);
+	background: var(--surface-input);
+}
+.segmented button {
+	flex: 1;
+	height: var(--h-control-md);
+	border-radius: var(--r-sm);
+	font-size: var(--fs-dense);
+	color: var(--text-3);
+}
+.segmented button:hover:not(.on) {
+	color: var(--text);
+}
+.segmented button.on {
+	background: var(--accent);
+	color: var(--accent-ink);
+	font-weight: 600;
+}
+
+/* ---- Liste de choix (races, table des os…) ---- */
+.choice-list {
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+.choice-list button {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 30px;
+	padding: 0 9px;
+	border-radius: var(--r-sm);
+	font-size: var(--fs-body);
+	color: var(--text-2);
+	text-align: left;
+}
+.choice-list button:hover {
+	background: var(--surface-input);
+	color: var(--text);
+}
+.choice-list button.on {
+	background: var(--accent-tint-12);
+	color: var(--accent);
+}
+.choice-list .meta {
+	margin-left: auto;
+	font-size: var(--fs-small);
+	color: var(--text-4);
+}
+
 /* ---- Code : la même fonte que le reste (zéro mono, décision du 13/10) ---- */
 code {
 	font-family: inherit;
