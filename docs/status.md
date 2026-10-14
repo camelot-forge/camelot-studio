@@ -529,6 +529,33 @@ a repository: the publish button carries the count of unpublished changes, and
 the client's own installed half, the journal and the written rows are named
 separately. Verified by `web/scripts/world_mouse_probe.mjs` (real pointer
 events through the page's own path).
+
+**The UI modernization, slice 1 (2026-10-14): the shared shell.** The three
+pages now wear the same frame: a 60 px **app bar** (brand, context chip, the
+**Figures · Builder · World** switch, page actions) and a 28 px **status
+bar**; the rule that maps a pathname to its section is `lib/nav.ts`
+(unit-tested), and the design tokens the drafts asked for (axis colors, the
+control/size/radius/type scale) live in `app.css`. The old one-off headers
+are gone (`Header.svelte` deleted; the builder's hand-rolled header and the
+world's `h1` replaced). Verified in the real browser against the running
+daemon (figures, builder, world, and a loaded figure + Camelot Hills) with
+zero console errors; `pnpm test/check/lint/build` all green. The Penpot
+reference is the file's “Drafts” and “Design system” pages; decisions in
+`workspace/notes/ui-modernization.md`.
+
+**Slice 2a (same day): the world editor's tools.** The panel gave two jobs
+away: a floating **View/Edit chip above a vertical tool strip** on the canvas
+(Select, Move, Rotate, Scale, Add, Measure + the snap magnet, with
+V/W/E/R/A/M shortcuts — View steps the strip back to select + measure and
+hides the panel) and a docked **status bar** that took the cursor's ground
+readout, the gesture reminder, the measure line, the journal summary and the
+build stamp out of the panel. Mono left this page too (the zero-mono
+decision; `code` stays mono on purpose). Verified against the running daemon:
+Edit = 7 tools + the panel, View = 2 tools, no panel; the readout tracks the
+ground (`37838, 24981 · z 2135`); zero console errors; `pnpm
+test/check/lint/build` green. Next: **slice 2b — the Unity-style gizmo back on
+the selection**, over the existing mouse grammar; then the viewer/builder
+transport, bones and equipment panels.
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.

@@ -3,7 +3,8 @@
 	// the client renders, the fixtures it places, its bounds, water and jumps —
 	// and pick an object to inspect and recentre on (the editor's first slice).
 	import { onMount } from 'svelte';
-	import { resolve } from '$app/paths';
+	import AppBar from '$lib/components/AppBar.svelte';
+	import StatusBar from '$lib/components/StatusBar.svelte';
 	import {
 		api,
 		type EditorEdit,
@@ -30,7 +31,18 @@
 		type RowPick,
 		type RowProposal
 	} from '$lib/world/viewer';
-	import { LoaderCircle, Crosshair } from '@lucide/svelte';
+	import {
+		Crosshair,
+		Globe2,
+		LoaderCircle,
+		Magnet,
+		MousePointer2,
+		Move,
+		Plus,
+		RotateCw,
+		Ruler,
+		Scaling
+	} from '@lucide/svelte';
 
 	let canvasEl = $state<HTMLCanvasElement | null>(null);
 	let viewer: WorldViewer | null = null;
@@ -60,30 +72,45 @@
 	let selectionCount = $state(0);
 
 	// The editor (6.3): the mode a drag applies, the snap, and the session's state.
-	const modes = [
+	// The strip the tools live in (the drafts' floating toolbar): the panel keeps
+	// what a *selection* needs, the strip keeps what a *gesture* needs.
+	const strip = [
 		{
 			id: 'select',
-			label: 'select',
-			title: 'click to select, a box to select several; nothing moves'
+			icon: MousePointer2,
+			title: 'Select · V — a click selects, a box selects several; nothing moves'
 		},
 		{
 			id: 'move',
-			label: 'move',
-			title: 'a drag on the selection moves it (the middle button does it from anywhere)'
+			icon: Move,
+			title: 'Move · W — a drag on the selection moves it (the middle button does it from anywhere)'
 		},
 		{
 			id: 'rotate',
-			label: 'rotate',
-			title: 'a drag on the selection turns it 15° about its own middle'
+			icon: RotateCw,
+			title: 'Rotate · E — a drag on the selection turns it 15° about its own middle'
 		},
-		{ id: 'scale', label: 'scale', title: 'a drag on the selection resizes it 5%' },
-		{ id: 'add', label: 'add', title: 'click the ground, then pick a catalog entry' },
+		{
+			id: 'scale',
+			icon: Scaling,
+			title: 'Scale · R — a drag on the selection resizes it 5%'
+		},
+		{ id: 'add', icon: Plus, title: 'Add · A — click the ground, then pick a catalog entry' },
 		{
 			id: 'measure',
-			label: 'measure',
-			title: 'click two points on the ground: the panel shows the distance between them'
+			icon: Ruler,
+			title: 'Measure · M — click two points: the status bar shows the distance'
 		}
 	] as const;
+	/** The strip's shortcuts, one table (the tooltips repeat them). */
+	const TOOL_KEYS: Record<string, EditMode> = {
+		v: 'select',
+		w: 'move',
+		e: 'rotate',
+		r: 'scale',
+		a: 'add',
+		m: 'measure'
+	};
 	let editMode = $state<EditMode>('move');
 	let snap = $state(true);
 	/** The ground under the pointer, and the measure tool's own two points. */
@@ -102,6 +129,17 @@
 	let addPoint = $state<{ x: number; y: number; z: number } | null>(null);
 	let addQuery = $state('');
 	let edit = $state<EditorState | null>(null);
+	/** View/Edit (the drafts' chip): Edit needs the daemon's own --edits session. */
+	let sessionMode = $state<'view' | 'edit'>('edit');
+	const canEdit = $derived(edit?.available === true);
+	const editing = $derived(canEdit && sessionMode === 'edit');
+
+	/** The View/Edit switch — a session mode: View steps the tools back. */
+	function setSession(mode: 'view' | 'edit') {
+		if (mode === 'edit' && !canEdit) return;
+		sessionMode = mode;
+		if (mode === 'view' && editMode !== 'select' && editMode !== 'measure') editMode = 'select';
+	}
 	let editStatus = $state<string | null>(null);
 	let editError = $state<string | null>(null);
 	let busyEdit = $state(false);
@@ -227,6 +265,8 @@
 			const target = event.target as HTMLElement | null;
 			if (target && /input|select|textarea/i.test(target.tagName)) return;
 			if (event.key === 'f') viewer?.focusSelection();
+			const tool = TOOL_KEYS[event.key.toLowerCase()];
+			if (tool && (editing || tool === 'select' || tool === 'measure')) editMode = tool;
 			if (event.key === 'Escape') {
 				selectFrom({ fixtures: [], rows: [] });
 				viewer?.clearMeasure();
@@ -922,511 +962,578 @@
 	}
 </script>
 
-<div class="world">
-	<aside>
-		<h1><a href={resolve('/')}>Camelot Forge</a> <span class="tag">world</span></h1>
-		<p class="status" class:err={error !== null}>{error ?? status}</p>
+<div class="shell">
+	<AppBar
+		section="world"
+		subtitle="world editor"
+		contextIcon={Globe2}
+		contextLabel={zone?.info.name ?? ''}
+		contextMeta={zone ? `region ${zone.info.region}` : ''}
+	/>
+	<div class="world">
+		<aside>
+			<p class="status" class:err={error !== null}>{error ?? status}</p>
 
-		{#if index}
-			<label class="field">
-				<span>Region</span>
-				<select bind:value={regionId}>
-					{#each index.regions as r (r.id)}
-						<option value={r.id}>
-							region {r.id} — {r.zones.length} zones{r.available === 0 ? ' (none shipped)' : ''}
-						</option>
-					{/each}
-				</select>
-			</label>
-			<label class="field">
-				<span>Search</span>
-				<input type="search" bind:value={query} placeholder="zone name or id" />
-			</label>
-
-			<ul class="zones">
-				{#each zoneRows as z (z.id)}
-					<li>
-						<button
-							type="button"
-							class:active={z.id === zoneId}
-							class:unavailable={!z.available}
-							onclick={() => open(z)}
-							title={z.available ? z.name : `${z.name} — not shipped by this client`}
-						>
-							<span class="zname">{z.name || '(unnamed)'}</span>
-							<span class="zmeta">{z.kind !== 'normal' ? kindLabel(z.kind) : ''} {z.id}</span>
-						</button>
-					</li>
-				{/each}
-			</ul>
-		{/if}
-
-		{#if zone}
-			<section class="info">
-				<h2>{zone.info.name}</h2>
-				<dl>
-					<dt>zone</dt>
-					<dd>{zone.info.id} · {kindLabel(zone.info.kind)}</dd>
-					<dt>fixtures</dt>
-					<dd>{zone.fixtures.length}</dd>
-					<dt>catalog</dt>
-					<dd>{zone.catalog.filter((c) => c.mesh).length} / {zone.catalog.length} with meshes</dd>
-					<dt>bounds</dt>
-					<dd>{zone.bounds.length} · water {zone.water.length} · jumps {zone.jumps.length}</dd>
-					<dt>ground</dt>
-					<dd>{zone.patches?.textures.length ?? 0} layer sheets</dd>
-					<dt>server</dt>
-					<dd>
-						{#if spawns}
-							{spawns.counts.mob} mobs · {spawns.counts.worldobject} statics · {spawns.counts.door} doors
-							· {spawns.counts.path} patrols
-						{:else}
-							(response missing)
-						{/if}
-					</dd>
-				</dl>
-				{#if zone.warnings.length || spawns?.warnings.length}
-					<p class="warn">{[...zone.warnings, ...(spawns?.warnings ?? [])].join(' · ')}</p>
-				{/if}
-			</section>
-
-			<section class="layers">
-				<label><input type="checkbox" bind:checked={toggles.ground} /> ground</label>
-				<label><input type="checkbox" bind:checked={toggles.fixtures} /> fixtures</label>
-				<label><input type="checkbox" bind:checked={toggles.spawns} /> mobs</label>
-				<label><input type="checkbox" bind:checked={toggles.statics} /> statics</label>
-				<label><input type="checkbox" bind:checked={toggles.doors} /> doors</label>
-				<label><input type="checkbox" bind:checked={toggles.patrols} /> patrols</label>
-				<label><input type="checkbox" bind:checked={toggles.bounds} /> bounds</label>
-				<label><input type="checkbox" bind:checked={toggles.water} /> water</label>
-				<label><input type="checkbox" bind:checked={toggles.jumps} /> jumps</label>
-			</section>
-
-			<section class="fixtures">
+			{#if index}
 				<label class="field">
-					<span>Fixtures</span>
-					<input type="search" bind:value={fixtureQuery} placeholder="name, file or id" />
+					<span>Region</span>
+					<select bind:value={regionId}>
+						{#each index.regions as r (r.id)}
+							<option value={r.id}>
+								region {r.id} — {r.zones.length} zones{r.available === 0 ? ' (none shipped)' : ''}
+							</option>
+						{/each}
+					</select>
 				</label>
-				<ul>
-					{#each fixtureRows as fixture (fixture.id)}
+				<label class="field">
+					<span>Search</span>
+					<input type="search" bind:value={query} placeholder="zone name or id" />
+				</label>
+
+				<ul class="zones">
+					{#each zoneRows as z (z.id)}
 						<li>
 							<button
 								type="button"
-								class:active={fixture.id === selected?.id}
-								onclick={() => selectFixture(fixture)}
-								ondblclick={() => focusFixture(fixture)}
-								title="click to select, double-click to focus"
+								class:active={z.id === zoneId}
+								class:unavailable={!z.available}
+								onclick={() => open(z)}
+								title={z.available ? z.name : `${z.name} — not shipped by this client`}
 							>
-								<span class="zname">{fixture.name || '(unnamed)'}</span>
-								<span class="zmeta">{fixture.x.toFixed(0)}, {fixture.y.toFixed(0)}</span>
+								<span class="zname">{z.name || '(unnamed)'}</span>
+								<span class="zmeta">{z.kind !== 'normal' ? kindLabel(z.kind) : ''} {z.id}</span>
 							</button>
 						</li>
 					{/each}
 				</ul>
-			</section>
-		{/if}
-	</aside>
+			{/if}
 
-	<div class="stage">
-		<canvas
-			bind:this={canvasEl}
-			oncontextmenu={(event) => event.preventDefault()}
-			aria-label="the zone, rendered; click to select, drag a box to select several"
-		></canvas>
-		{#if busy}
-			<div class="busy"><LoaderCircle class="spin" size={20} /> loading…</div>
-		{/if}
+			{#if zone}
+				<section class="info">
+					<h2>{zone.info.name}</h2>
+					<dl>
+						<dt>zone</dt>
+						<dd>{zone.info.id} · {kindLabel(zone.info.kind)}</dd>
+						<dt>fixtures</dt>
+						<dd>{zone.fixtures.length}</dd>
+						<dt>catalog</dt>
+						<dd>{zone.catalog.filter((c) => c.mesh).length} / {zone.catalog.length} with meshes</dd>
+						<dt>bounds</dt>
+						<dd>{zone.bounds.length} · water {zone.water.length} · jumps {zone.jumps.length}</dd>
+						<dt>ground</dt>
+						<dd>{zone.patches?.textures.length ?? 0} layer sheets</dd>
+						<dt>server</dt>
+						<dd>
+							{#if spawns}
+								{spawns.counts.mob} mobs · {spawns.counts.worldobject} statics · {spawns.counts
+									.door} doors · {spawns.counts.path} patrols
+							{:else}
+								(response missing)
+							{/if}
+						</dd>
+					</dl>
+					{#if zone.warnings.length || spawns?.warnings.length}
+						<p class="warn">{[...zone.warnings, ...(spawns?.warnings ?? [])].join(' · ')}</p>
+					{/if}
+				</section>
 
-		{#if edit?.available}
-			<section class="panel" class:dirty style="left: {panel.x}px; top: {panel.y}px">
-				<header
-					role="toolbar"
-					tabindex="-1"
-					onpointerdown={panelDown}
-					title="drag to move the panel"
-				>
-					<h2>Editor <span class="dim">{edit.mod.id}</span></h2>
-					<span class="state" class:on={dirty}>
-						{dirty ? `${changes} not saved` : 'saved'}
-					</span>
+				<section class="layers">
+					<label><input type="checkbox" bind:checked={toggles.ground} /> ground</label>
+					<label><input type="checkbox" bind:checked={toggles.fixtures} /> fixtures</label>
+					<label><input type="checkbox" bind:checked={toggles.spawns} /> mobs</label>
+					<label><input type="checkbox" bind:checked={toggles.statics} /> statics</label>
+					<label><input type="checkbox" bind:checked={toggles.doors} /> doors</label>
+					<label><input type="checkbox" bind:checked={toggles.patrols} /> patrols</label>
+					<label><input type="checkbox" bind:checked={toggles.bounds} /> bounds</label>
+					<label><input type="checkbox" bind:checked={toggles.water} /> water</label>
+					<label><input type="checkbox" bind:checked={toggles.jumps} /> jumps</label>
+				</section>
+
+				<section class="fixtures">
+					<label class="field">
+						<span>Fixtures</span>
+						<input type="search" bind:value={fixtureQuery} placeholder="name, file or id" />
+					</label>
+					<ul>
+						{#each fixtureRows as fixture (fixture.id)}
+							<li>
+								<button
+									type="button"
+									class:active={fixture.id === selected?.id}
+									onclick={() => selectFixture(fixture)}
+									ondblclick={() => focusFixture(fixture)}
+									title="click to select, double-click to focus"
+								>
+									<span class="zname">{fixture.name || '(unnamed)'}</span>
+									<span class="zmeta">{fixture.x.toFixed(0)}, {fixture.y.toFixed(0)}</span>
+								</button>
+							</li>
+						{/each}
+					</ul>
+				</section>
+			{/if}
+		</aside>
+
+		<div class="stage">
+			<div class="tools-dock">
+				<div class="mode-chip" role="group" aria-label="Session mode">
 					<button
 						type="button"
-						onclick={() => (panel.open = !panel.open)}
-						title={panel.open ? 'collapse' : 'expand'}
+						class:on={!editing}
+						onclick={() => setSession('view')}
+						title={canEdit
+							? 'view — browse; the tools step back to inspection'
+							: 'no editing session (start the daemon with --edits): view only'}
 					>
-						{panel.open ? '–' : '+'}
+						View
 					</button>
-				</header>
-				{#if panel.open}
-					<div class="body">
-						<div class="row modes">
-							{#each modes as mode (mode.id)}
-								<button
-									type="button"
-									class:active={editMode === mode.id}
-									title={mode.title}
-									onclick={() => (editMode = mode.id)}
-								>
-									{mode.label}
-								</button>
-							{/each}
-							<label class="snap" title="256 units, 15°, 5%, 16 up">
-								<input type="checkbox" bind:checked={snap} /> snap
-							</label>
-						</div>
-						<div class="row tools">
-							<span class="readout" title="the ground under the pointer">
-								{cursor
-									? `${Math.round(cursor.x)}, ${Math.round(cursor.y)} · z ${Math.round(cursor.z)}`
-									: '—'}
-							</span>
-							<label>x <input type="number" bind:value={goX} /></label>
-							<label>y <input type="number" bind:value={goY} /></label>
-							<button type="button" onclick={goTo} title="move the camera there">go</button>
-						</div>
-						{#if measure}
-							<div class="row tools">
-								<span class="readout" title="the measure tool's two points">
-									{Math.round(measure.distance)} u · dx {Math.round(measure.dx)}, dy {Math.round(
-										measure.dy
-									)}, dz {Math.round(measure.dz)}
-								</span>
-								<button
-									type="button"
-									onclick={() => viewer?.clearMeasure()}
-									title="let the measurement go (Escape)"
-								>
-									clear
-								</button>
-							</div>
+					<button
+						type="button"
+						class:on={editing}
+						disabled={!canEdit}
+						onclick={() => setSession('edit')}
+						title={canEdit ? 'edit — the tools are armed' : 'start the daemon with --edits to edit'}
+					>
+						Edit
+					</button>
+				</div>
+				<div class="strip" role="toolbar" aria-label="Tools" aria-orientation="vertical">
+					{#each strip as tool (tool.id)}
+						{#if editing || tool.id === 'select' || tool.id === 'measure'}
+							<button
+								type="button"
+								class="tool"
+								class:on={editMode === tool.id}
+								aria-pressed={editMode === tool.id}
+								title={tool.title}
+								onclick={() => (editMode = tool.id)}
+							>
+								<tool.icon size={17} />
+							</button>
 						{/if}
-						<section class="search">
-							<div class="row tools">
-								<input
-									type="search"
-									bind:value={searchQuery}
-									placeholder="name, file or id — the region"
-									onkeydown={(e) => e.key === 'Enter' && runSearch()}
-								/>
-								<button
-									type="button"
-									onclick={runSearch}
-									disabled={searching}
-									title="search the region"
-								>
-									{searching ? '…' : 'find'}
-								</button>
-							</div>
-							{#if searchError}<p class="warn">{searchError}</p>{/if}
-							{#if searchResult}
-								<p class="hint">
-									{searchResult.matches.length}
-									{searchResult.matches.length === 1 ? 'match' : 'matches'} in
-									{searchResult.scanned} zone{searchResult.scanned === 1 ? '' : 's'} read{searchResult
-										.matches.length >= searchResult.limit
-										? ` (capped at ${searchResult.limit})`
-										: ''}
-								</p>
-								<ul class="hits">
-									{#each searchResult.matches as hit (`${hit.zone}:${hit.id}`)}
-										<li>
-											<button
-												type="button"
-												onclick={() => goToHit(hit)}
-												title="open its zone and frame it"
-											>
-												<span class="zname">{hit.name || '(unnamed)'}</span>
-												<span class="zmeta">{hit.zone_name} · #{hit.id}</span>
-											</button>
-										</li>
-									{/each}
-								</ul>
-							{/if}
-						</section>
-						<div class="row tools">
-							<button
-								type="button"
-								onclick={runLint}
-								title="what stands outside the zone's bounds, under the terrain, or far above it"
-							>
-								check
-							</button>
-							{#if findings}
-								<span class="readout">
-									{findings.length} finding{findings.length === 1 ? '' : 's'}
-								</span>
-								<button type="button" onclick={() => (findings = null)} title="hide them">
-									clear
-								</button>
-							{/if}
-						</div>
-						{#if findings && findings.length}
-							<ul class="hits">
-								{#each findings as finding, index (index)}
-									<li>
-										<button
-											type="button"
-											onclick={() => goToFinding(finding)}
-											title="select it and frame it"
-										>
-											<span class="zname">{finding.what}</span>
-											<span class="zmeta">{finding.detail}</span>
-										</button>
-									</li>
-								{/each}
-							</ul>
-						{/if}
-						<div class="row">
-							<button
-								type="button"
-								onclick={undo}
-								disabled={(!editOps && !editRows) || busyEdit}
-								title="drop the journal's last op (server rows first)"
-							>
-								undo
-							</button>
-							<button
-								type="button"
-								onclick={build}
-								disabled={busyEdit || !changes}
-								title="assemble the authoring directory and run mod build"
-							>
-								build
-							</button>
-							<button
-								type="button"
-								class="publish"
-								class:on={dirty}
-								onclick={apply}
-								disabled={busyEdit || !changes}
-								title="save the session: the client's files and the server's rows (the game reads them after /reload)"
-							>
-								save{dirty ? ` (${changes})` : ''}
-							</button>
-							<button
-								type="button"
-								onclick={revert}
-								disabled={busyEdit}
-								title="empty the journal (the client half, if installed, stays — restore all takes it too)"
-							>
-								revert
-							</button>
-							<button
-								class="danger"
-								type="button"
-								onclick={restore}
-								disabled={busyEdit || (!changes && !editClient?.installed)}
-								title="put everything back: the client half, the server rows, the journal"
-							>
-								restore all
-							</button>
-						</div>
-						<p class="hint">
-							{clientNote} · journal: {editOps} fixture op{editOps === 1 ? '' : 's'},
-							{editRows} row patch{editRows === 1 ? '' : 'es'}{writtenRows
-								? ` (${writtenRows} written)`
-								: ''}
-						</p>
-						{#if writtenRows || editClient?.installed}
-							<p class="hint">
-								the running game reads the database at startup: in game <code>/reload doors</code>,
-								<code>/reload mob</code>, <code>/reload object</code> (region {zone?.info.region})
-								<button type="button" class="link" onclick={copyCommands}>copy</button>
-							</p>
-						{/if}
-						{#if edit.pack}
-							<p class="hint">
-								pack {(edit.pack.size / 1000).toFixed(0)} kB · {new Date(
-									edit.pack.modified * 1000
-								).toLocaleTimeString()}
-							</p>
-						{/if}
-						{#if editStatus}<p class="hint">{editStatus}</p>{/if}
-						{#if editError}<p class="warn">{editError}</p>{/if}
-						<p class="hint stamp">viewer {__BUILD_STAMP__}</p>
+					{/each}
+					{#if editing}
+						<span class="strip-sep"></span>
+						<button
+							type="button"
+							class="tool"
+							class:on={snap}
+							aria-pressed={snap}
+							title="snap — 256 units, 15°, 5%, 16 up"
+							onclick={() => (snap = !snap)}
+						>
+							<Magnet size={17} />
+						</button>
+					{/if}
+				</div>
+			</div>
+			<canvas
+				bind:this={canvasEl}
+				oncontextmenu={(event) => event.preventDefault()}
+				aria-label="the zone, rendered; click to select, drag a box to select several"
+			></canvas>
+			{#if busy}
+				<div class="busy"><LoaderCircle class="spin" size={20} /> loading…</div>
+			{/if}
 
-						{#if selected}
-							<section class="context">
-								<h3>
-									Fixture <span class="dim">#{selected.id}</span>
-									{selectionCount > 1 ? `· ${selectionCount} selected` : ''}
-								</h3>
-								<p class="hint">
-									{selected.name || '(unnamed)'} · {catalogOf.get(selected.nif_id)?.filename ??
-										`nif ${selected.nif_id}`} · {selected.ground ? 'ground' : 'free'}
-								</p>
-								<div class="fields">
-									<label
-										>x <input
-											type="number"
-											value={selected.x.toFixed(0)}
-											onchange={(e) => setFixtureField('x', e.currentTarget.value)}
-										/></label
-									>
-									<label
-										>y <input
-											type="number"
-											value={selected.y.toFixed(0)}
-											onchange={(e) => setFixtureField('y', e.currentTarget.value)}
-										/></label
-									>
-									{#if !selected.ground}
-										<label
-											>z <input
-												type="number"
-												value={selected.z.toFixed(0)}
-												onchange={(e) => setFixtureField('z', e.currentTarget.value)}
-											/></label
-										>
-									{/if}
-									<label
-										>A <input
-											type="number"
-											value={selected.angle.toFixed(0)}
-											onchange={(e) => setFixtureField('angle', e.currentTarget.value)}
-										/></label
-									>
-									<button type="button" title="−15°" onclick={() => nudgeAngle(-15)}>↺</button>
-									<button type="button" title="+15°" onclick={() => nudgeAngle(15)}>↻</button>
-									<label
-										>scale <input
-											type="number"
-											value={selected.scale.toFixed(0)}
-											onchange={(e) => setFixtureField('scale', e.currentTarget.value)}
-										/></label
-									>
-								</div>
-								<div class="row">
-									<button type="button" onclick={() => viewer?.focusSelection()}>
-										<Crosshair size={13} /> Focus (F)
-									</button>
+			{#if editing && edit}
+				<section class="panel" class:dirty style="left: {panel.x}px; top: {panel.y}px">
+					<header
+						role="toolbar"
+						tabindex="-1"
+						onpointerdown={panelDown}
+						title="drag to move the panel"
+					>
+						<h2>Editor <span class="dim">{edit.mod.id}</span></h2>
+						<span class="state" class:on={dirty}>
+							{dirty ? `${changes} not saved` : 'saved'}
+						</span>
+						<button
+							type="button"
+							onclick={() => (panel.open = !panel.open)}
+							title={panel.open ? 'collapse' : 'expand'}
+						>
+							{panel.open ? '–' : '+'}
+						</button>
+					</header>
+					{#if panel.open}
+						<div class="body">
+							<div class="row tools">
+								<label>x <input type="number" bind:value={goX} /></label>
+								<label>y <input type="number" bind:value={goY} /></label>
+								<button type="button" onclick={goTo} title="move the camera there">go</button>
+							</div>
+							<section class="search">
+								<div class="row tools">
+									<input
+										type="search"
+										bind:value={searchQuery}
+										placeholder="name, file or id — the region"
+										onkeydown={(e) => e.key === 'Enter' && runSearch()}
+									/>
 									<button
 										type="button"
-										onclick={moveHere}
-										disabled={!addPoint}
-										title="drop the selection on the last ground click (add mode)"
+										onclick={runSearch}
+										disabled={searching}
+										title="search the region"
 									>
-										move here
+										{searching ? '…' : 'find'}
 									</button>
-									<button class="danger" type="button" onclick={removeSelection}> remove </button>
 								</div>
-								{#if proposals.length}
-									<label class="snap">
-										<input type="checkbox" bind:checked={carry} /> carry {proposals.length} server row{proposals.length >
-										1
-											? 's'
+								{#if searchError}<p class="warn">{searchError}</p>{/if}
+								{#if searchResult}
+									<p class="hint">
+										{searchResult.matches.length}
+										{searchResult.matches.length === 1 ? 'match' : 'matches'} in
+										{searchResult.scanned} zone{searchResult.scanned === 1 ? '' : 's'} read{searchResult
+											.matches.length >= searchResult.limit
+											? ` (capped at ${searchResult.limit})`
 											: ''}
-									</label>
-									<p class="hint">inside this object's own meshes: {carriedNote}</p>
-									<ul class="addlist">
-										{#each proposals as row (row.table + ':' + row.key)}
+									</p>
+									<ul class="hits">
+										{#each searchResult.matches as hit (`${hit.zone}:${hit.id}`)}
 											<li>
 												<button
 													type="button"
-													onclick={() => selectRow({ table: row.table, id: row.key })}
+													onclick={() => goToHit(hit)}
+													title="open its zone and frame it"
 												>
-													<span class="zname">{row.name || '(unnamed)'}</span>
-													<span class="zmeta">{row.table}</span>
+													<span class="zname">{hit.name || '(unnamed)'}</span>
+													<span class="zmeta">{hit.zone_name} · #{hit.id}</span>
 												</button>
 											</li>
 										{/each}
 									</ul>
 								{/if}
 							</section>
-						{:else if selectedRow && selectedSpawn}
-							<section class="context">
-								<h3>{selectedRow.table} <span class="dim">{selectedRow.id.slice(0, 8)}</span></h3>
-								<p class="hint">{selectedSpawn.name || '(unnamed)'}</p>
-								<div class="fields">
-									<label
-										>x <input
-											type="number"
-											value={selectedSpawn.x.toFixed(0)}
-											onchange={(e) => setRowField('x', e.currentTarget.value)}
-										/></label
-									>
-									<label
-										>y <input
-											type="number"
-											value={selectedSpawn.y.toFixed(0)}
-											onchange={(e) => setRowField('y', e.currentTarget.value)}
-										/></label
-									>
-									<label
-										>z <input
-											type="number"
-											value={selectedSpawn.z.toFixed(0)}
-											onchange={(e) => setRowField('z', e.currentTarget.value)}
-										/></label
-									>
-									<label
-										>heading <input
-											type="number"
-											value={selectedSpawn.heading}
-											onchange={(e) => setRowField('heading', e.currentTarget.value)}
-										/></label
-									>
-									<button type="button" title="−15°" onclick={() => nudgeAngle(-15)}>↺</button>
-									<button type="button" title="+15°" onclick={() => nudgeAngle(15)}>↻</button>
-								</div>
-								<div class="row">
-									<button
-										type="button"
-										onclick={moveHere}
-										disabled={!addPoint}
-										title="drop the row on the last ground click (add mode)"
-									>
-										move here
+							<div class="row tools">
+								<button
+									type="button"
+									onclick={runLint}
+									title="what stands outside the zone's bounds, under the terrain, or far above it"
+								>
+									check
+								</button>
+								{#if findings}
+									<span class="readout">
+										{findings.length} finding{findings.length === 1 ? '' : 's'}
+									</span>
+									<button type="button" onclick={() => (findings = null)} title="hide them">
+										clear
 									</button>
-									<button class="danger" type="button" onclick={removeSelection}>remove</button>
-								</div>
-							</section>
-						{:else}
-							<p class="hint controls">
-								left: a click selects, a box selects several (ctrl adds) — and a drag that starts
-								<b>on the selection</b> applies the mode above. middle: the same gesture from anywhere
-								— shift turns (15°), ctrl scales, alt lifts. shift+drag pans, right orbits, the wheel
-								zooms; F focuses, Del removes, Esc lets go.
-							</p>
-						{/if}
-
-						{#if editMode === 'add'}
-							<section class="context">
-								<p class="hint">
-									{addPoint
-										? `add at ${addPoint.x.toFixed(0)}, ${addPoint.y.toFixed(0)}`
-										: 'click the ground to aim'}
-								</p>
-								<input type="search" bind:value={addQuery} placeholder="catalog: file or name" />
-								<ul class="addlist">
-									{#each catalogRows as entry (entry.id)}
+								{/if}
+							</div>
+							{#if findings && findings.length}
+								<ul class="hits">
+									{#each findings as finding, index (index)}
 										<li>
 											<button
 												type="button"
-												disabled={!addPoint || busyEdit}
-												onclick={() => addCatalog(entry)}
+												onclick={() => goToFinding(finding)}
+												title="select it and frame it"
 											>
-												<span class="zname">{entry.filename}</span>
-												<span class="zmeta">{entry.name}</span>
+												<span class="zname">{finding.what}</span>
+												<span class="zmeta">{finding.detail}</span>
 											</button>
 										</li>
 									{/each}
 								</ul>
-							</section>
-						{/if}
-					</div>
-				{/if}
-			</section>
-		{/if}
+							{/if}
+							<div class="row">
+								<button
+									type="button"
+									onclick={undo}
+									disabled={(!editOps && !editRows) || busyEdit}
+									title="drop the journal's last op (server rows first)"
+								>
+									undo
+								</button>
+								<button
+									type="button"
+									onclick={build}
+									disabled={busyEdit || !changes}
+									title="assemble the authoring directory and run mod build"
+								>
+									build
+								</button>
+								<button
+									type="button"
+									class="publish"
+									class:on={dirty}
+									onclick={apply}
+									disabled={busyEdit || !changes}
+									title="save the session: the client's files and the server's rows (the game reads them after /reload)"
+								>
+									save{dirty ? ` (${changes})` : ''}
+								</button>
+								<button
+									type="button"
+									onclick={revert}
+									disabled={busyEdit}
+									title="empty the journal (the client half, if installed, stays — restore all takes it too)"
+								>
+									revert
+								</button>
+								<button
+									class="danger"
+									type="button"
+									onclick={restore}
+									disabled={busyEdit || (!changes && !editClient?.installed)}
+									title="put everything back: the client half, the server rows, the journal"
+								>
+									restore all
+								</button>
+							</div>
+							<p class="hint">
+								{clientNote} · journal: {editOps} fixture op{editOps === 1 ? '' : 's'},
+								{editRows} row patch{editRows === 1 ? '' : 'es'}{writtenRows
+									? ` (${writtenRows} written)`
+									: ''}
+							</p>
+							{#if writtenRows || editClient?.installed}
+								<p class="hint">
+									the running game reads the database at startup: in game <code>/reload doors</code
+									>,
+									<code>/reload mob</code>, <code>/reload object</code> (region {zone?.info.region})
+									<button type="button" class="link" onclick={copyCommands}>copy</button>
+								</p>
+							{/if}
+							{#if edit.pack}
+								<p class="hint">
+									pack {(edit.pack.size / 1000).toFixed(0)} kB · {new Date(
+										edit.pack.modified * 1000
+									).toLocaleTimeString()}
+								</p>
+							{/if}
+							{#if editStatus}<p class="hint">{editStatus}</p>{/if}
+							{#if editError}<p class="warn">{editError}</p>{/if}
+
+							{#if selected}
+								<section class="context">
+									<h3>
+										Fixture <span class="dim">#{selected.id}</span>
+										{selectionCount > 1 ? `· ${selectionCount} selected` : ''}
+									</h3>
+									<p class="hint">
+										{selected.name || '(unnamed)'} · {catalogOf.get(selected.nif_id)?.filename ??
+											`nif ${selected.nif_id}`} · {selected.ground ? 'ground' : 'free'}
+									</p>
+									<div class="fields">
+										<label
+											>x <input
+												type="number"
+												value={selected.x.toFixed(0)}
+												onchange={(e) => setFixtureField('x', e.currentTarget.value)}
+											/></label
+										>
+										<label
+											>y <input
+												type="number"
+												value={selected.y.toFixed(0)}
+												onchange={(e) => setFixtureField('y', e.currentTarget.value)}
+											/></label
+										>
+										{#if !selected.ground}
+											<label
+												>z <input
+													type="number"
+													value={selected.z.toFixed(0)}
+													onchange={(e) => setFixtureField('z', e.currentTarget.value)}
+												/></label
+											>
+										{/if}
+										<label
+											>A <input
+												type="number"
+												value={selected.angle.toFixed(0)}
+												onchange={(e) => setFixtureField('angle', e.currentTarget.value)}
+											/></label
+										>
+										<button type="button" title="−15°" onclick={() => nudgeAngle(-15)}>↺</button>
+										<button type="button" title="+15°" onclick={() => nudgeAngle(15)}>↻</button>
+										<label
+											>scale <input
+												type="number"
+												value={selected.scale.toFixed(0)}
+												onchange={(e) => setFixtureField('scale', e.currentTarget.value)}
+											/></label
+										>
+									</div>
+									<div class="row">
+										<button type="button" onclick={() => viewer?.focusSelection()}>
+											<Crosshair size={13} /> Focus (F)
+										</button>
+										<button
+											type="button"
+											onclick={moveHere}
+											disabled={!addPoint}
+											title="drop the selection on the last ground click (add mode)"
+										>
+											move here
+										</button>
+										<button class="danger" type="button" onclick={removeSelection}> remove </button>
+									</div>
+									{#if proposals.length}
+										<label class="snap">
+											<input type="checkbox" bind:checked={carry} /> carry {proposals.length} server row{proposals.length >
+											1
+												? 's'
+												: ''}
+										</label>
+										<p class="hint">inside this object's own meshes: {carriedNote}</p>
+										<ul class="addlist">
+											{#each proposals as row (row.table + ':' + row.key)}
+												<li>
+													<button
+														type="button"
+														onclick={() => selectRow({ table: row.table, id: row.key })}
+													>
+														<span class="zname">{row.name || '(unnamed)'}</span>
+														<span class="zmeta">{row.table}</span>
+													</button>
+												</li>
+											{/each}
+										</ul>
+									{/if}
+								</section>
+							{:else if selectedRow && selectedSpawn}
+								<section class="context">
+									<h3>{selectedRow.table} <span class="dim">{selectedRow.id.slice(0, 8)}</span></h3>
+									<p class="hint">{selectedSpawn.name || '(unnamed)'}</p>
+									<div class="fields">
+										<label
+											>x <input
+												type="number"
+												value={selectedSpawn.x.toFixed(0)}
+												onchange={(e) => setRowField('x', e.currentTarget.value)}
+											/></label
+										>
+										<label
+											>y <input
+												type="number"
+												value={selectedSpawn.y.toFixed(0)}
+												onchange={(e) => setRowField('y', e.currentTarget.value)}
+											/></label
+										>
+										<label
+											>z <input
+												type="number"
+												value={selectedSpawn.z.toFixed(0)}
+												onchange={(e) => setRowField('z', e.currentTarget.value)}
+											/></label
+										>
+										<label
+											>heading <input
+												type="number"
+												value={selectedSpawn.heading}
+												onchange={(e) => setRowField('heading', e.currentTarget.value)}
+											/></label
+										>
+										<button type="button" title="−15°" onclick={() => nudgeAngle(-15)}>↺</button>
+										<button type="button" title="+15°" onclick={() => nudgeAngle(15)}>↻</button>
+									</div>
+									<div class="row">
+										<button
+											type="button"
+											onclick={moveHere}
+											disabled={!addPoint}
+											title="drop the row on the last ground click (add mode)"
+										>
+											move here
+										</button>
+										<button class="danger" type="button" onclick={removeSelection}>remove</button>
+									</div>
+								</section>
+							{/if}
+
+							{#if editMode === 'add'}
+								<section class="context">
+									<p class="hint">
+										{addPoint
+											? `add at ${addPoint.x.toFixed(0)}, ${addPoint.y.toFixed(0)}`
+											: 'click the ground to aim'}
+									</p>
+									<input type="search" bind:value={addQuery} placeholder="catalog: file or name" />
+									<ul class="addlist">
+										{#each catalogRows as entry (entry.id)}
+											<li>
+												<button
+													type="button"
+													disabled={!addPoint || busyEdit}
+													onclick={() => addCatalog(entry)}
+												>
+													<span class="zname">{entry.filename}</span>
+													<span class="zmeta">{entry.name}</span>
+												</button>
+											</li>
+										{/each}
+									</ul>
+								</section>
+							{/if}
+						</div>
+					{/if}
+				</section>
+			{/if}
+		</div>
 	</div>
+
+	<StatusBar>
+		{#snippet left()}
+			<span class="sb-strong sb-nums" title="the ground under the pointer">
+				{cursor
+					? `${Math.round(cursor.x)}, ${Math.round(cursor.y)} · z ${Math.round(cursor.z)}`
+					: '—'}
+			</span>
+			<span>grid 256 u</span>
+			{#if editing}<span class="sb-accent">snap {snap ? 'on' : 'off'}</span>{/if}
+		{/snippet}
+		{#snippet center()}
+			{#if measure}
+				<span class="sb-strong sb-nums" title="the measure tool's two points">
+					{Math.round(measure.distance)} u · dx {Math.round(measure.dx)}, dy {Math.round(
+						measure.dy
+					)}, dz {Math.round(measure.dz)}
+				</span>
+				<button
+					type="button"
+					class="sb-link"
+					onclick={() => viewer?.clearMeasure()}
+					title="let the measurement go (Escape)">clear</button
+				>
+			{:else}
+				<span>
+					left: select — a drag on the selection applies the tool · middle: from anywhere (shift
+					turns, ctrl scales, alt lifts) · right orbits, wheel zooms · F focuses, Del removes, Esc
+					clears
+				</span>
+			{/if}
+		{/snippet}
+		{#snippet right()}
+			{#if editing && edit}
+				<span class="sb-nums" title="what a save would still write, and what is published">
+					{clientNote} · journal: {editOps} fixture op{editOps === 1 ? '' : 's'}, {editRows} row patch{editRows ===
+					1
+						? ''
+						: 'es'}{writtenRows ? ` (${writtenRows} written)` : ''}
+				</span>
+			{/if}
+			<span>viewer {__BUILD_STAMP__}</span>
+		{/snippet}
+	</StatusBar>
 </div>
 
 <style>
-	.world {
+	.shell {
 		display: flex;
+		flex-direction: column;
 		height: 100dvh;
 		background: var(--bg, #141414);
 		color: var(--text-1, #e8e8e8);
+	}
+	.world {
+		flex: 1;
+		display: flex;
+		min-height: 0;
 	}
 	aside {
 		width: 330px;
@@ -1443,25 +1550,83 @@
 		position: relative;
 		min-width: 0;
 	}
+	/* The floating tools (the drafts' strip): the modes and the snap live here —
+	 * the panel keeps what a *selection* needs, the strip what a *gesture* needs. */
+	.tools-dock {
+		position: absolute;
+		top: 12px;
+		left: 12px;
+		z-index: 2;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.mode-chip {
+		display: flex;
+		gap: 4px;
+		padding: 4px;
+		border: 1px solid var(--border-input, #2e2e2e);
+		border-radius: var(--r-lg, 10px);
+		background: var(--surface, #1f1f1f);
+		box-shadow: 0 10px 24px rgb(0 0 0 / 45%);
+	}
+	.mode-chip button {
+		width: auto;
+		padding: 4px 12px;
+		border: 1px solid transparent;
+		border-radius: var(--r-sm, 6px);
+		font-size: 12px;
+		color: var(--text-3, #9a9a9a);
+	}
+	.mode-chip button:hover:not(:disabled) {
+		color: var(--text, #e8e8e8);
+	}
+	.mode-chip button.on {
+		background: var(--accent, #2dd4a7);
+		color: var(--accent-ink, #0c1f1a);
+		font-weight: 600;
+	}
+	.mode-chip button:disabled {
+		color: var(--text-4, #6a6a6a);
+		cursor: not-allowed;
+	}
+	.strip {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 6px;
+		width: 52px;
+		padding: 8px 6px;
+		border: 1px solid var(--border, #262626);
+		border-radius: var(--r-dock, 14px);
+		background: var(--surface, #1f1f1f);
+		box-shadow: 0 14px 34px rgb(0 0 0 / 50%);
+	}
+	.strip .tool {
+		display: grid;
+		place-items: center;
+		width: 40px;
+		height: 40px;
+		border-radius: var(--r-lg, 10px);
+		color: var(--text-2, #c8c8c8);
+	}
+	.strip .tool:hover {
+		background: var(--surface-input, #161616);
+		color: var(--text, #e8e8e8);
+	}
+	.strip .tool.on {
+		background: var(--accent-tint-14, rgb(45 212 167 / 14%));
+		color: var(--accent, #2dd4a7);
+	}
+	.strip-sep {
+		width: 32px;
+		height: 1px;
+		background: var(--border, #262626);
+	}
 	canvas {
 		width: 100%;
 		height: 100%;
 		display: block;
-	}
-	h1 {
-		font-size: 15px;
-		margin: 0;
-	}
-	h1 a {
-		color: inherit;
-		text-decoration: none;
-	}
-	h1 a:hover {
-		text-decoration: underline;
-	}
-	.tag {
-		color: #2dd4a7;
-		font-weight: 400;
 	}
 	h2 {
 		font-size: 14px;
@@ -1469,7 +1634,8 @@
 	}
 	.status {
 		margin: 0;
-		font: 11px/1.4 monospace;
+		font-size: 11px;
+		line-height: 1.4;
 		color: #9aa4a0;
 	}
 	.status.err {
@@ -1534,7 +1700,7 @@
 	}
 	.zmeta {
 		color: #7f8a86;
-		font: 10px monospace;
+		font-size: 10.5px;
 	}
 	.info dl {
 		display: grid;
@@ -1553,12 +1719,14 @@
 		color: #7f8a86;
 	}
 	.warn {
-		font: 10px/1.4 monospace;
+		font-size: 10.5px;
+		line-height: 1.4;
 		color: #ffd166;
 	}
 	.hint {
 		margin: 0;
-		font: 10px/1.5 monospace;
+		font-size: 10.5px;
+		line-height: 1.5;
 		color: #7f8a86;
 	}
 	.layers {
@@ -1608,7 +1776,7 @@
 		flex: 1;
 	}
 	.panel .state {
-		font: 10px monospace;
+		font-size: 10.5px;
 		color: #7f8a86;
 	}
 	.panel .state.on {
@@ -1652,17 +1820,6 @@
 		border-color: #333;
 		font-size: 11px;
 	}
-	.panel .modes button.active {
-		border-color: #2dd4a7;
-		background: #17302a;
-	}
-	.panel .snap {
-		display: flex;
-		gap: 4px;
-		align-items: center;
-		font-size: 11px;
-		color: #9aa4a0;
-	}
 	.panel button.danger {
 		border-color: #7a2f2f;
 		color: #ff8f8f;
@@ -1686,12 +1843,9 @@
 		max-height: 20dvh;
 		overflow-y: auto;
 	}
-	.panel .controls {
-		line-height: 1.7;
-	}
 	.panel .tools {
 		gap: 6px;
-		font: 10px monospace;
+		font-size: 10.5px;
 		color: #7f8a86;
 	}
 	.panel .tools label {
@@ -1706,7 +1860,7 @@
 		border-radius: 4px;
 		background: #10161a;
 		color: inherit;
-		font: 11px monospace;
+		font-size: 11.5px;
 	}
 	.panel .readout {
 		flex: 1;
@@ -1743,9 +1897,6 @@
 	.panel code {
 		color: #cfe8e0;
 	}
-	.panel .stamp {
-		opacity: 0.55;
-	}
 	.fields {
 		display: flex;
 		flex-wrap: wrap;
@@ -1765,17 +1916,18 @@
 		border-radius: 4px;
 		background: #10161a;
 		color: inherit;
-		font: 11px monospace;
+		font-size: 11.5px;
 	}
 	.busy {
 		position: absolute;
-		top: 10px;
-		left: 12px;
+		top: 12px;
+		left: 50%;
+		transform: translateX(-50%);
 		display: flex;
 		gap: 8px;
 		align-items: center;
-		font: 12px monospace;
-		color: #2dd4a7;
+		font-size: 12px;
+		color: var(--accent, #2dd4a7);
 	}
 	:global(.spin) {
 		animation: spin 0.9s linear infinite;

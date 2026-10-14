@@ -298,6 +298,6 @@
 		top: 8px;
 		left: 10px;
 		color: #2dd4a7;
-		font: 12px monospace;
+		font-size: 12px;
 	}
 </style>

@@ -154,8 +154,8 @@
 		background: var(--surface-input);
 	}
 	.idx {
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 11px;
+		font-variant-numeric: tabular-nums;
 		color: var(--accent);
 		width: 28px;
 	}

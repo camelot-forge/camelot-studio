@@ -1,18 +1,23 @@
 <script lang="ts">
-	import Header from '$lib/components/Header.svelte';
+	import AppBar from '$lib/components/AppBar.svelte';
 	import DropZone from '$lib/components/DropZone.svelte';
 	import Library from '$lib/components/Library.svelte';
 	import Viewer from '$lib/components/Viewer.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import StatusBar from '$lib/components/StatusBar.svelte';
 	import { loadFromFiles, loadFromGlb, type LoadedModel } from '$lib/gltf/load';
 	import { api, type AnimClip, type AssetSummary } from '$lib/api/client';
-	import { LoaderCircle } from '@lucide/svelte';
+	import { FileBox, LoaderCircle } from '@lucide/svelte';
 
 	let model = $state<LoadedModel | null>(null);
 	let anim = $state<AnimClip | null>(null);
 	let error = $state<string | null>(null);
 	let loading = $state(false);
 	let selectedId = $state<string | null>(null);
+
+	const meshLabel = $derived(
+		model ? `${model.meshCount} ${model.meshCount === 1 ? 'mesh' : 'meshes'}` : ''
+	);
 
 	async function onFiles(files: File[]) {
 		loading = true;
@@ -65,7 +70,19 @@
 </script>
 
 <div class="app">
-	<Header onReset={reset} hasModel={model !== null} />
+	<AppBar
+		section="figures"
+		subtitle="figure viewer · glTF"
+		contextIcon={model ? FileBox : null}
+		contextLabel={model?.name ?? ''}
+		contextMeta={meshLabel}
+	>
+		{#snippet actions()}
+			{#if model}
+				<button class="btn btn--secondary" onclick={reset}>Load another</button>
+			{/if}
+		{/snippet}
+	</AppBar>
 
 	<main class="stage">
 		<Library onselect={onSelect} {selectedId} />
@@ -84,6 +101,24 @@
 			{/if}
 		</div>
 	</main>
+
+	<StatusBar>
+		{#snippet left()}
+			{#if model}
+				<span class="sb-strong sb-nums"
+					>{meshLabel} · {model.triangleCount.toLocaleString()} tris</span
+				>
+			{:else}
+				<span>no figure loaded</span>
+			{/if}
+		{/snippet}
+		{#snippet center()}
+			<span>drag: orbit · wheel: zoom</span>
+		{/snippet}
+		{#snippet right()}
+			<span>viewer {__BUILD_STAMP__}</span>
+		{/snippet}
+	</StatusBar>
 </div>
 
 <style>

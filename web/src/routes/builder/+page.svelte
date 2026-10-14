@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { LoaderCircle, UserPlus } from '@lucide/svelte';
+	import { LoaderCircle, UserRound } from '@lucide/svelte';
+	import AppBar from '$lib/components/AppBar.svelte';
+	import StatusBar from '$lib/components/StatusBar.svelte';
 	import Viewer from '$lib/components/Viewer.svelte';
 	import Stepper from '$lib/components/Stepper.svelte';
 	import { api } from '$lib/api/client';
@@ -34,6 +36,14 @@
 	let anim = $state<AnimClip | null>(null);
 	let error = $state<string | null>(null);
 	let loading = $state(false);
+
+	const raceName = $derived(
+		RACES.find((r) => r.male === raceId || r.female === raceId)?.name ?? '—'
+	);
+	const genderLabel = $derived(female ? 'Female' : 'Male');
+	const meshLabel = $derived(
+		model ? `${model.meshCount} ${model.meshCount === 1 ? 'mesh' : 'meshes'}` : ''
+	);
 
 	async function loadStates() {
 		// The states are the figure's own anim set, so a race change resets
@@ -111,15 +121,13 @@
 </script>
 
 <div class="app">
-	<header class="header">
-		<div class="brand">
-			<span class="logo"><UserPlus size={18} /></span>
-			<div class="titles">
-				<span class="name">Character Builder</span>
-				<span class="sub">pixie-accurate, fig3 native</span>
-			</div>
-		</div>
-	</header>
+	<AppBar
+		section="builder"
+		subtitle="character builder · fig3 native"
+		contextIcon={UserRound}
+		contextLabel={`${raceName} ${genderLabel}`}
+		contextMeta={`face ${face}${material ? ` · ${material}` : ''}`}
+	/>
 
 	<main class="stage">
 		<aside class="rail">
@@ -288,43 +296,31 @@
 			{/if}
 		</div>
 	</main>
+
+	<StatusBar>
+		{#snippet left()}
+			{#if model}
+				<span class="sb-strong sb-nums"
+					>{meshLabel} · {model.triangleCount.toLocaleString()} tris</span
+				>
+			{:else}
+				<span>no figure yet</span>
+			{/if}
+		{/snippet}
+		{#snippet center()}
+			<span>drag: orbit · wheel: zoom</span>
+		{/snippet}
+		{#snippet right()}
+			<span>viewer {__BUILD_STAMP__}</span>
+		{/snippet}
+	</StatusBar>
 </div>
 
 <style>
 	.app {
-		height: 100vh;
+		height: 100dvh;
 		display: flex;
 		flex-direction: column;
-	}
-	.header {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		padding: 14px 20px;
-		border-bottom: 1px solid var(--border);
-		background: var(--surface);
-	}
-	.logo {
-		width: 32px;
-		height: 32px;
-		display: grid;
-		place-items: center;
-		border-radius: 8px;
-		background: var(--surface-2);
-		color: var(--accent);
-	}
-	.brand {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-	}
-	.name {
-		font-weight: 600;
-		display: block;
-	}
-	.sub {
-		color: var(--muted);
-		font-size: 12px;
 	}
 	.stage {
 		flex: 1;
@@ -350,7 +346,7 @@
 		font-size: 11px;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		color: var(--muted);
+		color: var(--text-3);
 		margin: 0 0 8px;
 	}
 	.gender {
@@ -368,7 +364,7 @@
 		cursor: pointer;
 	}
 	.gender button.on {
-		background: var(--accent-soft);
+		background: var(--accent-tint-12);
 		border-color: var(--accent);
 	}
 	.races {
@@ -391,11 +387,11 @@
 		background: var(--surface-2);
 	}
 	.races li.on {
-		background: var(--accent-soft);
+		background: var(--accent-tint-12);
 		color: var(--accent);
 	}
 	.races small {
-		color: var(--muted);
+		color: var(--text-4);
 	}
 	.row {
 		display: flex;
@@ -406,7 +402,7 @@
 	}
 	.row .lbl {
 		width: 84px;
-		color: var(--muted);
+		color: var(--text-3);
 	}
 	.panel input[type='range'] {
 		flex: 1;
@@ -444,6 +440,6 @@
 		color: var(--danger);
 	}
 	.hint {
-		color: var(--muted);
+		color: var(--text-3);
 	}
 </style>
