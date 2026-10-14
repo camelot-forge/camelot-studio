@@ -1,6 +1,7 @@
 """Unit tests for the serve HTTP API (synthetic client, no game files)."""
 import shutil
 
+import pytest
 from fastapi.testclient import TestClient
 
 from camelot.serve import create_app
@@ -87,6 +88,97 @@ class TestAssetDetail:
         client = _client(_make_app(tmp_path, nif_path))
         kfa = client.get("/api/v1/assets", params={"type": "kfa"}).json()["items"][0]
         assert client.get(f"/api/v1/assets/{kfa['id']}/anim").status_code == 400
+
+
+class TestAssetStates:
+    """The figure's own anim set, served for any nif.
+
+    The creature half of `/character/…/states`: the same tables (`monnifs` →
+    `anims` → `animnifs`), so a viewer can offer the clips the client itself
+    would play instead of only the idle its resolver happens to pick.
+    """
+
+    def _app(self, tmp_path, nif_path):
+        """`synth.nif` plus an anim set naming it (Idle 16f@3, Walk 32f@4)."""
+        from camelot.mpak import write_mpak
+
+        app = _make_app(tmp_path, nif_path)
+        root = tmp_path / "client"
+        (root / "anims" / "walk.kfa").write_bytes(b"kfa")
+
+        def csv(rows):
+            return ("\n".join(",".join(r) for r in rows) + "\n").encode("latin1")
+
+        write_mpak(
+            str(root / "gamedata.mpk"),
+            "gamedata",
+            [
+                (
+                    "monnifs.csv",
+                    csv(
+                        [
+                            ["Information", "", "NIF", "Anim"],
+                            ["ID", "Textual Name", "Name", "Anim Set ID"],
+                            ["1", "Synth", "synth", "10"],
+                        ]
+                    ),
+                ),
+                (
+                    "anims.csv",
+                    csv(
+                        [
+                            ["Anim", "", "", ""],
+                            ["Anim Set ID", "Name", "Idle", "Walk"],
+                            ["10", "Synth", "1", "2"],
+                        ]
+                    ),
+                ),
+                (
+                    "animnifs.csv",
+                    csv(
+                        [
+                            ["Anim", "", "", "", "", "base", " "],
+                            ["NIFS", "name", "NIF Name", "frames", "fps", " fps", "type"],
+                            ["1", "a", "idle.kfa", "16", "3", "15", "loop"],
+                            ["2", "b", "walk.kfa", "32", "4", "15", "clamp"],
+                        ]
+                    ),
+                ),
+            ],
+        )
+        return app
+
+    def _ids(self, client):
+        items = client.get("/api/v1/assets").json()["items"]
+        nif = next(a["id"] for a in items if a["type"] == "nif")
+        kfa = next(a["id"] for a in items if a["type"] == "kfa")
+        return nif, kfa
+
+    def test_states_list_the_sets_slots_with_the_game_timing(self, tmp_path, nif_path):
+        client = _client(self._app(tmp_path, nif_path))
+        nif, _kfa = self._ids(client)
+        r = client.get(f"/api/v1/assets/{nif}/states")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert [s["slot"] for s in body] == ["Idle", "Walk"]
+        idle, walk = body
+        assert idle["kfa"] == "idle.kfa" and idle["loop"] is True
+        # frames / fps from `animnifs`, not the placeholder file's own bytes
+        assert idle["duration"] == pytest.approx(16 / 3)
+        assert walk["loop"] is False
+        assert walk["duration"] == pytest.approx(8.0)
+
+    def test_unknown_state_is_404(self, tmp_path, nif_path):
+        client = _client(self._app(tmp_path, nif_path))
+        nif, _kfa = self._ids(client)
+        r = client.get(f"/api/v1/assets/{nif}/anim", params={"state": "Nope"})
+        assert r.status_code == 404
+        assert "Nope" in r.json()["detail"]
+
+    def test_states_reject_non_nif(self, tmp_path, nif_path):
+        client = _client(self._app(tmp_path, nif_path))
+        _nif, kfa = self._ids(client)
+        assert client.get(f"/api/v1/assets/{kfa}/states").status_code == 400
 
 
 class TestSecurity:

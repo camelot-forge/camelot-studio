@@ -261,6 +261,82 @@ def test_boar_anim_csv_timing(client_dir, tmp_path):
     assert body["rate"] == 0.2
 
 
+def test_asset_state_endpoint_serves_the_clients_own_clip(client_dir, tmp_path):
+    """A figure's anim set is served per slot, not only as the auto-resolved
+    idle: the boar's walk comes back with its own tracks and its own
+    `loop`/`clamp` flag, and an unnamed state still falls back to the idle.
+
+    The set also carries player emotes the boar's rig cannot bind: those are
+    refused with the state's name, not with an idle's."""
+    import shutil
+
+    from fastapi.testclient import TestClient
+
+    from camelot.mpak import write_mpak
+    from camelot.serve import create_app
+    from camelot.serve.config import ServeConfig
+
+    root = tmp_path / "client"
+    (root / "figures").mkdir(parents=True)
+    (root / "anims").mkdir()
+    shutil.copy(os.path.join(client_dir, "figures", "Boar.NIF"), root / "figures" / "Boar.NIF")
+    for name in ("BOAR_idle.kfa", "BOAR_walk.kfa", "EM_RVRDANCE.kfa"):
+        shutil.copy(os.path.join(client_dir, "anims", name), root / "anims" / name)
+    write_mpak(
+        str(root / "gamedata.mpk"),
+        "gamedata",
+        [
+            (
+                "monnifs.csv",
+                b"Information,,NIF,Anim\nID,Textual Name,Name,Anim Set ID\n"
+                b"1,Boar,BOAR,10\n",
+            ),
+            (
+                "anims.csv",
+                b"Anim,,,,,\nAnim Set ID,Name,Idle,Walk,Death,EM Dance\n"
+                b"10,Boar,320,321,323,46\n",
+            ),
+            (
+                "animnifs.csv",
+                b"Anim,,,,,base, \nNIFS,name,NIF Name,frames,fps, fps,type\n"
+                b"320,Boar Idle,boar_idle.kfa,16,3,15,loop\n"
+                b"321,Boar Walk,boar_walk.kfa,32,3,15,clamp\n"
+                b"323,Boar Death,boar_death.kfa,12,3,15,clamp\n"
+                b"46,Emote Dance,em_rvrdance.kfa,40,15,15,clamp\n",
+            ),
+        ],
+    )
+    client = TestClient(
+        create_app(ServeConfig(root=root, cache_dir=tmp_path / "cache", static_dir=None)),
+        base_url="http://localhost",
+    )
+    nif_id = client.get("/api/v1/assets", params={"type": "nif"}).json()["items"][0]["id"]
+
+    states = client.get(f"/api/v1/assets/{nif_id}/states").json()
+    assert [s["slot"] for s in states] == ["Idle", "Walk", "EM Dance"]
+    walk = states[1]
+    assert walk["loop"] is False  # `clamp`: a one-shot, the viewer must not wrap it
+    assert walk["duration"] == pytest.approx(32 / 3)
+
+    clip = client.get(f"/api/v1/assets/{nif_id}/anim", params={"state": "Walk"}).json()
+    assert clip["kfa"].lower() == "boar_walk.kfa"
+    assert clip["loop"] is False
+    assert clip["duration"] == pytest.approx(32 / 3)
+    assert len(clip["tracks"]) >= 25, "a named state carries its own tracks"
+
+    # The boar's rig binds none of `EM_RVRDANCE`'s channels (measured on the
+    # corpus: 64 of its 96 slots are refused this way). The refusal names the
+    # state, so the UI can say *which* pair was refused.
+    refused = client.get(f"/api/v1/assets/{nif_id}/anim", params={"state": "EM Dance"})
+    assert refused.status_code == 404
+    assert refused.json()["detail"] == "no tracks for state: EM Dance"
+
+    # no state asked for: the resolver's idle, unchanged
+    plain = client.get(f"/api/v1/assets/{nif_id}/anim").json()
+    assert plain["kfa"].lower() == "boar_idle.kfa"
+    assert "loop" not in plain
+
+
 def test_boar_baked_idle_no_stretch(client_dir, tmp_path):
     from _bbox import world_bbox
 

@@ -493,10 +493,39 @@ def build_router(config: ServeConfig, index: AssetIndex,
             raise HTTPException(status_code=500, detail=f"export failed: {exc}") from exc
         return Response(content=glb, media_type="model/gltf-binary")
 
+    @router.get("/assets/{asset_id}/states", response_model=list[AnimStateSummary])
+    def asset_states(asset_id: str) -> list[AnimStateSummary]:
+        """The figure's playable states, as the client's anim set declares them.
+
+        The creature half of `/character/…/states`: same tables (`monnifs` →
+        `anims` → `animnifs`), same slots, so the viewer can offer the clip
+        set the client itself would play instead of only the one idle its
+        resolver happens to pick. A figure the tables do not cover answers an
+        empty list — the viewer then keeps the auto-resolved idle.
+        """
+        from ..anims import anim_states
+
+        asset = index.get(asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="unknown asset")
+        if asset.type != "nif":
+            raise HTTPException(status_code=400, detail="states are only available for nif assets")
+        with tempfile.TemporaryDirectory(prefix="camelot-serve-") as tmpdir:
+            source = _materialize(config, asset, tmpdir)
+            states = anim_states(str(config.root), source)
+        return [AnimStateSummary(**s.as_dict()) for s in states]
+
     @router.get("/assets/{asset_id}/anim")
-    def asset_anim(asset_id: str) -> Response:
-        """Idle animation rotation tracks for a figure (auto-resolved KFA)."""
-        from ..anims import animation_tracks, resolve_idle_kfa
+    def asset_anim(asset_id: str, state: str | None = None) -> Response:
+        """A figure's animation tracks: the auto-resolved idle by default.
+
+        `state` names one of the figure's own slots (see
+        `/assets/{id}/states`) and is resolved by animnifs **id**, the way the
+        client does it; the slot's own `loop`/`clamp` flag travels with the
+        clip, so a one-shot state cannot be wrapped by a viewer that never
+        learned it was one.
+        """
+        from ..anims import anim_states, animation_tracks, resolve_idle_kfa
 
         asset = index.get(asset_id)
         if asset is None:
@@ -506,9 +535,21 @@ def build_router(config: ServeConfig, index: AssetIndex,
         with tempfile.TemporaryDirectory(prefix="camelot-serve-") as tmpdir:
             try:
                 source = _materialize(config, asset, tmpdir)
-                kfa_path = resolve_idle_kfa(str(config.root), source)
             except (MpakError, OSError) as exc:
                 raise HTTPException(status_code=500, detail=f"anim failed: {exc}") from exc
+            loop: bool | None = None
+            if state is None:
+                kfa_path = resolve_idle_kfa(str(config.root), source)
+            else:
+                wanted = state.strip().lower()
+                picked = next(
+                    (s for s in anim_states(str(config.root), source) if s.slot.lower() == wanted),
+                    None,
+                )
+                if picked is None:
+                    raise HTTPException(status_code=404, detail=f"unknown state: {state}")
+                kfa_path = os.path.join(str(config.root), "anims", picked.kfa)
+                loop = picked.loop
             if kfa_path is None:
                 raise HTTPException(status_code=404, detail="no idle animation for this figure")
             try:
@@ -516,7 +557,16 @@ def build_router(config: ServeConfig, index: AssetIndex,
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=500, detail=f"anim failed: {exc}") from exc
             if not tracks["tracks"]:
-                raise HTTPException(status_code=404, detail="no idle animation for this figure")
+                # A named state that binds nothing is a refusal the viewer has to
+                # be able to explain: saying "no idle" about a walk would be a lie.
+                detail = (
+                    f"no tracks for state: {state}"
+                    if state is not None
+                    else "no idle animation for this figure"
+                )
+                raise HTTPException(status_code=404, detail=detail)
+        if loop is not None:
+            tracks["loop"] = loop
         return Response(content=json.dumps(tracks), media_type="application/json")
 
     @router.get("/events")
