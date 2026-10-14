@@ -373,7 +373,14 @@ def build_router(config: ServeConfig, index: AssetIndex,
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=500, detail=f"anim failed: {exc}") from exc
         if not tracks["tracks"]:
-            raise HTTPException(status_code=404, detail="no idle animation for this race")
+            # A named state that binds nothing is a refusal the viewer has to be
+            # able to explain: saying "no idle" about a walk would be a lie.
+            detail = (
+                f"no tracks for state: {state}"
+                if state is not None
+                else "no idle animation for this race"
+            )
+            raise HTTPException(status_code=404, detail=detail)
         if loop is not None:
             tracks["loop"] = loop
         return Response(content=json.dumps(tracks), media_type="application/json")

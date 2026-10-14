@@ -343,9 +343,11 @@ def test_character_anim_transports_the_loop_flag(client_dir, tmp_path):
 
 
 def test_character_anim_rejects_an_unknown_state(client_dir, tmp_path):
+    """The builder shows the daemon's own words beside the pick it refused."""
     client = _client(client_dir, tmp_path)
     res = client.get("/api/v1/character/4/true/anim?state=Dance")
     assert res.status_code == 404
+    assert res.json()["detail"] == "unknown state: Dance"
 
 
 def test_character_anim_default_is_still_the_idle(client_dir, tmp_path):
