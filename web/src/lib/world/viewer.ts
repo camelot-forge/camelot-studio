@@ -27,7 +27,7 @@ import {
 	zoneNormals,
 	type TerrainData
 } from './terrain';
-import { GIZMO_AXES, axisParam, type GizmoAxis } from './gizmo';
+import { GIZMO_AXES, axisParam, quantized, type GizmoAxis } from './gizmo';
 
 /** Bounds/water/jumps sit a hair above the ground so they never z-fight it. */
 const OVERLAY_LIFT = 8;
@@ -260,11 +260,13 @@ interface Grab extends GestureBase {
 	startAngle: number;
 	items: GrabItem[];
 	/** A gizmo drag: which arrow was grabbed, where the axis stood when the drag
-	 * began (it must not move with the preview, or the math chases it), and the
-	 * pointer's own parameter along that axis at pointer down. */
+	 * began (it must not move with the preview, or the math chases it), the
+	 * pointer's own parameter along that axis at pointer down, and whether the
+	 * snap is held off for this move (shift — free placement). */
 	axis?: GizmoAxis;
 	axisOrigin?: [number, number, number];
 	t0?: number;
+	free?: boolean;
 }
 
 type Gesture =
@@ -370,6 +372,9 @@ export class WorldViewer {
 	onHover: ((point: { x: number; y: number; z: number } | null) => void) | null = null;
 	/** The measure tool's two points, whenever they change. */
 	onMeasure: ((measure: Measure | null) => void) | null = null;
+	/** A gizmo drag's snap state as it changes: `true` while shift holds the snap
+	 * off, null when no gizmo drag is running (the status bar says it back). */
+	onGizmoFree: ((free: boolean | null) => void) | null = null;
 	private token = 0;
 	private frame = 0;
 
@@ -606,6 +611,16 @@ export class WorldViewer {
 
 	private onDown(event: PointerEvent): void {
 		const ndc = this.ndcOf(event);
+		// the arrows first — even under shift, which is this gizmo's own "free
+		// placement" while the ground keeps its shift+left pan
+		if (event.button === 0 && this.editMode === 'move') {
+			const axis = this.pickGizmo(ndc);
+			if (axis && this.beginGizmo(this.pointerBase(event), axis, ndc)) {
+				event.preventDefault();
+				this.canvas.setPointerCapture(event.pointerId);
+				return;
+			}
+		}
 		// shift+left drags the map in every mode: the camera is never a tool's
 		// prisoner (a shift+left *click* still adds to the selection, see `onUp`)
 		if (event.button === 0 && event.shiftKey) {
@@ -631,11 +646,6 @@ export class WorldViewer {
 		if (event.button === 2) {
 			this.gesture = { ...base, kind: event.shiftKey ? 'pan' : 'orbit' };
 			return;
-		}
-		// the arrows first: a grab that starts on a gizmo arm is that axis' own
-		if (event.button === 0 && this.editMode === 'move') {
-			const axis = this.pickGizmo(ndc);
-			if (axis && this.beginGizmo(base, axis, ndc)) return;
 		}
 		if (event.button === 0 || event.button === 1) {
 			const kind = event.button === 1 ? this.dragKindFor(event) : this.leftKind(event);
@@ -740,6 +750,12 @@ export class WorldViewer {
 			if (gesture.moved) this.drawMarquee(gesture.from, event);
 			return;
 		}
+		// the gizmo reads the snap's own modifier live (shift holds it off); the
+		// ground grammar keeps its meanings (shift turns, ctrl scales, alt lifts)
+		if ('items' in gesture) {
+			gesture.free = event.shiftKey;
+			if (gesture.axis !== undefined) this.onGizmoFree?.(event.shiftKey);
+		}
 		this.applyGrab(gesture, this.ndcOf(event));
 	}
 
@@ -752,6 +768,7 @@ export class WorldViewer {
 		this.gesture = null;
 		this.canvas.releasePointerCapture?.(event.pointerId);
 		this.canvas.style.cursor = 'grab';
+		if (isGrab(gesture) && gesture.axis !== undefined) this.onGizmoFree?.(null);
 		if (gesture.kind === 'marquee') {
 			if (gesture.moved) {
 				this.finishMarquee(gesture.from, { x: event.clientX, y: event.clientY }, gesture.add);
@@ -771,7 +788,10 @@ export class WorldViewer {
 		this.gesture = null;
 		this.hideMarquee();
 		this.canvas.style.cursor = 'grab';
-		if (isGrab(gesture)) for (const item of gesture.items) this.resetItem(item);
+		if (isGrab(gesture)) {
+			if (gesture.axis !== undefined) this.onGizmoFree?.(null);
+			for (const item of gesture.items) this.resetItem(item);
+		}
 		this.refreshSelection();
 	}
 
@@ -1152,7 +1172,7 @@ export class WorldViewer {
 	 * Snapping each item's *position* would silently deform the group: two
 	 * objects 40 units apart would leave the gesture 300 apart. */
 	private quantize(value: number, step: number): number {
-		return this.snap ? Math.round(value / step) * step : Math.round(value);
+		return quantized(value, step, this.snap);
 	}
 
 	/** A grab begins: the selection is snapshotted — every item's origins and the
@@ -1284,9 +1304,11 @@ export class WorldViewer {
 		if (grab.axis !== undefined && grab.t0 !== undefined && grab.axisOrigin) {
 			const t = this.axisT(grab.axis, ndc, grab.axisOrigin);
 			if (t === null) return null;
+			// shift, held during the drag, buys whole units instead of the grid
+			const snap = this.snap && grab.free !== true;
 			const travel = t - grab.t0;
-			if (grab.axis === 'z') return { kind: 'height', dz: this.quantize(travel, SNAP_HEIGHT) };
-			const step = this.quantize(travel, SNAP_POSITION);
+			if (grab.axis === 'z') return { kind: 'height', dz: quantized(travel, SNAP_HEIGHT, snap) };
+			const step = quantized(travel, SNAP_POSITION, snap);
 			return grab.axis === 'x'
 				? { kind: 'move', dx: step, dy: 0 }
 				: { kind: 'move', dx: 0, dy: step };

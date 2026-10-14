@@ -45,3 +45,10 @@ export function axisParam(o: Vec3, d: Vec3, a: Vec3, e: Vec3): number | null {
 	if (Math.abs(denom) < 1e-9 * dd * ee) return null;
 	return (dd * ew - de * dw) / denom;
 }
+
+/** Where a transform lands: the snap grid when it is on, whole units when it is
+ * off — shift during a gizmo drag buys the second ("pixel-perfect", the way
+ * Blender's own fine move does). */
+export function quantized(value: number, step: number, snap: boolean): number {
+	return snap ? Math.round(value / step) * step : Math.round(value);
+}

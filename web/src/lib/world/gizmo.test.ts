@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GIZMO_AXES, axisParam } from './gizmo';
+import { GIZMO_AXES, axisParam, quantized } from './gizmo';
 
 describe('axisParam', () => {
 	it('reads the coordinate the ray stands over, along the axis', () => {
@@ -65,5 +65,23 @@ describe('GIZMO_AXES', () => {
 
 	it('wears the drafts’ own colours (X red, Y green, Z blue)', () => {
 		expect(GIZMO_AXES.map((spec) => spec.color)).toEqual([0xe5484d, 0x46a758, 0x0090ff]);
+	});
+});
+
+describe('quantized', () => {
+	it('lands on the snap grid when the snap is on', () => {
+		expect(quantized(300, 256, true)).toBe(256);
+		expect(quantized(500, 256, true)).toBe(512);
+		expect(quantized(-300, 256, true)).toBe(-256);
+	});
+
+	it('keeps whole units when the snap is off (shift, free placement)', () => {
+		expect(quantized(137.4, 256, false)).toBe(137);
+		expect(quantized(-137.6, 256, false)).toBe(-138);
+	});
+
+	it('is a no-op at zero, either way', () => {
+		expect(quantized(0, 256, true)).toBe(0);
+		expect(quantized(0, 256, false)).toBe(0);
 	});
 });

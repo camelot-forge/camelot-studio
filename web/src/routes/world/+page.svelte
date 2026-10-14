@@ -114,6 +114,8 @@
 	};
 	let editMode = $state<EditMode>('move');
 	let snap = $state(true);
+	/** What the gizmo drag says about the snap right now (shift holds it off). */
+	let gizmoFree = $state<boolean | null>(null);
 	/** The ground under the pointer, and the measure tool's own two points. */
 	let cursor = $state<{ x: number; y: number; z: number } | null>(null);
 	let measure = $state<Measure | null>(null);
@@ -259,6 +261,9 @@
 		};
 		viewer.onMeasure = (value) => {
 			measure = value;
+		};
+		viewer.onGizmoFree = (free) => {
+			gizmoFree = free;
 		};
 		const observer = new ResizeObserver(() => viewer?.resize());
 		observer.observe(canvasEl.parentElement!);
@@ -1120,7 +1125,7 @@
 							class="tool"
 							class:on={snap}
 							aria-pressed={snap}
-							title="snap — 256 units, 15°, 5%, 16 up"
+							title="snap — 256 units, 15°, 5%, 16 up (shift during a gizmo drag: free placement)"
 							onclick={() => (snap = !snap)}
 						>
 							<Magnet size={17} />
@@ -1486,7 +1491,11 @@
 					: '—'}
 			</span>
 			<span>grid 256 u</span>
-			{#if editing}<span class="sb-accent">snap {snap ? 'on' : 'off'}</span>{/if}
+			{#if editing}
+				<span class="sb-accent" title="shift during a gizmo drag: free placement">
+					{gizmoFree ? 'free (shift)' : `snap ${snap ? 'on' : 'off'}`}
+				</span>
+			{/if}
 		{/snippet}
 		{#snippet center()}
 			{#if measure}
@@ -1504,8 +1513,8 @@
 			{:else}
 				<span>
 					left: select — a drag on the selection applies the tool · middle: from anywhere (shift
-					turns, ctrl scales, alt lifts) · right orbits, wheel zooms · F focuses, Del removes, Esc
-					clears
+					turns, ctrl scales, alt lifts) · gizmo: drag an arrow, shift for free placement · right
+					orbits, wheel zooms · F focuses, Del removes, Esc clears
 				</span>
 			{/if}
 		{/snippet}

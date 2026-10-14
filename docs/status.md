@@ -566,10 +566,15 @@ arrows keep their size on screen (scaled by the camera's distance every
 frame), the pointer turns into a `pointer` over them, and the ground grammar
 is untouched (drag the selection, the middle button, shift-pan, the wheel).
 A ground row refuses the vertical arrow the way the grammar always has (W-3:
-its `z` belongs to the terrain, never invented). Verified in the browser
+its `z` belongs to the terrain, never invented); **holding shift during a
+gizmo drag** holds the snap off — whole units, the way Blender's own fine
+move works (the status bar says `free (shift)` while it holds), and the
+arrows win over the ground's shift+left pan *on the arrows only*: everywhere
+else shift still pans the map. Verified in the browser
 against the running daemon: a drag on the red arrow moved the Keep **+512 on
 `x` only** (2×256 — the snap) and journaled **one fixture op + the 31 carried
-rows** (the `carry` behaviour, B2); hover shows the pointer; zero console
+rows** (the `carry` behaviour, B2), and the same drag under shift moved it
+**+178** (off the grid, y untouched); hover shows the pointer; zero console
 errors; `pnpm test/check/lint/build` green. Next: the viewer/builder
 transport, bones and equipment panels.
 2. Keep the delivery chain honest while it grows: the loader's own used-id
