@@ -29,7 +29,10 @@
 </script>
 
 <section class="card">
-	<h3><UserRound size={14} /> Character</h3>
+	<h3>
+		<UserRound size={14} /> Character
+		<span class="card-meta">{rig.slots.length} slots</span>
+	</h3>
 	<p class="hint">
 		Player base figure — pick the visible equipment variant per slot. Off hides the slot (naked /
 		LOD levels are distance-only).
@@ -53,25 +56,7 @@
 </section>
 
 <style>
-	.card {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--r-card);
-		padding: 14px;
-	}
-	h3 {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 12px;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		color: var(--text-3);
-		margin-bottom: 12px;
-	}
 	.hint {
-		font-size: 12px;
-		color: var(--text-4);
 		margin-bottom: 10px;
 	}
 	.slots {
@@ -100,14 +85,6 @@
 		border-radius: var(--r-input);
 	}
 	.link {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
 		margin-top: 12px;
-		font-size: 12px;
-		color: var(--text-3);
-	}
-	.link:hover {
-		color: var(--accent);
 	}
 </style>

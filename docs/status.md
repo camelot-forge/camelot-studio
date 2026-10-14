@@ -577,6 +577,41 @@ rows** (the `carry` behaviour, B2), and the same drag under shift moved it
 **+178** (off the grid, y untouched); hover shows the pointer; zero console
 errors; `pnpm test/check/lint/build` green. Next: the viewer/builder
 transport, bones and equipment panels.
+
+**Slice 3a (same day): the figure viewer.** The read-only page now has the
+drafts' shell and tools. A **vertical strip in the same column as the
+editor's** (grip, fit, turntable, wireframe, grid, axes, snapshot | ↺ / axis
+chip / ↻) floats over the viewport and **drags by its grip** (a click puts it
+back at 12,12; the spot is remembered). A **floating animation transport**
+bottom-centre: play/pause, `1.24 / 2.40 s` read-out, a scrubber ticked with
+the clip's **own key times**, a loop switch and a speed chip — and the client's
+`clamp` rule is obeyed: a one-shot **stops on its last frame**, its loop switch
+is refused (not silently overridden) and it restarts when played again. The
+right dock is now **Inspect**: Model (file, meshes, triangles, bones, skins —
+the sidecar's count when there is one), **Animation** (the figure's *own* anim
+set, surfaced by a new `/assets/{id}/states` + `?state=` pair on the daemon:
+the client's `monnifs → anims → animnifs` chain, the slot's `loop`/`clamp`
+flag and its **game timing** — a boar's idle is 5.33 s, not its file's
+1.07 s), Bones (search by name *or* channel index, the canonical table behind
+a disclosure, the eye that overlays `SkeletonHelper`) and Skins (per-slot
+sheets), plus the Character card for figures that carry one. The status bar
+reads **fps · tris · meshes · bones**, the gestures and the clip on screen;
+`F` frames, space plays. Refusals are the daemon's own: a clip whose channels
+do not bind comes back `404 no tracks for state: X` and the row says so
+(measured: **64 of the boar's 96 slots** are refused this way), which is what
+the draft's “pair refusé” meant. Verified in the browser against the running
+daemon by `web/scripts/viewer_probe.mjs` — **46 checks**, all green (strip
+order and width, transport clock/scrub/ticks/clamp/speed, the four cards,
+the refused pair, one lit row per clip, the grip drag + reload, wireframe,
+the bones eye, snapshot PNG and a **glTF export re-parsed as a real GLB**).
+Three bugs the browser found and that are fixed: the scene effect re-read its
+own `$state` handles (1001 rebuilds per figure — it now works on locals and
+only writes them), a synchronous first render-loop call had made the clock a
+dependency of the scene's setup, and the transport's play button on a
+finished one-shot did nothing (it now starts over). `web/src/lib/transport.ts`
+and `lib/inspect.ts` are unit-tested (105 web tests). Next: **slice 3b — the
+builder's rail and its own inspector**, then the journal tab and the dock
+system (resize grip + pin).
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.

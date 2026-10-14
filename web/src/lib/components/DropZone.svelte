@@ -101,14 +101,6 @@
 		font-size: 12px;
 		color: var(--text-4);
 	}
-	code {
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 0.92em;
-		background: var(--surface);
-		border: 1px solid var(--border);
-		padding: 0 5px;
-		border-radius: 6px;
-	}
 	.open {
 		position: absolute;
 		top: 14px;

@@ -102,7 +102,7 @@
 </script>
 
 <aside class="library">
-	<header>
+	<header class="dock-head">
 		<span class="logo" aria-hidden="true"><Database size={15} /></span>
 		<div class="titles">
 			<span class="name">Library</span>
@@ -203,40 +203,6 @@
 		border-right: 1px solid var(--border);
 		background: var(--surface-2);
 		min-height: 0;
-	}
-	header {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		padding: 14px 16px;
-		border-bottom: 1px solid var(--border);
-	}
-	.logo {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 30px;
-		height: 30px;
-		border-radius: var(--r-input);
-		background: var(--accent-tint-12);
-		color: var(--accent);
-	}
-	.titles {
-		display: flex;
-		flex-direction: column;
-		line-height: 1.2;
-		overflow: hidden;
-	}
-	.name {
-		font-weight: 650;
-		font-size: 14px;
-	}
-	.sub {
-		font-size: 11.5px;
-		color: var(--text-3);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
 	}
 	.controls {
 		display: flex;
@@ -355,11 +321,6 @@
 	.hint {
 		color: var(--text-4);
 		font-size: 11.5px;
-	}
-	code {
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 0.9em;
-		color: var(--text-2);
 	}
 	.empty,
 	.err {

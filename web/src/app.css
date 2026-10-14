@@ -246,6 +246,207 @@ a {
 	border-color: var(--accent);
 }
 
+/* ---- Outils flottants (les drafts : barre verticale, d'où qu'on vienne) ---- */
+/* Le monde et la figure partagent la même famille : une barre de 52 px, des
+   outils de 40 px, un séparateur, un chip de mode. Les pages ne font que
+   positionner `.strip`. */
+.strip {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	width: 52px;
+	padding: 8px 6px;
+	border: 1px solid var(--border);
+	border-radius: var(--r-dock);
+	background: var(--surface);
+	box-shadow: 0 14px 34px rgb(0 0 0 / 50%);
+}
+.strip .tool {
+	display: grid;
+	place-items: center;
+	width: 40px;
+	height: 40px;
+	border-radius: var(--r-lg);
+	color: var(--text-2);
+	transition:
+		background-color var(--dur) var(--ease),
+		color var(--dur) var(--ease);
+}
+.strip .tool:hover:not(:disabled) {
+	background: var(--surface-input);
+	color: var(--text);
+}
+.strip .tool.on {
+	background: var(--accent-tint-14);
+	color: var(--accent);
+}
+.strip .tool:disabled {
+	color: var(--text-4);
+	cursor: not-allowed;
+}
+.strip .tool:disabled:hover {
+	background: none;
+}
+.strip-sep {
+	width: 32px;
+	height: 1px;
+	background: var(--border);
+}
+.strip .grip {
+	display: grid;
+	place-items: center;
+	width: 40px;
+	height: 14px;
+	color: var(--text-4);
+	cursor: grab;
+}
+.strip .grip:active {
+	cursor: grabbing;
+}
+/* Le chip de mode (View/Edit) : deux états, un seul allumé. */
+.mode-chip {
+	display: flex;
+	gap: 4px;
+	padding: 4px;
+	border: 1px solid var(--border-input);
+	border-radius: var(--r-lg);
+	background: var(--surface);
+	box-shadow: 0 10px 24px rgb(0 0 0 / 45%);
+}
+.mode-chip button {
+	height: var(--h-control-sm);
+	padding: 0 12px;
+	border-radius: var(--r-sm);
+	font-size: var(--fs-dense);
+	color: var(--text-3);
+}
+.mode-chip button:hover:not(:disabled) {
+	color: var(--text);
+}
+.mode-chip button.on {
+	background: var(--accent);
+	color: var(--accent-ink);
+	font-weight: 600;
+}
+.mode-chip button:disabled {
+	color: var(--text-4);
+	cursor: not-allowed;
+}
+
+/* ---- Cartes de dock (l'inspecteur des drafts) ---- */
+.card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-card);
+	padding: 14px;
+}
+.card > h3 {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--text-3);
+	margin-bottom: 12px;
+}
+.card > h3 .card-meta {
+	margin-left: auto;
+	font-size: 11px;
+	font-weight: 400;
+	text-transform: none;
+	letter-spacing: 0;
+	color: var(--text-4);
+}
+.card .meta {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.card .meta > div {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+}
+.card .meta dt {
+	font-size: var(--fs-body);
+	color: var(--text-3);
+}
+.card .meta dd {
+	font-size: var(--fs-body);
+	text-align: right;
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.card .hint {
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--text-4);
+}
+.card .link {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 10px;
+	font-size: 12px;
+	color: var(--text-3);
+}
+.card .link:hover {
+	color: var(--accent);
+}
+
+/* ---- Tête de dock (bibliothèque, inspecteur : la même grammaire) ---- */
+.dock-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 14px 16px;
+	border-bottom: 1px solid var(--border);
+}
+.dock-head .logo {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	flex: 0 0 auto;
+	border-radius: var(--r-input);
+	background: var(--accent-tint-12);
+	color: var(--accent);
+}
+.dock-head .titles {
+	display: flex;
+	flex-direction: column;
+	line-height: 1.2;
+	overflow: hidden;
+}
+.dock-head .name {
+	font-weight: 650;
+	font-size: 14px;
+	color: var(--text);
+}
+.dock-head .sub {
+	font-size: var(--fs-small);
+	color: var(--text-3);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* ---- Code : la même fonte que le reste (zéro mono, décision du 13/10) ---- */
+code {
+	font-family: inherit;
+	font-size: 0.92em;
+	padding: 1px 5px;
+	border-radius: var(--r-xs);
+	background: var(--surface-input);
+	color: var(--text-2);
+}
+
 /* ---- Animation ---- */
 @keyframes fadeIn {
 	from {

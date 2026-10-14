@@ -73,7 +73,22 @@ export interface AnimClip {
 	kfa: string;
 	duration: number; // loop length, game seconds (animnifs frames/fps)
 	rate: number; // game seconds -> KFA key seconds multiplier
+	// The client's own `animnifs` type: `loop` clips wrap, `clamp` ones are
+	// one-shots. Absent when the clip came from the idle resolver, which does
+	// not consult a slot row.
+	loop?: boolean;
 	tracks: AnimTrack[];
+}
+
+/** One playable state of a figure, as the client's `anims.csv` declares it:
+ * the slot name the game uses (`Idle`, `Walk`, `Fly`…), the clip it points at,
+ * and the `loop`/`clamp` flag the viewer must play it with. */
+export interface AnimStateSummary {
+	slot: string;
+	kfa: string;
+	animnifs_id: string;
+	loop: boolean;
+	duration: number; // game seconds (frames / fps), not the file's key span
 }
 
 export interface AssetQuery {
@@ -433,6 +448,18 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
 	return (await res.json()) as T;
 }
 
+/** The daemon's own words for a failure, falling back to the status line. */
+async function detailOf(res: Response): Promise<string> {
+	let detail = `${res.status} ${res.statusText}`;
+	try {
+		const payload = (await res.json()) as { detail?: unknown };
+		if (typeof payload.detail === 'string') detail = payload.detail;
+	} catch {
+		// not JSON: the status line is all there is
+	}
+	return detail;
+}
+
 /** A JSON request that carries the daemon's own refusal message, not a code. */
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
 	const res = await fetch(`${getApiBase()}/api/v1${path}`, {
@@ -440,16 +467,7 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
 		headers: body === undefined ? undefined : { 'content-type': 'application/json' },
 		body: body === undefined ? undefined : JSON.stringify(body)
 	});
-	if (!res.ok) {
-		let detail = `${res.status} ${res.statusText}`;
-		try {
-			const payload = (await res.json()) as { detail?: unknown };
-			if (typeof payload.detail === 'string') detail = payload.detail;
-		} catch {
-			// not JSON: the status line is all there is
-		}
-		throw new Error(detail);
-	}
+	if (!res.ok) throw new Error(await detailOf(res));
 	return (await res.json()) as T;
 }
 
@@ -517,13 +535,36 @@ export const api = {
 		if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 		return (await res.json()) as AnimStateSlot[];
 	},
-	anim: async (id: string, signal?: AbortSignal): Promise<AnimClip | null> => {
-		const res = await fetch(`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim`, {
+	anim: async (id: string, state?: string, signal?: AbortSignal): Promise<AnimClip | null> => {
+		const qs = state ? `?state=${encodeURIComponent(state)}` : '';
+		const res = await fetch(`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim${qs}`, {
 			signal
 		});
 		if (res.status === 404) return null;
 		if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 		return (await res.json()) as AnimClip;
+	},
+	/** One named state of a figure (`/assets/{id}/states`). A refusal — the
+	 * daemon answering 404 with its reason, such as a clip whose channels do not
+	 * bind to this rig — throws, so the row can say why instead of going quiet. */
+	animState: async (id: string, slot: string, signal?: AbortSignal): Promise<AnimClip> => {
+		const res = await fetch(
+			`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim?state=${encodeURIComponent(slot)}`,
+			{ signal }
+		);
+		if (!res.ok) throw new Error(await detailOf(res));
+		return (await res.json()) as AnimClip;
+	},
+	/** The figure's own anim set, read from the client's tables. An empty list
+	 * means the tables do not cover this figure: the viewer keeps the idle its
+	 * resolver picks. */
+	states: async (id: string, signal?: AbortSignal): Promise<AnimStateSummary[]> => {
+		const res = await fetch(`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/states`, {
+			signal
+		});
+		if (res.status === 404) return [];
+		if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+		return (await res.json()) as AnimStateSummary[];
 	},
 	events: () => new EventSource(`${getApiBase()}/api/v1/events`),
 

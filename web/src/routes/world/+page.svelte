@@ -1561,7 +1561,8 @@
 		min-width: 0;
 	}
 	/* The floating tools (the drafts' strip): the modes and the snap live here —
-	 * the panel keeps what a *selection* needs, the strip what a *gesture* needs. */
+	 * the panel keeps what a *selection* needs, the strip what a *gesture* needs.
+	 * The strip's own look is shared with the figure viewer (app.css). */
 	.tools-dock {
 		position: absolute;
 		top: 12px;
@@ -1570,68 +1571,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-	}
-	.mode-chip {
-		display: flex;
-		gap: 4px;
-		padding: 4px;
-		border: 1px solid var(--border-input, #2e2e2e);
-		border-radius: var(--r-lg, 10px);
-		background: var(--surface, #1f1f1f);
-		box-shadow: 0 10px 24px rgb(0 0 0 / 45%);
-	}
-	.mode-chip button {
-		width: auto;
-		padding: 4px 12px;
-		border: 1px solid transparent;
-		border-radius: var(--r-sm, 6px);
-		font-size: 12px;
-		color: var(--text-3, #9a9a9a);
-	}
-	.mode-chip button:hover:not(:disabled) {
-		color: var(--text, #e8e8e8);
-	}
-	.mode-chip button.on {
-		background: var(--accent, #2dd4a7);
-		color: var(--accent-ink, #0c1f1a);
-		font-weight: 600;
-	}
-	.mode-chip button:disabled {
-		color: var(--text-4, #6a6a6a);
-		cursor: not-allowed;
-	}
-	.strip {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 6px;
-		width: 52px;
-		padding: 8px 6px;
-		border: 1px solid var(--border, #262626);
-		border-radius: var(--r-dock, 14px);
-		background: var(--surface, #1f1f1f);
-		box-shadow: 0 14px 34px rgb(0 0 0 / 50%);
-	}
-	.strip .tool {
-		display: grid;
-		place-items: center;
-		width: 40px;
-		height: 40px;
-		border-radius: var(--r-lg, 10px);
-		color: var(--text-2, #c8c8c8);
-	}
-	.strip .tool:hover {
-		background: var(--surface-input, #161616);
-		color: var(--text, #e8e8e8);
-	}
-	.strip .tool.on {
-		background: var(--accent-tint-14, rgb(45 212 167 / 14%));
-		color: var(--accent, #2dd4a7);
-	}
-	.strip-sep {
-		width: 32px;
-		height: 1px;
-		background: var(--border, #262626);
 	}
 	canvas {
 		width: 100%;
@@ -1916,7 +1855,7 @@
 		display: flex;
 		gap: 3px;
 		align-items: center;
-		font: 10px monospace;
+		font-size: var(--fs-label, 10.5px);
 		color: #7f8a86;
 	}
 	.fields input {
