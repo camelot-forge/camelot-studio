@@ -27,6 +27,7 @@ import {
 	zoneNormals,
 	type TerrainData
 } from './terrain';
+import { GIZMO_AXES, axisParam, type GizmoAxis } from './gizmo';
 
 /** Bounds/water/jumps sit a hair above the ground so they never z-fight it. */
 const OVERLAY_LIFT = 8;
@@ -258,6 +259,12 @@ interface Grab extends GestureBase {
 	/** the pointer's angle about the pivot when the grab began, radians */
 	startAngle: number;
 	items: GrabItem[];
+	/** A gizmo drag: which arrow was grabbed, where the axis stood when the drag
+	 * began (it must not move with the preview, or the math chases it), and the
+	 * pointer's own parameter along that axis at pointer down. */
+	axis?: GizmoAxis;
+	axisOrigin?: [number, number, number];
+	t0?: number;
 }
 
 type Gesture =
@@ -326,6 +333,10 @@ export class WorldViewer {
 	private marker = new THREE.Group();
 	private rings = new THREE.Group();
 	private measureGroup = new THREE.Group();
+	/** The drafts' Unity-style arrows, and the fat colliders under them. */
+	private gizmo = new THREE.Group();
+	private gizmoColliders: THREE.Mesh[] = [];
+	private gizmoTarget: [number, number, number] | null = null;
 	/** The two points of the measure tool, and the last pointer readout. */
 	private measureA: { x: number; y: number; z: number } | null = null;
 	private measureB: { x: number; y: number; z: number } | null = null;
@@ -378,7 +389,8 @@ export class WorldViewer {
 		for (const group of Object.values(this.groups)) this.scene.add(group);
 		this.marker.visible = false;
 		this.buildMarker();
-		this.scene.add(this.marker, this.rings, this.measureGroup);
+		this.buildGizmo();
+		this.scene.add(this.marker, this.rings, this.measureGroup, this.gizmo);
 		this.marquee = document.createElement('div');
 		Object.assign(this.marquee.style, {
 			position: 'absolute',
@@ -620,6 +632,11 @@ export class WorldViewer {
 			this.gesture = { ...base, kind: event.shiftKey ? 'pan' : 'orbit' };
 			return;
 		}
+		// the arrows first: a grab that starts on a gizmo arm is that axis' own
+		if (event.button === 0 && this.editMode === 'move') {
+			const axis = this.pickGizmo(ndc);
+			if (axis && this.beginGizmo(base, axis, ndc)) return;
+		}
 		if (event.button === 0 || event.button === 1) {
 			const kind = event.button === 1 ? this.dragKindFor(event) : this.leftKind(event);
 			if (kind) {
@@ -704,6 +721,10 @@ export class WorldViewer {
 	private onMove(event: PointerEvent): void {
 		const gesture = this.gesture;
 		if (!gesture || gesture.pointerId !== event.pointerId) {
+			// the arms say what they are before the click does
+			const ndc = this.ndcOf(event);
+			this.canvas.style.cursor =
+				this.editMode === 'move' && this.pickGizmo(ndc) ? 'pointer' : 'grab';
 			this.reportHover(event);
 			return;
 		}
@@ -852,6 +873,7 @@ export class WorldViewer {
 			this.addRing([row.x, row.z, row.y], this.rowRingMaterial);
 		}
 		this.pointMarker(primaryFixture ?? primaryRow);
+		this.refreshGizmo(primaryFixture ?? primaryRow);
 	}
 
 	private addRing(position: [number, number, number], material: THREE.Material): void {
@@ -1026,6 +1048,104 @@ export class WorldViewer {
 		this.editMode = mode;
 		this.snap = snap;
 		this.showGrid(mode === 'add');
+		this.refreshGizmo();
+	}
+
+	/** The gizmo (the drafts' Unity-style arrows): one arm per axis, built along
+	 * +Y then turned into place; the fat, invisible collider under each arm is
+	 * what the pointer actually hits. The group is scaled by the camera's own
+	 * distance every frame, so it keeps its size on screen. */
+	private buildGizmo(): void {
+		const hidden = new THREE.MeshBasicMaterial({
+			transparent: true,
+			opacity: 0,
+			depthWrite: false
+		});
+		for (const spec of GIZMO_AXES) {
+			const arm = new THREE.Group();
+			const material = new THREE.MeshBasicMaterial({ color: spec.color, depthTest: false });
+			const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.7, 10), material);
+			shaft.position.y = 0.45;
+			const head = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 14), material);
+			head.position.y = 0.91;
+			shaft.renderOrder = 10;
+			head.renderOrder = 10;
+			arm.add(shaft, head);
+			if (spec.axis === 'x') arm.rotation.z = -Math.PI / 2;
+			if (spec.axis === 'y') arm.rotation.x = Math.PI / 2;
+			const collider = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 1, 8), hidden);
+			collider.position.y = 0.5;
+			collider.userData.axis = spec.axis;
+			arm.add(collider);
+			this.gizmoColliders.push(collider);
+			this.gizmo.add(arm);
+		}
+		this.gizmo.visible = false;
+	}
+
+	/** The gizmo stands over the leading selection while a move is armed: the
+	 * arrows are the visible half of the strip's own mode. */
+	private refreshGizmo(primary?: WorldFixture | RowPick | null): void {
+		const leading =
+			primary !== undefined
+				? primary
+				: this.selection.fixtures.length
+					? this.selection.fixtures[this.selection.fixtures.length - 1]
+					: this.selection.rows.length
+						? this.selection.rows[this.selection.rows.length - 1]
+						: null;
+		const position = this.editMode === 'move' ? this.positionOf(leading) : null;
+		this.gizmoTarget = position;
+		this.gizmo.visible = position !== null;
+		if (!position) return;
+		this.gizmo.position.set(position[0], position[1], position[2]);
+		this.gizmo.updateMatrixWorld(true);
+	}
+
+	private pickGizmo(ndc: { x: number; y: number }): GizmoAxis | null {
+		if (!this.gizmo.visible) return null;
+		const ray = new THREE.Raycaster();
+		ray.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.camera);
+		const hit = ray.intersectObjects(this.gizmoColliders, false)[0];
+		const axis = hit ? (hit.object.userData.axis as GizmoAxis | undefined) : undefined;
+		return axis ?? null;
+	}
+
+	/** Where the pointer ray meets one axis of the gizmo: the travel along that
+	 * axis, in zone-local units (null when the two are parallel). */
+	private axisT(
+		axis: GizmoAxis,
+		ndc: { x: number; y: number },
+		origin?: [number, number, number]
+	): number | null {
+		const spec = GIZMO_AXES.find((entry) => entry.axis === axis);
+		const at = origin ?? this.gizmoTarget;
+		if (!spec || !at) return null;
+		const ray = new THREE.Raycaster();
+		ray.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.camera);
+		return axisParam(
+			{ x: ray.ray.origin.x, y: ray.ray.origin.y, z: ray.ray.origin.z },
+			{ x: ray.ray.direction.x, y: ray.ray.direction.y, z: ray.ray.direction.z },
+			{ x: at[0], y: at[1], z: at[2] },
+			{ x: spec.dir[0], y: spec.dir[1], z: spec.dir[2] }
+		);
+	}
+
+	/** A gizmo drag: the grab machinery, with the transform read off one axis
+	 * (see `transformOf`) — the arrows do exactly what they show, and the ground
+	 * grammar (drag the selection, the middle button, the wheel) is untouched. */
+	private beginGizmo(base: GestureBase, axis: GizmoAxis, ndc: { x: number; y: number }): boolean {
+		const at = this.gizmoTarget;
+		if (!at) return false;
+		const t = this.axisT(axis, ndc, at);
+		if (t === null) return false;
+		if (!this.beginGrab(base, 'move', ndc, this.selectionView)) return false;
+		const grab = this.gesture;
+		if (!grab || !('items' in grab)) return false;
+		grab.axis = axis;
+		grab.axisOrigin = [...at];
+		grab.t0 = t;
+		return true;
 	}
 
 	/** Quantize a transform's own parameter — once, for the whole selection.
@@ -1158,6 +1278,19 @@ export class WorldViewer {
 	 * pointer's own ground point (through the anchor's plane), never a chain of
 	 * small deltas — the two disagree the moment the terrain, or the zoom, does. */
 	private transformOf(grab: Grab, ndc: { x: number; y: number }): Transform | null {
+		// a gizmo drag: the pointer's own travel along one axis, measured from where
+		// the axis stood when the drag began (the preview may move the items; the
+		// ruler must not move with them)
+		if (grab.axis !== undefined && grab.t0 !== undefined && grab.axisOrigin) {
+			const t = this.axisT(grab.axis, ndc, grab.axisOrigin);
+			if (t === null) return null;
+			const travel = t - grab.t0;
+			if (grab.axis === 'z') return { kind: 'height', dz: this.quantize(travel, SNAP_HEIGHT) };
+			const step = this.quantize(travel, SNAP_POSITION);
+			return grab.axis === 'x'
+				? { kind: 'move', dx: step, dy: 0 }
+				: { kind: 'move', dx: 0, dy: step };
+		}
 		if (grab.kind === 'move' || grab.kind === 'rotate') {
 			const point = this.planePoint(ndc, grab.anchor.z);
 			if (!point) return null;
@@ -1814,6 +1947,11 @@ export class WorldViewer {
 	start(): void {
 		const loop = () => {
 			this.frame = requestAnimationFrame(loop);
+			// the gizmo keeps its size on screen, whatever the zoom (Unity's trick)
+			if (this.gizmo.visible) {
+				const distance = this.camera.position.distanceTo(this.gizmo.position);
+				this.gizmo.scale.setScalar(Math.max(distance * 0.2, 1));
+			}
 			this.renderer.render(this.scene, this.camera);
 		};
 		loop();

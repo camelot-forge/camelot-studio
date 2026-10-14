@@ -556,6 +556,22 @@ ground (`37838, 24981 · z 2135`); zero console errors; `pnpm
 test/check/lint/build` green. Next: **slice 2b — the Unity-style gizmo back on
 the selection**, over the existing mouse grammar; then the viewer/builder
 transport, bones and equipment panels.
+
+**Slice 2b (same day): the gizmo.** The selection carries three arrows — X red
+(east), Y green (north), Z blue (up — DAoC's own height axis) — with the axis
+mapping and the ray/axis projection in `lib/world/gizmo.ts` (unit-tested). A
+drag that starts *on an arm* moves the selection along **that axis only**,
+quantized by the same steps the gestures use (256 units, 16 for heights); the
+arrows keep their size on screen (scaled by the camera's distance every
+frame), the pointer turns into a `pointer` over them, and the ground grammar
+is untouched (drag the selection, the middle button, shift-pan, the wheel).
+A ground row refuses the vertical arrow the way the grammar always has (W-3:
+its `z` belongs to the terrain, never invented). Verified in the browser
+against the running daemon: a drag on the red arrow moved the Keep **+512 on
+`x` only** (2×256 — the snap) and journaled **one fixture op + the 31 carried
+rows** (the `carry` behaviour, B2); hover shows the pointer; zero console
+errors; `pnpm test/check/lint/build` green. Next: the viewer/builder
+transport, bones and equipment panels.
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.

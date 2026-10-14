@@ -83,7 +83,8 @@
 		{
 			id: 'move',
 			icon: Move,
-			title: 'Move · W — a drag on the selection moves it (the middle button does it from anywhere)'
+			title:
+				'Move · W — drag the gizmo’s arrows, or the selection itself (the middle button does it from anywhere)'
 		},
 		{
 			id: 'rotate',
