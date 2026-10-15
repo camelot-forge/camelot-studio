@@ -54,25 +54,38 @@ __all__ = [
     "Project",
     "ProjectError",
     "author_name",
+    "claim",
     "client_root",
+    "deploy_log",
     "fingerprint_resource",
     "fingerprints",
+    "ids",
+    "import_authoring",
     "info",
     "is_git_repo",
+    "last_deploy",
     "load",
     "lock",
     "lock_state",
     "machine",
     "new",
+    "populate",
     "read_resource",
+    "record_deploy",
+    "record_ids",
+    "release",
     "slug",
     "unlock",
     "verify",
+    "zone_resources",
+    "zones_on_disk",
 ]
 
 #: The schema of `project.json`. A reader refuses a format it does not know,
 #: **by name** — a silent misread is the most expensive bug a project can have.
 FORMAT = "camelot.project/1"
+#: The derived id record's own schema (`ids.json`).
+IDS_FORMAT = "camelot.ids/1"
 
 PROJECT_FILE = "project.json"
 #: This machine's own facts (paths, author, environment addresses). Untracked:
@@ -80,6 +93,11 @@ PROJECT_FILE = "project.json"
 MACHINE_FILE = "machine.json"
 LOCK_FILE = "project.lock"
 NOTES = "notes.md"
+#: The ids this project allocated, derived by every build (`project.md` §D8):
+#: an id an operator saw on a row is *recorded* so a rebuild keeps it, and a
+#: dropped allocation becomes a **tombstone** — an id is never reused, not even
+#: after a revert. Untracked: it is derived from the journal, recomputed.
+IDS_FILE = "ids.json"
 #: Every deployment fact, append-only and union-merged (P §D9): a publish, a
 #: migration, a dry run. The order is read from the timestamps the lines carry,
 #: never from the file.
@@ -614,11 +632,17 @@ def load(root: str | os.PathLike) -> Project:
 # -- the lock ----------------------------------------------------------------
 
 
-def lock_state(project: Project) -> Holder | None:
+def _project_of(value: Project | str | os.PathLike) -> Project:
+    """A `Project` or anything that names one — a directory path is a common
+    caller (the daemon has the path, not the document)."""
+    return value if isinstance(value, Project) else load(value)
+
+
+def lock_state(project: Project | str | os.PathLike) -> Holder | None:
     """Who holds this working copy, or None. A stale local holder is reported
     as such (the caller decides whether to take it): a crashed session must not
     make the project unwritable forever."""
-    path = project.root / LOCK_FILE
+    path = _project_of(project).root / LOCK_FILE
     if not path.is_file():
         return None
     try:
@@ -635,11 +659,16 @@ def lock_state(project: Project) -> Holder | None:
 
 
 def lock(
-    project: Project, *, author: str, now: str | None = None, take_stale: bool = True
+    project: Project | str | os.PathLike,
+    *,
+    author: str,
+    now: str | None = None,
+    take_stale: bool = True,
 ) -> Holder:
     """Take the working copy's lock, or refuse naming who holds it. The lock is
     about *one checkout* (a daemon and a CLI, say), never about the team: that
     is the repository's business (`project.md` §D13)."""
+    project = _project_of(project)
     current = lock_state(project)
     if current is not None and (current.is_alive or not take_stale):
         raise ProjectError(
@@ -653,13 +682,81 @@ def lock(
     return holder
 
 
-def unlock(project: Project) -> bool:
+def unlock(project: Project | str | os.PathLike) -> bool:
     """Let the working copy go. Returns whether a lock was there to drop."""
-    path = project.root / LOCK_FILE
+    path = _project_of(project).root / LOCK_FILE
     if not path.is_file():
         return False
     path.unlink()
     return True
+
+
+def claim(root: str | os.PathLike, *, author: str) -> dict:
+    """Take this checkout's lock for a long-running process (the daemon).
+
+    Returns `{"held": True, "holder": {…}}` when we took it, `{"held": True,
+    "holder": None}` when the directory is not a project — a legacy authoring
+    directory has nothing to lock — and `{"held": False, "by": {…}}` when
+    another live process has it: the caller then runs **read-only**
+    (`project.md` §D13), because a second writer would mean two journals for
+    one session.
+    """
+    directory = Path(root)
+    if not (directory / PROJECT_FILE).is_file():
+        return {"held": True, "holder": None}
+    project = load(directory)  # a malformed project.json still refuses, by name
+    current = lock_state(project)
+    if current is not None and current.is_alive:
+        return {"held": False, "by": current.as_dict()}
+    return {"held": True, "holder": lock(project, author=author).as_dict()}
+
+
+def release(root: str | os.PathLike) -> bool:
+    """Drop a lock we hold (a daemon shutting down)."""
+    try:
+        return unlock(load(root))
+    except ProjectError:
+        return False
+
+
+# -- the ids this project allocated (derived by every build) ------------------
+
+
+def ids(root: str | os.PathLike) -> dict:
+    """The recorded allocations, or an empty document. Derived (`§D8`): a
+    missing file is normal, a malformed one is refused by name. The id space is
+    a **zone**'s (its own `fixtures.csv`), so the keys are zone ids."""
+    path = Path(root) / IDS_FILE
+    if not path.is_file():
+        return {"format": IDS_FORMAT, "zones": {}, "tombstones": {}}
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ProjectError(f"{path}: {error}") from error
+    if not isinstance(document, dict) or document.get("format") != IDS_FORMAT:
+        found = document.get("format") if isinstance(document, dict) else None
+        raise ProjectError(
+            f"{path}: format {found or '(none)'} is not one this build reads "
+            f"(it reads {IDS_FORMAT})"
+        )
+    document.setdefault("zones", {})
+    document.setdefault("tombstones", {})
+    return document
+
+
+def record_ids(root: str | os.PathLike, zones: dict, tombstones: dict) -> dict:
+    """Write what a build allocated — always the whole document, so a merge
+    never has to touch it (it is derived from the journal, never merged)."""
+    document = {
+        "format": IDS_FORMAT,
+        "zones": {zone: dict(sorted(values.items())) for zone, values in sorted(zones.items())},
+        "tombstones": {
+            zone: sorted(set(values)) for zone, values in sorted(tombstones.items()) if values
+        },
+    }
+    path = Path(root) / IDS_FILE
+    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    return document
 
 
 # -- reading the base back ---------------------------------------------------

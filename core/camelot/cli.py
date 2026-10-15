@@ -23,6 +23,7 @@ Commands:
   camelot project new NAME --client DIR
                                   create a project — the whole content of one
                                   server — and its git scaffolding; also:
+                                  open (verify it and start the daemon on it),
                                   info (where it stands), populate (record what
                                   the edits depend on), verify (read the base
                                   back), import (make a 6.3 authoring
@@ -376,6 +377,35 @@ def cmd_project(args) -> int:
             print(f"deploy: {fact['kind']}")
         return 0
 
+    if args.project_cmd == "open":
+        # `open` is the operator's verb: check the base, say who holds the
+        # checkout, then hand over to the daemon (which takes the lock itself).
+        try:
+            project = projects.load(args.dir)
+            findings = projects.verify(project, args.client)
+        except projects.ProjectError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        for finding in [item for item in findings if item["state"] != "ok"]:
+            print(
+                f"warning: {finding['resource']} {finding['state']} — {finding['detail']}",
+                file=sys.stderr,
+            )
+        if any(item["state"] != "ok" for item in findings):
+            print(
+                "warning: the base moved under this project; `camelot project verify` "
+                "lists it, and re-base comes with P8",
+                file=sys.stderr,
+            )
+        holder = projects.lock_state(project)
+        if holder is not None and holder.is_alive:
+            print(
+                f"note: {project.root} is held by {holder.author} (pid {holder.pid}): "
+                "the daemon will run read-only",
+                file=sys.stderr,
+            )
+        return main(["serve", "--project", str(project.root), *args.rest])
+
     try:
         project = projects.load(args.dir)
     except projects.ProjectError as error:
@@ -508,6 +538,30 @@ def cmd_serve(args) -> int:
     )
     app = create_app(cfg)
 
+    # The project is one *checkout* and one writer (`project.md` §D13): this
+    # daemon claims it, or learns who holds it and runs read-only. The lock is
+    # dropped when the daemon stops.
+    claimed = None
+    if cfg.project is not None:
+        from . import project as projects
+
+        try:
+            claim = projects.claim(cfg.project, author=projects.author_name(cfg.project))
+        except projects.ProjectError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        if not claim["held"]:
+            cfg.read_only = True
+            held = claim["by"]
+            print(
+                f"  project: {cfg.project} is held by {held['author']} "
+                f"(pid {held['pid']} on {held['host']}): this daemon is read-only",
+                file=sys.stderr,
+            )
+        elif claim["holder"] is not None:
+            claimed = str(cfg.project)
+            print(f"  project: {cfg.project} (held by {claim['holder']['author']})")
+
     url = f"http://{'localhost' if cfg.is_loopback else host}:{port}/"
     print(f"camelot serve: root={cfg.root}")
     print(f"  viewer: {url}")
@@ -522,7 +576,13 @@ def cmd_serve(args) -> int:
 
     import uvicorn
 
-    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level=args.log_level)
+    try:
+        uvicorn.run(app, host=cfg.host, port=cfg.port, log_level=args.log_level)
+    finally:
+        if claimed is not None:
+            from . import project as projects
+
+            projects.release(claimed)
     return 0
 
 
@@ -1140,6 +1200,11 @@ def main(argv=None) -> int:
                     help="the DAoC client to record as the base (default: $DAOC_CLIENT)")
     mp.add_argument("--author", help="the name that signs your journal shards")
     mp.add_argument("--git", action="store_true", help="run git init (no commit, no remote)")
+    op = pp.add_parser("open", help="verify a project and start the daemon on it")
+    op.add_argument("dir", help="the project's directory")
+    op.add_argument("--client", help="the client to check (default: this machine's own answers)")
+    op.add_argument("rest", nargs=argparse.REMAINDER,
+                    help="flags for the daemon, forwarded as-is (see `camelot serve --help`)")
     pop = pp.add_parser("populate", help="record the resources the project's edits depend on")
     pop.add_argument("--dir", default=".", help="the project's directory (default: .)")
     pop.add_argument("--client", help="the client to read (default: this machine's own answers)")

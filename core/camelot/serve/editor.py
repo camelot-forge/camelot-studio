@@ -220,6 +220,28 @@ class Editor:
         except project_mod.ProjectError:
             return {}
 
+    def _holder(self) -> str:
+        """Who holds this checkout, as a phrase a refusal and the panel both
+        use (`project.md` §D13)."""
+        try:
+            state = project_mod.lock_state(self.dir)
+        except project_mod.ProjectError:
+            state = None
+        if state is None:
+            return "another process"
+        return f"{state.author} (pid {state.pid} on {state.host})"
+
+    def _writable(self) -> None:
+        """Refuse a write when this daemon does not hold the project's lock
+        (`project.md` §D13): the lock is about one *checkout*, and a second
+        writer would produce two journals for one session."""
+        if not self.config.read_only:
+            return
+        raise EditorError(
+            f"this project is held by {self._holder()}: this daemon is read-only — "
+            "close the other one, or stop it and reload"
+        )
+
     def journal(self) -> journal_mod.Journal:
         """The session's journal: one shard per author-session, under
         `<dir>/journal/`. Read on first use, and the legacy single file
@@ -385,6 +407,8 @@ class Editor:
         return EditorState(
             available=True,
             dir=str(self.dir),
+            read_only=bool(self.config.read_only),
+            holder=self._holder() if self.config.read_only else "",
             mod=mod,
             zones=[EditorZone(id=zone, ops=ops) for zone, ops in sorted(zones.items())],
             rows=[EditorRowOp(zone=zone, patches=patches) for zone, patches in sorted(rows.items())],
@@ -595,6 +619,9 @@ class Editor:
 
         ids = [fixture.id for fixture in fixtures_from_table(zone.name, table)]
         row_id = max(ids) + 1 if ids else 1
+        spent = self._spent_ids(zone.info.zone_id)
+        while row_id in spent:  # an id this project spent is never handed out again
+            row_id += 1
         if entry.ground:
             z = 0.0  # the client's own "drop it on the terrain" convention (W-3)
         else:
@@ -627,6 +654,7 @@ class Editor:
         """
         if not self.available:
             raise EditorError("the daemon was started without --project <dir>")
+        self._writable()
         if op.get("kind") in ROW_KINDS:
             patches = self._resolve_rows(zone, op)
             self.journal().append_rows(patches, zone=zone.info.zone_id)
@@ -801,6 +829,7 @@ class Editor:
         """
         if not self.available:
             raise EditorError("the daemon was started without --project <dir>")
+        self._writable()
         pending = [line for line in self.pending_lines() if line.zone == zone_id]
         if not pending:
             if any(self.published_keys()):
@@ -876,6 +905,7 @@ class Editor:
         """
         if not self.available:
             raise EditorError("the daemon was started without --project <dir>")
+        self._writable()
         journal = self.journal()
         written = len(
             [patch for line in journal.live() if line.key in self.published_keys()
@@ -969,6 +999,7 @@ class Editor:
         """
         if not self.available:
             raise EditorError("the daemon was started without --project <dir>")
+        self._writable()
         removed = self.client_state()
         if removed.installed:
             from .. import clientinstall
@@ -997,15 +1028,20 @@ class Editor:
 
         What is built is what no publish covers yet: the pending world ops,
         per zone (a zone the client half already carries is not rebuilt), and
-        the pending row patches.
+        the pending row patches. The build is also where the **ids** are owned
+        (`project.md` §D8): every `add`'s id is checked against the base it is
+        about to be written over and against what this project already dropped,
+        and what it allocates is recorded in `ids.json` — so rebuilding the same
+        journal allocates the same ids, byte for byte.
         """
         if not self.available:
             raise EditorError("the daemon was started without --project <dir>")
+        self._writable()
         pending = self.pending_lines()
-        by_zone: dict[int, list[dict]] = {}
+        by_zone: dict[int, list[journal_mod.Line]] = {}
         for line in pending:
-            if line.family == "world" and line.op and line.zone is not None:
-                by_zone.setdefault(line.zone, []).append(line.op)
+            if line.zone is not None:
+                by_zone.setdefault(line.zone, []).append(line)
         patches: dict[str, list[dict]] = {}
         for line, patch in self.pending_patches():
             patches.setdefault(str(line.zone), []).append(patch)
@@ -1014,6 +1050,11 @@ class Editor:
         try:
             for zone_id in sorted(by_zone):
                 zone = world.zone(zone_id)
+                lines = by_zone[zone_id]
+                self._allocate(zone, lines)
+                ops = [line.op for line in lines if line.family == "world" and line.op]
+                if not ops:
+                    continue
                 archive = zone.archive("csv")
                 if archive is None:
                     raise EditorError(f"zone {zone_id}: no csv archive to target")
@@ -1050,6 +1091,94 @@ class Editor:
         return {"pack": str(pack) if pack is not None else None, "entries": entries,
                 "files": files, "report": report}
 
+    def _recorded_ids(self) -> dict:
+        """The id record as the build reads it (`project.md` §D8). A malformed
+        file is a refusal that names it, never a silent fresh start."""
+        try:
+            return project_mod.ids(self.dir)
+        except project_mod.ProjectError as error:
+            raise EditorError(str(error)) from error
+
+    def _spent_ids(self, zone_id: int) -> set[int]:
+        """The ids this zone may never hand out again (`project.md` §D8): the
+        tombstones, and the allocations whose line is no longer live — the build
+        retires those, but a re-add must not be handed one before it runs."""
+        recorded = self._recorded_ids()
+        spent = {int(item) for item in (recorded.get("tombstones") or {}).get(str(zone_id), ())}
+        claimed = (recorded.get("zones") or {}).get(str(zone_id)) or {}
+        if claimed:
+            live = {line.key for line in self.journal().live() if line.op.get("action") == "add"}
+            spent.update(int(row_id) for key, row_id in claimed.items() if key not in live)
+        return spent
+
+    def _allocate(self, zone: Zone, lines: list[journal_mod.Line]) -> None:
+        """The build's own id bookkeeping (`project.md` §D8).
+
+        An `add` keeps the id the operator saw — re-allocating it silently would
+        move a row out from under them — but the **build** is what checks it:
+        free in the client's own `fixtures.csv`, claimed by no other line, and
+        never one this project spent. What it confirms goes to `ids.json`, keyed
+        by the line that asked for it (`<shard>:<seq>`), so a rebuild allocates
+        the same ids and a merge never has to touch the file.
+        """
+        recorded = self._recorded_ids()
+        allocated: dict[str, dict[str, int]] = {
+            str(key): dict(value) for key, value in (recorded.get("zones") or {}).items()
+        }
+        tombstones: dict[str, set[int]] = {
+            str(key): {int(item) for item in value}
+            for key, value in (recorded.get("tombstones") or {}).items()
+        }
+        zone_key = str(zone.info.zone_id)
+        known = dict(allocated.get(zone_key) or {})
+        gone = set(tombstones.get(zone_key) or ())
+        live = {line.key for line in self.journal().live() if line.op.get("action") == "add"}
+        # Retire first: an allocation whose line is gone is spent, whatever the
+        # base says later — that is the tombstone.
+        retired = [key for key in known if key not in live]
+        for key in retired:
+            gone.add(known.pop(key))
+        adds = [line for line in lines if line.op.get("action") == "add"]
+        if adds:
+            base_ids = {row.id for row in fixtures_from_table(zone.name, self.base_table(zone))}
+            claimed = {row_id: key for key, row_id in known.items()}
+            for line in adds:
+                row_id = int(line.op["id"])
+                if line.key in known:
+                    if known[line.key] != row_id:
+                        raise EditorError(
+                            f"{line.where}: an earlier build recorded id {known[line.key]} for "
+                            f"this line, the op now says {row_id} — the journal was edited by hand"
+                        )
+                    continue  # a rebuild: the allocation stands
+                if row_id in base_ids:
+                    raise EditorError(
+                        f"{line.where}: id {row_id} is taken by the client's own "
+                        "fixtures.csv — drop the object and add it again (the base moved)"
+                    )
+                if row_id in gone:
+                    raise EditorError(
+                        f"{line.where}: id {row_id} was allocated and dropped by this project "
+                        "— an id is never reused: drop the object and add it again"
+                    )
+                if row_id in claimed:
+                    raise EditorError(
+                        f"{line.where}: id {row_id} is already allocated to {claimed[row_id]} "
+                        "— drop the object and add it again"
+                    )
+                known[line.key] = row_id
+                claimed[row_id] = line.key
+        if known:
+            allocated[zone_key] = known
+        else:
+            allocated.pop(zone_key, None)
+        if gone:
+            tombstones[zone_key] = gone
+        else:
+            tombstones.pop(zone_key, None)
+        if adds or retired:
+            project_mod.record_ids(self.dir, allocated, tombstones)
+
     def apply(self, world) -> dict[str, Any]:
         """Publish: the client half through the installer, the server rows
         through the database — both recorded, both reversible.
@@ -1062,6 +1191,7 @@ class Editor:
         """
         if not self.available:
             raise EditorError("the daemon was started without --project <dir>")
+        self._writable()
         lines = self.pending_lines()
         client_ops = [
             line for line in lines if line.family == "world" and line.op

@@ -384,6 +384,11 @@ class EditorState(BaseModel):
 
     available: bool
     dir: str | None = None
+    #: Set when this daemon does **not** hold the checkout's lock (`project.md`
+    #: §D13): the viewer serves, every write refuses, and `holder` says who to
+    #: close or stop.
+    read_only: bool = False
+    holder: str = ""
     mod: dict[str, Any] = {}
     zones: list[EditorZone] = []
     rows: list[EditorRowOp] = []

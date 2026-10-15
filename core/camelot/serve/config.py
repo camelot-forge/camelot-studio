@@ -58,6 +58,11 @@ class ServeConfig:
     #: anywhere. The flag is `--project`; `--edits` is the older name of the
     #: same directory (the 6.3 authoring directory) and is kept as an alias.
     project: Path | None = None
+    #: Set by the daemon when another live process holds the project's lock
+    #: (`project.md` §D13): every write the editor offers is then refused, and
+    #: the panel says who holds it. Read-only is a *state*, never a flag an
+    #: operator can turn off from the browser.
+    read_only: bool = False
 
     def __post_init__(self) -> None:
         self.root = Path(self.root).expanduser().resolve()

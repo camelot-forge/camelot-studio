@@ -169,6 +169,137 @@ def test_build_needs_something_to_publish(editing, tmp_path):
     assert "journal holds no edit" in response.json()["detail"]
 
 
+def ids_record(edits) -> dict:
+    return json.loads((edits / "ids.json").read_text(encoding="utf-8"))
+
+
+def test_a_build_records_the_ids_it_allocated(editing, tmp_path):
+    """`ids.json` is derived and the build is what writes it (`project.md`
+    §D8): the id an add showed the operator is recorded against the journal
+    line that asked for it, so a rebuild allocates the same id."""
+    edits = tmp_path / "session"
+    client = editor_client(editing, edits)
+    row = edit(client, {"kind": "add", "nif_id": 11, "x": 30000, "y": 31000}).json()["fixture"]
+    assert row["id"] == 3  # the synthetic zone's own rows are 1 and 2
+
+    assert client.post("/api/v1/world/mod/build").status_code == 200
+    record = ids_record(edits)
+    shard = next((edits / "journal").glob("*.jsonl")).name
+    assert record["format"] == "camelot.ids/1"
+    (key, row_id), = record["zones"]["0"].items()
+    assert key.startswith(f"{shard}:")  # keyed by the line that asked for it
+    assert row_id == 3
+    assert record["tombstones"] == {}
+
+
+def test_a_dropped_allocation_is_a_tombstone_and_the_id_is_never_handed_out_again(
+        editing, tmp_path):
+    """An id is spent the moment its line stops being live (`project.md` §D8):
+    the build retires it into the tombstones, and an add is never handed one
+    again — not even for the same object, re-added."""
+    edits = tmp_path / "session"
+    client = editor_client(editing, edits)
+    assert edit(client, {"kind": "move", "id": 2, "x": 30000,
+                         "y": 31000}).status_code == 200
+    first = edit(client, {"kind": "add", "nif_id": 11, "x": 30000, "y": 31000})
+    assert first.json()["fixture"]["id"] == 3
+    assert client.post("/api/v1/world/mod/build").status_code == 200
+    assert set(ids_record(edits)["zones"]["0"].values()) == {3}
+
+    # undo the add: the move is still pending, so the build runs and retires 3
+    assert client.delete("/api/v1/world/zone/0/edits").json()["op"]["action"] == "add"
+    assert client.post("/api/v1/world/mod/build").status_code == 200
+    record = ids_record(edits)
+    assert record["zones"] == {} and record["tombstones"] == {"0": [3]}
+
+    # the same object added again: 3 is spent, so the editor hands out the next
+    second = edit(client, {"kind": "add", "nif_id": 11, "x": 30000, "y": 31000})
+    assert second.json()["fixture"]["id"] == 4
+    assert client.post("/api/v1/world/mod/build").status_code == 200
+    record = ids_record(edits)
+    assert set(record["zones"]["0"].values()) == {4}  # the move holds no id
+    assert record["tombstones"] == {"0": [3]}
+
+
+def test_a_shard_claiming_an_id_the_base_carries_is_refused_by_line(editing, tmp_path):
+    """The id space is the client's own (`project.md` §D8): an add that claims
+    an id the base's `fixtures.csv` carries is refused **by line**, and the
+    refusal says what to do — a silent accept would put two objects on one id."""
+    edits = tmp_path / "session"
+    client = editor_client(editing, edits)
+    assert edit(client, {"kind": "add", "nif_id": 11, "x": 30000,
+                         "y": 31000}).status_code == 200
+
+    shard = next((edits / "journal").glob("*.jsonl"))
+    lines = [json.loads(line) for line in shard.read_text(encoding="utf-8").splitlines()]
+    edited = 0
+    for line in lines:
+        if line.get("kind") == "op" and (line.get("op") or {}).get("action") == "add":
+            line["op"]["id"] = 2                      # taken by the base's own row
+            line["op"]["values"]["Unique Id"] = "2"
+            edited += 1
+    assert edited == 1
+    shard.write_text("".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines),
+                     encoding="utf-8")
+
+    response = client.post("/api/v1/world/mod/build")
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert shard.name in detail and "id 2" in detail and "fixtures.csv" in detail
+    assert not (edits / "fixtures-zone000.csv").exists()  # nothing was written
+
+
+def test_two_builds_of_one_journal_are_the_same_bytes(editing, tmp_path):
+    """Reproducibility (`project.md` §D8): the same journal builds the same
+    ids and the same bytes — the pack's own included, or a release could not
+    be reproduced and its lock would not mean anything."""
+    edits = tmp_path / "session"
+    client = editor_client(editing, edits)
+    assert edit(client, {"kind": "move", "id": 2, "x": 30000,
+                         "y": 31000}).status_code == 200
+    assert edit(client, {"kind": "add", "nif_id": 11, "x": 30000,
+                         "y": 31000}).status_code == 200
+
+    first = client.post("/api/v1/world/mod/build")
+    assert first.status_code == 200, first.json()
+    pack = Path(first.json()["pack"])
+    before = {name: (edits / name).read_bytes()
+              for name in ("ids.json", "client.patch.json", "fixtures-zone000.csv")}
+    before["pack"] = pack.read_bytes()
+
+    second = client.post("/api/v1/world/mod/build")
+    assert second.status_code == 200, second.json()
+    assert second.json()["entries"] == first.json()["entries"]
+    for name, data in before.items():
+        path = pack if name == "pack" else edits / name
+        assert path.read_bytes() == data, f"{name} differs between builds"
+
+
+def test_a_daemon_that_does_not_hold_the_checkout_is_read_only(editing, tmp_path):
+    """The lock is about one *checkout* (`project.md` §D13): a second daemon
+    serves the viewer and refuses every write, saying who holds it — the
+    browser is told the same fact, so the panel can say it before a click."""
+    from camelot import project as pj
+
+    session = tmp_path / "session"
+    pj.new(session)  # the record itself is enough: this test never reads a base
+    holder = pj.lock(session, author="Lyra")
+    client = TestClient(
+        create_app(ServeConfig(root=editing, watch=False, open_browser=False,
+                               project=session, read_only=True)),
+        base_url="http://127.0.0.1",
+    )
+    state = client.get("/api/v1/world/edit").json()
+    assert state["read_only"] is True and "lyra" in state["holder"]
+
+    response = edit(client, {"kind": "move", "id": 2, "x": 1, "y": 1})
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "read-only" in detail and "lyra" in detail and str(holder.pid) in detail
+    assert client.post("/api/v1/world/mod/build").status_code == 400
+    assert not list((session / "journal").glob("*.jsonl"))  # no shard was opened
+
+
 def test_apply_installs_the_edited_zone_and_the_client_reads_it_back(editing, tmp_path):
     """6.3's promise end to end: an edit in the viewer becomes a pack through
     the same `mod build` path, `apply` installs it, and reopening the client

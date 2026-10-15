@@ -6,6 +6,7 @@ the point of the format — a project is testable without 2.3 GB.
 """
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -237,6 +238,47 @@ def test_a_half_written_lock_is_not_a_holder(project):
     pj.lock(project, author="Michael")  # the next writer replaces it
 
 
+def test_claim_is_the_daemon_s_own_way_to_take_the_checkout(project):
+    """A long-running process takes the checkout for its session (`project.md`
+    §D13): the second one is told who holds it, by name, instead of guessing —
+    and a 6.3 authoring directory that is not a project has nothing to lock."""
+    held = pj.claim(project.root, author="Michael")
+    assert held["held"] is True and held["holder"]["author"] == "michael"
+    assert pj.lock_state(project.root) is not None  # a bare path names the project too
+
+    second = pj.claim(project.root, author="Lyra")
+    assert second["held"] is False
+    assert second["by"]["author"] == "michael" and second["by"]["pid"] == os.getpid()
+
+    assert pj.release(project.root) is True
+    assert pj.claim(project.root, author="Lyra")["held"] is True  # free again
+    assert pj.release(project.root) is True
+    assert pj.release(project.root) is False  # nothing to let go
+
+    plain = project.root.parent / "authoring"
+    plain.mkdir()
+    assert pj.claim(plain, author="Michael") == {"held": True, "holder": None}
+    assert pj.release(plain) is False
+
+
+def test_ids_are_derived_and_a_malformed_record_is_refused_by_name(project):
+    """`ids.json` is derived (`project.md` §D8): missing is normal, since the
+    build recomputes it — and a format this build does not read is refused by
+    name, never silently started over."""
+    assert pj.ids(project.root) == {"format": "camelot.ids/1", "zones": {}, "tombstones": {}}
+    written = pj.record_ids(project.root, {"0": {"the-shard.jsonl:1": 9}}, {"0": {7}})
+    assert written == {
+        "format": "camelot.ids/1",
+        "zones": {"0": {"the-shard.jsonl:1": 9}},
+        "tombstones": {"0": [7]},
+    }
+    assert pj.ids(project.root) == written  # a build reads back what it wrote
+
+    (project.root / pj.IDS_FILE).write_text(json.dumps({"format": "camelot.ids/9"}))
+    with pytest.raises(pj.ProjectError, match="camelot.ids/9"):
+        pj.ids(project.root)
+
+
 # -- the scaffolding ---------------------------------------------------------
 
 
@@ -282,6 +324,55 @@ def test_cli_new_info_and_verify_round_trip(tmp_path, base, capsys, monkeypatch)
 def test_cli_refuses_a_directory_that_is_not_a_project(tmp_path, capsys):
     assert main(["project", "info", "--dir", str(tmp_path)]) == 1
     assert "not a project" in capsys.readouterr().err
+
+
+def test_cli_serve_takes_the_checkout_and_lets_it_go(tmp_path, base, capsys, monkeypatch):
+    """The daemon claims the checkout it serves and drops the lock when it
+    stops (`project.md` §D13) — a crashed daemon must not leave a project
+    unwritable, and `project open` is the operator's way in."""
+    import uvicorn
+
+    project = pj.new(tmp_path / "camelot-hills", client=base)
+    (project.root / pj.MACHINE_FILE).write_text(
+        json.dumps({"author": "Michael", "client": str(base)})
+    )
+    monkeypatch.setattr(uvicorn, "run", lambda *arguments, **keywords: None)
+
+    assert (
+        main(["project", "open", str(project.root), "--root", str(base), "--no-open", "--no-watch"])
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "held by michael" in out
+    assert pj.lock_state(project.root) is None  # taken for the run, then released
+
+
+def test_a_second_daemon_on_a_held_checkout_runs_read_only(tmp_path, base, capsys, monkeypatch):
+    """Two writers would mean two journals for one session (`project.md`
+    §D13): the second daemon serves, refuses every write, and names the holder
+    on stderr (the panel reads the same fact from the editor's state)."""
+    import uvicorn
+
+    project = pj.new(tmp_path / "camelot-hills", client=base)
+    holder = pj.lock(project.root, author="Lyra")
+    monkeypatch.setattr(uvicorn, "run", lambda *arguments, **keywords: None)
+
+    assert (
+        main(
+            [
+                "serve",
+                "--root",
+                str(base),
+                "--no-open",
+                "--no-watch",
+                "--project",
+                str(project.root),
+            ]
+        )
+        == 0
+    )
+    err = capsys.readouterr().err
+    assert "read-only" in err and "lyra" in err and str(holder.pid) in err
 
 
 # -- populate: what an edit depends on ---------------------------------------
