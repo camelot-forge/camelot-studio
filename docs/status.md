@@ -704,6 +704,21 @@ through (`game1127.dll`, `gamedata.mpk`, `zones/zones.mpk#zones.dat` — 5.9 MB,
 `verify` reads them back as `ok` / `moved` / `missing`, naming the resource
 that moved. 22 unit tests, none of which needs a client (the synthetic base is
 three files a fixture writes); `ruff check` and `ruff format --check` clean.
+
+**The journal's kernel (same day).** `core/camelot/journal.py` holds the
+concurrency model the whole team story rests on: **one append-only shard per
+author-session** (`journal/<at>-<author>.jsonl`, never shared — two sessions in
+the same second get two files), a **total order** (timestamp, ties broken by
+the shard's name, the shard's own `seq` inside), a **cut** a release can cover
+(`shard -> last seq`, so "pending" is computed and never stored), and **drops
+as history**: undo and revert append a `drop` naming an op (`shard:seq`) and
+the replay skips it — a shard is only ever appended to. `replay()` applies the
+ops in that order and requires each one's `expect` to be what the state holds
+at its own point: two sessions that moved two fixtures merge without a word,
+two blind edits on *one* fixture are refused with the shard, the line, the row
+and both values, and an op on an existing row that carries no `expect` is
+refused rather than trusted. 19 tests, including the semantic half of the team
+test (the git half is a harness); the suite is 471 passed.
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.
