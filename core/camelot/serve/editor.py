@@ -78,7 +78,6 @@ import json
 import math
 import os
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -103,9 +102,9 @@ from .models import (
 
 __all__ = ["SCHEMA", "Editor", "EditorError", "build_editor_router"]
 
-#: The **legacy** single-file journal's schema tag (6.3). `migrate()` refuses
-#: a file it does not know, by name; the shards' own tag is `journal.FORMAT`.
-SCHEMA = "camelot.editor/1"
+#: The **legacy** single-file journal's schema tag (6.3). Kept as an alias of
+#: the kernel's own constant, so a build has one place to know it.
+SCHEMA = journal_mod.LEGACY_SCHEMA
 
 #: The op kinds the journal holds. The last two edit the zone's *server* rows.
 KINDS = ("move", "rotate", "scale", "add", "remove", "row-move", "row-remove")
@@ -126,26 +125,6 @@ COLUMN_NAMES = ("ID", "NIF #", "Textual Name", "X", "Y", "Z", "A", "Scale",
 
 class EditorError(ValueError):
     """A refused edit, an unusable journal, or a zone that cannot be edited."""
-
-
-def _stamp(path: Path) -> str:
-    """When a legacy file was last written, in the journal's own shape — the
-    best guess a migration has for when its ops were made."""
-    try:
-        return _stamp_from_epoch(path.stat().st_mtime) or journal_mod.now()
-    except OSError:
-        return journal_mod.now()
-
-
-def _stamp_from_epoch(value: Any) -> str | None:
-    """`time.time()` → the journal's `…Z` stamp, or None when it is not one."""
-    if value is None:
-        return None
-    try:
-        moment = datetime.fromtimestamp(float(value), UTC)
-    except (OSError, OverflowError, TypeError, ValueError):
-        return None
-    return moment.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _number_text(value: Any) -> str:
@@ -289,66 +268,34 @@ class Editor:
     def migrate(self) -> dict | None:
         """`journal.json` (the 6.3 single-file journal) → one shard, once.
 
-        Lossless: every op becomes a line, every row patch a line of its own
-        (with the originals it already carried), the patches that were already
-        written to the database become a `publish` fact in the deploy log, and
-        the legacy file is moved aside rather than deleted. Returns the deploy
-        entry it recorded, or None when there was nothing to migrate.
+        The conversion is `journal.migrate_legacy` (the kernel owns the legacy
+        format too, so `camelot project import` can run it without a daemon);
+        what this method adds is the *facts*: the ops a publish had already
+        covered become a `publish` line in the deploy log, and the migration
+        itself is recorded. Returns the `migrated` entry, or None.
         """
-        path = self.dir / "journal.json"
-        if not path.is_file():
-            return None
-        try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise EditorError(f"{path}: {error}") from error
-        if not isinstance(document, dict) or document.get("schema") != SCHEMA:
-            raise EditorError(
-                f"{path}: this journal is {document.get('schema') if isinstance(document, dict) else None!r}; "
-                f"this build understands {SCHEMA} and migrates it to shards")
-        at = _stamp(path)
-        journal = journal_mod.Journal(
-            self.dir / "journal",
-            author=project_mod.author_name(self.dir),
-            base=self._base(),
-            at=at,
+        report = journal_mod.migrate_legacy(
+            self.dir, author=project_mod.author_name(self.dir), base=self._base()
         )
-        zones = document.get("zones") or {}
-        patches = document.get("patches") or {}
-        ops = 0
-        rows = 0
-        applied: list[str] = []
-        for key in sorted(zones, key=lambda item: int(item)):
-            for op in zones.get(key) or ():
-                journal.append_op(op, zone=int(key), at=at)
-                ops += 1
-        for key in sorted(patches, key=lambda item: int(item)):
-            for patch in patches.get(key) or ():
-                line = journal.append_rows([patch], zone=int(key), at=at)
-                rows += 1
-                if patch.get("applied"):
-                    applied.append(line.key)
-        published = document.get("published") or {}
-        if applied or published:
-            # The ops that were published before this migration are gone from the
-            # legacy file (a publish cleared them); the count stays so the panel
-            # keeps saying what the client carries.
+        if report is None:
+            return None
+        if report["applied"] or report["published"]:
             project_mod.record_deploy(
                 self.dir,
                 {
                     "kind": "publish",
-                    "ops": int(published.get("ops") or 0),
-                    "keys": applied,
+                    "ops": report["published"],
+                    "keys": report["applied"],
                     "legacy": True,
                 },
-                at=_stamp_from_epoch(published.get("at")) or at,
+                at=report["published_at"] or report["at"],
             )
-        path.rename(self.dir / "journal.json.migrated")
         entry = project_mod.record_deploy(
             self.dir,
-            {"kind": "migrated", "from": path.name, "ops": ops, "rows": rows,
-             "published": int(published.get("ops") or 0), "shard": journal.session().name},
-            at=at,
+            {"kind": "migrated", "from": journal_mod.LEGACY_FILE, "ops": report["ops"],
+             "rows": report["rows"], "published": report["published"],
+             "shard": report["shard"]},
+            at=report["at"],
         )
         self._journal = None
         return entry
