@@ -439,7 +439,7 @@ def cmd_serve(args) -> int:
         server_rows=args.server_rows,
         db_config=args.db_config,
         db_write=args.db_write,
-        edits=args.edits,
+        project=args.project,
     )
     app = create_app(cfg)
 
@@ -1033,9 +1033,11 @@ def main(argv=None) -> int:
     p.add_argument("--db-write", action="store_true",
                    help="let the editor write the server's own rows (patches "
                         "and removals, recorded and reversible) — never silent")
-    p.add_argument("--edits",
-                   help="authoring directory of an editing session (6.3): the "
-                        "journal, the built mod and its pack live there")
+    p.add_argument("--project",
+                   help="the project's directory (P1): the journal's shards, the "
+                        "build outputs and the deploy log live there")
+    p.add_argument("--edits", dest="project",
+                   help="the older name of --project (the 6.3 authoring directory)")
     p.add_argument("--allow-remote", action="store_true",
                    help="allow binding a non-loopback host (unsafe)")
     p.add_argument("--log-level", default="info")

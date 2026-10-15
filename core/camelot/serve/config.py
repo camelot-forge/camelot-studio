@@ -52,10 +52,12 @@ class ServeConfig:
     #: Never implied by `db_config` alone: reading is a convenience, writing
     #: is a decision the operator states.
     db_write: bool = False
-    #: The editing session's authoring directory (6.3): the journal lives
-    #: there, and `build` assembles the mod inside it. Without it the editor
-    #: routes answer 503 and nothing can be written anywhere.
-    edits: Path | None = None
+    #: The project's directory (P1): the whole content of one server — the
+    #: journal's shards, the build outputs and the deploy log live there.
+    #: Without it the editor routes answer 503 and nothing can be written
+    #: anywhere. The flag is `--project`; `--edits` is the older name of the
+    #: same directory (the 6.3 authoring directory) and is kept as an alias.
+    project: Path | None = None
 
     def __post_init__(self) -> None:
         self.root = Path(self.root).expanduser().resolve()
@@ -64,8 +66,14 @@ class ServeConfig:
             self.server_rows = Path(self.server_rows).expanduser()
         if self.db_config is not None:
             self.db_config = Path(self.db_config).expanduser()
-        if self.edits is not None:
-            self.edits = Path(self.edits).expanduser()
+        if self.project is not None:
+            self.project = Path(self.project).expanduser()
+
+    @property
+    def edits(self) -> Path | None:
+        """The older name of `project` (the 6.3 authoring directory). Read-only
+        on purpose: the field is the project now, and one name writes it."""
+        return self.project
 
     @property
     def is_loopback(self) -> bool:

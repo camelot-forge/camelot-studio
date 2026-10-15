@@ -264,6 +264,17 @@ class Journal:
             if (zone is None or line.zone == zone) and (family is None or line.family == family)
         ]
 
+    def live_by_key(self) -> dict[str, Line]:
+        """The live lines, indexed the way a drop and a deploy record name
+        them (`<shard>:<seq>`)."""
+        return {line.key: line for line in self.live()}
+
+    def live_except(self, keys=()) -> list[Line]:
+        """The live lines that no key in *keys* covers — what a set of
+        already-published lines leaves pending, in the total order."""
+        covered = set(keys)
+        return [line for line in self.live() if line.key not in covered]
+
     # -- writing ---------------------------------------------------------------
 
     def session(self, *, at: str | None = None) -> Path:

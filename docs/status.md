@@ -719,6 +719,25 @@ two blind edits on *one* fixture are refused with the shard, the line, the row
 and both values, and an op on an existing row that carries no `expect` is
 refused rather than trusted. 19 tests, including the semantic half of the team
 test (the git half is a harness); the suite is 471 passed.
+
+**The editor consumes it (same day).** `serve/editor.py` keeps no mutable
+`journal.json` any more: the ops are appended to their shard, a **publish is a
+fact** recorded in `deploy/log.jsonl` (the keys it covered, the rows it wrote),
+and what is *pending* is computed from the two. So **nothing about a session is
+mutable on disk**: the `originals` ledger is derived (the first patch of a row,
+in journal order — what `revert` restores to) and the panel's `applied` flag is
+derived too (a line the log covers), instead of being written back into the
+journal. Undo **appends a drop**; a line a publish covered is refused instead
+("the client and the server's rows carry it — use revert"), because dropping it
+would leave a live change with no journal entry behind it. A legacy single-file
+`journal.json` (6.3) is **migrated once**, on first read: every op becomes a
+line, every patch a `rows` line with the originals it already carried, the
+patches that were already written become a *publish* fact, and the file is moved
+aside as `journal.json.migrated` — a session is never read from two places.
+The flag is now `--project DIR`; `--edits` stays as the older name of the same
+directory. Measured on the operator's own client: a legacy session migrates,
+reads back with its op and its patch, and the deploy log records what happened;
+the editor's 26 tests pass.
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.
@@ -761,11 +780,11 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 .venv/bin/camelot project new camelot-hills --client "$DAOC_CLIENT" --git
 .venv/bin/camelot project info --dir camelot-hills
 .venv/bin/camelot project verify --dir camelot-hills
-# The world editor (6.3): the project's authoring directory. The journal,
-# the assembled fixtures.csv and the built pack live in DIR; `apply`
-# installs through the same path as `camelot client install` (and refuses
-# while the game runs). Open /world, click an object, move it.
-.venv/bin/camelot serve --root "$DAOC_CLIENT" --edits /path/to/authoring
+# The world editor (6.3): the project's directory (--edits is its older name).
+# The journal's shards, the build outputs and the deploy log live in DIR;
+# `apply` installs through the same path as `camelot client install` (and
+# refuses while the game runs). Open /world, click an object, move it.
+.venv/bin/camelot serve --root "$DAOC_CLIENT" --project /path/to/project
 # To let a move carry the rows inside a fixture (a keep's own doors, a gate on
 # a wall) or to edit a server row on its own, the daemon needs the server's
 # database: `--db-config` reads it, `--db-write` is the explicit permission to

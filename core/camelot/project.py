@@ -79,6 +79,10 @@ PROJECT_FILE = "project.json"
 MACHINE_FILE = "machine.json"
 LOCK_FILE = "project.lock"
 NOTES = "notes.md"
+#: Every deployment fact, append-only and union-merged (P §D9): a publish, a
+#: migration, a dry run. The order is read from the timestamps the lines carry,
+#: never from the file.
+DEPLOY_LOG = "deploy/log.jsonl"
 
 CACHE_POLICIES = ("shared", "local")
 #: The environment names a project carries. `local` and `production` are the
@@ -336,6 +340,48 @@ def client_root(project: Project, override=None) -> Path | None:
 
 def is_git_repo(root: str | os.PathLike) -> bool:
     return (Path(root) / ".git").exists()
+
+
+# -- the deploy log ----------------------------------------------------------
+
+
+def deploy_log(root: str | os.PathLike) -> list[dict]:
+    """Every deployment fact this project recorded, in the order it was
+    written. A malformed line is refused by name: this file is the answer to
+    "what is live", and a half-read answer is worse than none."""
+    path = Path(root) / DEPLOY_LOG
+    if not path.is_file():
+        return []
+    entries: list[dict] = []
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            entry = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise ProjectError(f"{path} line {number}: {error}") from error
+        if not isinstance(entry, dict):
+            raise ProjectError(f"{path} line {number}: expected a JSON object")
+        entries.append(entry)
+    return entries
+
+
+def record_deploy(root: str | os.PathLike, entry: dict, *, at: str | None = None) -> dict:
+    """Append one fact (a publish, a migration, a dry run). Append-only on
+    purpose: two machines' lines merge as a union, and the order is read from
+    the timestamps."""
+    path = Path(root) / DEPLOY_LOG
+    path.parent.mkdir(parents=True, exist_ok=True)
+    written = {**entry, "at": str(entry.get("at") or _now(at))}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(written, ensure_ascii=False) + "\n")
+    return written
+
+
+def last_deploy(root: str | os.PathLike, kind: str | None = None) -> dict | None:
+    """The most recent fact of a kind (`publish`, `migrated`, …), or None."""
+    found = [entry for entry in deploy_log(root) if kind is None or entry.get("kind") == kind]
+    return found[-1] if found else None
 
 
 # -- creating ----------------------------------------------------------------

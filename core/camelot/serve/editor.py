@@ -1,12 +1,21 @@
 """The editor: a zone's placements, edited and published (spec §6/§9, 6.3).
 
 D2: the daemon is the only writer, the browser a pure consumer. An editing
-session is *the project's own authoring directory* (`camelot serve --edits
-DIR`, becoming `--project DIR`: the Monde of the
-`workspace/notes/` design): `mod.json` names it, `journal.json`
-holds the ops the user made, and `build` assembles the same `fixtures.csv` +
-`client.patch.json` + pack the `camelot mod build` command line would — the
-editor is a front end to the toolchain, never a parallel implementation.
+session is *the project's own directory* (`camelot serve --project DIR`, the
+design in `workspace/notes/`): `mod.json` names it, `journal/`
+holds the ops as **one append-only shard per author-session** (the format, the
+total order and the refusals live in `camelot/journal.py`),
+`deploy/log.jsonl` records what was *published*, and `build` assembles the
+same `fixtures.csv` + `client.patch.json` + pack the `camelot mod build`
+command line would — the editor is a front end to the toolchain, never a
+parallel implementation.
+
+**Nothing about a session is mutable on disk.** The ops are appended to their
+shard; a publish is a *fact* recorded in the deploy log (the keys it covered);
+and what is *pending* is computed from the two — the client and the server's
+rows carry everything a publish covered, so the panel shows the rest. A legacy
+single-file `journal.json` (6.3) is migrated **once**, on first read, and moved
+aside: a session is never read from two places.
 
 The ops are zone-local, as `fixtures.csv` is:
 
@@ -25,9 +34,10 @@ The ops are zone-local, as `fixtures.csv` is:
 
 Every op but `add` carries `expect`, the fields as the user saw them, so an
 edit made against a changed client is refused with both values named, never
-applied blind. Undo drops the last op: ops are additive on the base table,
-so dropping is exact. `remove` exists only in the journal — the build
-assembles whole files, so no row op ever reaches an installer.
+applied blind. Undo **appends a drop** (history is never erased) and the replay
+skips it: ops are additive on the base table, so dropping is exact. `remove`
+exists only in the journal — the build assembles whole files, so no row op ever
+reaches an installer.
 
 **The zone's server rows (B2, W-4's first half).** A fixture move may carry
 `rows`: the server rows that move with it (the keep and its doors — the case
@@ -67,14 +77,16 @@ from __future__ import annotations
 import json
 import math
 import os
-import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from .. import gamedata, modbuild, serverrows
+from .. import journal as journal_mod
+from .. import project as project_mod
 from ..zones import Fixture, Zone, ZoneError, fixtures_from_table
 from .config import ServeConfig
 from .models import (
@@ -91,7 +103,8 @@ from .models import (
 
 __all__ = ["SCHEMA", "Editor", "EditorError", "build_editor_router"]
 
-#: The journal's schema tag: an editor that does not know it refuses the file.
+#: The **legacy** single-file journal's schema tag (6.3). `migrate()` refuses
+#: a file it does not know, by name; the shards' own tag is `journal.FORMAT`.
 SCHEMA = "camelot.editor/1"
 
 #: The op kinds the journal holds. The last two edit the zone's *server* rows.
@@ -113,6 +126,26 @@ COLUMN_NAMES = ("ID", "NIF #", "Textual Name", "X", "Y", "Z", "A", "Scale",
 
 class EditorError(ValueError):
     """A refused edit, an unusable journal, or a zone that cannot be edited."""
+
+
+def _stamp(path: Path) -> str:
+    """When a legacy file was last written, in the journal's own shape — the
+    best guess a migration has for when its ops were made."""
+    try:
+        return _stamp_from_epoch(path.stat().st_mtime) or journal_mod.now()
+    except OSError:
+        return journal_mod.now()
+
+
+def _stamp_from_epoch(value: Any) -> str | None:
+    """`time.time()` → the journal's `…Z` stamp, or None when it is not one."""
+    if value is None:
+        return None
+    try:
+        moment = datetime.fromtimestamp(float(value), UTC)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+    return moment.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _number_text(value: Any) -> str:
@@ -176,23 +209,20 @@ class Editor:
 
     def __init__(self, config: ServeConfig, *, connect_=None):
         self.config = config
-        self._journal: dict[str, Any] | None = None
+        self._journal: journal_mod.Journal | None = None
         self._connection: dict[str, Any] | None = None
         #: injected by the tests; production opens MySQL through `serverrows`.
         self._connect = connect_ or serverrows.connect
 
     @property
     def dir(self) -> Path | None:
-        return self.config.edits
+        return self.config.project
 
     @property
     def available(self) -> bool:
         return self.dir is not None
 
     # -- the journal on disk ---------------------------------------------------
-
-    def _journal_path(self) -> Path:
-        return self.dir / "journal.json"
 
     def _mod(self) -> dict[str, Any]:
         meta = self.dir / "mod.json"
@@ -202,37 +232,158 @@ class Editor:
                 return document
         return {"id": self.dir.name or "world-edits", "version": "1", "priority": 100}
 
-    def _load(self) -> dict[str, Any]:
+    def _base(self) -> dict:
+        """The base fingerprints a new shard records it was written against
+        (`project.json` when the directory is a project, nothing when it is
+        still a bare authoring directory)."""
+        try:
+            return project_mod.load(self.dir).fingerprints
+        except project_mod.ProjectError:
+            return {}
+
+    def journal(self) -> journal_mod.Journal:
+        """The session's journal: one shard per author-session, under
+        `<dir>/journal/`. Read on first use, and the legacy single file
+        migrated away on the way in."""
         if self._journal is None:
-            path = self._journal_path()
-            if path.is_file():
-                document = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(document, dict) or document.get("schema") != SCHEMA:
-                    raise EditorError(
-                        f"{path}: this journal is {document.get('schema')!r}; "
-                        f"this build understands {SCHEMA}")
-                document.setdefault("patches", {})
-                self._journal = document
-            else:
-                self._journal = {"schema": SCHEMA, "mod": self._mod(),
-                                 "zones": {}, "patches": {}, "originals": {}}
+            self.migrate()
+            self._journal = journal_mod.Journal(
+                self.dir / "journal",
+                author=project_mod.author_name(self.dir),
+                base=self._base(),
+            )
         return self._journal
 
-    def _save(self) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self._journal_path().write_text(
-            json.dumps(self._journal, indent=1, ensure_ascii=False), encoding="utf-8")
+    # -- what a publish covered, and what is pending ---------------------------
+
+    def publish_lines(self) -> list[dict]:
+        """Every publish this project recorded, oldest first."""
+        return [
+            entry for entry in project_mod.deploy_log(self.dir) if entry.get("kind") == "publish"
+        ]
+
+    def published_keys(self) -> set[str]:
+        """The journal lines a publish covered: the client's half and the
+        server's rows carry them, so they are not pending any more."""
+        keys: set[str] = set()
+        for entry in self.publish_lines():
+            keys.update(str(key) for key in entry.get("keys") or ())
+        return keys
+
+    def published(self) -> dict:
+        """What the panel shows about the last publish (the op count at that
+        moment, so a session ahead of its client half reads differently from a
+        published one) — legacy publishes of a migrated session included."""
+        lines = self.publish_lines()
+        if not lines:
+            return {}
+        last = lines[-1]
+        return {"ops": int(last.get("ops") or 0), "at": last.get("at")}
+
+    def pending_lines(self) -> list[journal_mod.Line]:
+        """The ops no publish covers yet, in the journal's total order."""
+        return self.journal().live_except(self.published_keys())
+
+    # -- migrating the legacy single file -------------------------------------- 
+
+    def migrate(self) -> dict | None:
+        """`journal.json` (the 6.3 single-file journal) → one shard, once.
+
+        Lossless: every op becomes a line, every row patch a line of its own
+        (with the originals it already carried), the patches that were already
+        written to the database become a `publish` fact in the deploy log, and
+        the legacy file is moved aside rather than deleted. Returns the deploy
+        entry it recorded, or None when there was nothing to migrate.
+        """
+        path = self.dir / "journal.json"
+        if not path.is_file():
+            return None
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise EditorError(f"{path}: {error}") from error
+        if not isinstance(document, dict) or document.get("schema") != SCHEMA:
+            raise EditorError(
+                f"{path}: this journal is {document.get('schema') if isinstance(document, dict) else None!r}; "
+                f"this build understands {SCHEMA} and migrates it to shards")
+        at = _stamp(path)
+        journal = journal_mod.Journal(
+            self.dir / "journal",
+            author=project_mod.author_name(self.dir),
+            base=self._base(),
+            at=at,
+        )
+        zones = document.get("zones") or {}
+        patches = document.get("patches") or {}
+        ops = 0
+        rows = 0
+        applied: list[str] = []
+        for key in sorted(zones, key=lambda item: int(item)):
+            for op in zones.get(key) or ():
+                journal.append_op(op, zone=int(key), at=at)
+                ops += 1
+        for key in sorted(patches, key=lambda item: int(item)):
+            for patch in patches.get(key) or ():
+                line = journal.append_rows([patch], zone=int(key), at=at)
+                rows += 1
+                if patch.get("applied"):
+                    applied.append(line.key)
+        published = document.get("published") or {}
+        if applied or published:
+            # The ops that were published before this migration are gone from the
+            # legacy file (a publish cleared them); the count stays so the panel
+            # keeps saying what the client carries.
+            project_mod.record_deploy(
+                self.dir,
+                {
+                    "kind": "publish",
+                    "ops": int(published.get("ops") or 0),
+                    "keys": applied,
+                    "legacy": True,
+                },
+                at=_stamp_from_epoch(published.get("at")) or at,
+            )
+        path.rename(self.dir / "journal.json.migrated")
+        entry = project_mod.record_deploy(
+            self.dir,
+            {"kind": "migrated", "from": path.name, "ops": ops, "rows": rows,
+             "published": int(published.get("ops") or 0), "shard": journal.session().name},
+            at=at,
+        )
+        self._journal = None
+        return entry
 
     def ops(self, zone_id: int) -> list[dict]:
+        """The zone's *pending* fixture ops (what the client does not carry)."""
         if not self.available:
             return []
-        return list(self._load()["zones"].get(str(zone_id), []))
+        return [
+            line.op
+            for line in self.pending_lines()
+            if line.zone == zone_id and line.family == "world" and line.op
+        ]
 
     def patches(self, zone_id: int) -> list[dict]:
-        """The zone's server-row patches (moves and removals), journal order."""
+        """**Every** row patch this zone's journal holds — pending *and*
+        published (the panel shows what the session did, not only what is left
+        to write), in the journal's order."""
         if not self.available:
             return []
-        return list(self._load()["patches"].get(str(zone_id), []))
+        return [
+            patch
+            for line in self.journal().live()
+            if line.zone == zone_id
+            for patch in line.rows
+        ]
+
+    def pending_patches(self) -> list[tuple[journal_mod.Line, dict]]:
+        """The row patches no publish covers yet, with the line that carries
+        them (the build and the write both need the pairing)."""
+        return [
+            (line, patch)
+            for line in self.pending_lines()
+            for patch in line.rows
+        ]
 
     def patch_rows(self, zone_id: int, rows: dict[str, list[dict]]) -> tuple[dict, list[str]]:
         """The server rows with this zone's journal patches applied — what the
@@ -260,23 +411,40 @@ class Editor:
     def state(self) -> EditorState:
         if not self.available:
             return EditorState(available=False)
-        journal = self._load()
-        zones = [EditorZone(id=int(key), ops=list(ops))
-                 for key, ops in sorted(journal["zones"].items(), key=lambda item: int(item[0]))
-                 if ops]
-        patches = [EditorRowOp(zone=int(key), patches=list(entries))
-                   for key, entries in sorted(journal["patches"].items(),
-                                              key=lambda item: int(item[0]))
-                   if entries]
+        journal = self.journal()
+        pending = self.pending_lines()
+        zones: dict[int, list[dict]] = {}
+        for line in pending:
+            if line.family == "world" and line.op and line.zone is not None:
+                zones.setdefault(line.zone, []).append(line.op)
+        # The panel shows what the session did, and says which rows a publish
+        # already wrote — a *derived* flag (`applied` was a stored one before
+        # P1): the deploy log's keys are the truth, not a mutable marker.
+        written = self.published_keys()
+        rows: dict[int, list[dict]] = {}
+        for line in journal.live():
+            if not line.rows or line.zone is None:
+                continue
+            applied = line.key in written
+            rows.setdefault(line.zone, []).extend(
+                {**patch, "applied": applied} for patch in line.rows
+            )
+        mod = self._mod()
         pack = None
-        path = self.dir / f"{journal['mod'].get('id', 'world-edits')}.tar.gz"
+        path = self.dir / f"{mod.get('id', 'world-edits')}.tar.gz"
         if path.is_file():
             stat = path.stat()
             pack = EditorPack(pack=str(path), modified=stat.st_mtime, size=stat.st_size)
-        return EditorState(available=True, dir=str(self.dir), mod=journal["mod"],
-                           zones=zones, rows=patches, pack=pack,
-                           client=self.client_state(),
-                           published=dict(journal.get("published") or {}))
+        return EditorState(
+            available=True,
+            dir=str(self.dir),
+            mod=mod,
+            zones=[EditorZone(id=zone, ops=ops) for zone, ops in sorted(zones.items())],
+            rows=[EditorRowOp(zone=zone, patches=patches) for zone, patches in sorted(rows.items())],
+            pack=pack,
+            client=self.client_state(),
+            published=self.published(),
+        )
 
     # -- the tables ------------------------------------------------------------
 
@@ -511,14 +679,10 @@ class Editor:
         (B2), or the row op itself (W-4's first half).
         """
         if not self.available:
-            raise EditorError("the daemon was started without --edits <dir>")
-        journal = self._load()
-        zone_key = str(zone.info.zone_id)
+            raise EditorError("the daemon was started without --project <dir>")
         if op.get("kind") in ROW_KINDS:
             patches = self._resolve_rows(zone, op)
-            journal["patches"].setdefault(zone_key, []).extend(patches)
-            self._remember_originals(journal, patches)
-            self._save()
+            self.journal().append_rows(patches, zone=zone.info.zone_id)
             return {}, None, patches
 
         current = self.working_table(zone)
@@ -528,11 +692,9 @@ class Editor:
         except gamedata.TableError as error:
             raise EditorError(str(error)) from error
         patches = self._pair_patches(zone, current, after, resolved, op.get("rows") or [])
-        journal["zones"].setdefault(zone_key, []).append(resolved)
-        if patches:
-            journal["patches"].setdefault(zone_key, []).extend(patches)
-            self._remember_originals(journal, patches)
-        self._save()
+        # The rows a fixture op carries ride *inside* its own line: a door that
+        # follows a moved keep is one fact, in one place, with its originals.
+        self.journal().append_op(resolved, zone=zone.info.zone_id, family="world", rows=patches)
         row_id = resolved["id"]
         fixture = next((row for row in fixtures_from_table(zone.name, after)
                         if row.id == row_id), None)
@@ -602,21 +764,24 @@ class Editor:
                                   for name in patch["values"]}
         return patches
 
-    @staticmethod
-    def _remember_originals(journal: dict, patches: list[dict]) -> None:
+    def _ledger(self) -> dict[str, dict]:
         """The values a row had when this *session* first touched it.
 
         A patch's own `originals` are what the database held before that one
         patch — which stops being the truth once a publish has written the
         session's earlier edits. The ledger is what `revert` restores to, so
         `restore all` means the state the session started from, not the state
-        of the last publish. Per column, first touch wins.
+        of the last publish. It is **derived** from the journal (the first
+        patch of a row, in order, is the one closest to what the session
+        started from), never stored beside it.
         """
-        ledger = journal.setdefault("originals", {})
-        for patch in patches:
-            row = ledger.setdefault(f"{patch['table']}:{patch['key']}", {})
-            for column, value in patch["originals"].items():
-                row.setdefault(column, value)
+        ledger: dict[str, dict] = {}
+        for line in self.journal().live():
+            for patch in line.rows:
+                row = ledger.setdefault(f"{patch['table']}:{patch['key']}", {})
+                for column, value in (patch.get("originals") or {}).items():
+                    row.setdefault(column, value)
+        return ledger
 
     def _journal_rows(self, zone: Zone, rows: list[tuple[str, str, dict]]):
         """The rows as the zone's journal already leaves them.
@@ -679,34 +844,26 @@ class Editor:
                  "originals": {name: str(stored.get(name, "")) for name in values}}]
 
     def undo(self, zone_id: int) -> dict | None:
-        """Drop the zone's last op — exact, because ops are additive.
+        """Drop the zone's last pending op — exact, because ops are additive.
 
-        Server-row patches undo first (they are the more recent kind); a
-        patch that was already *written* to the database is refused: undo
-        must never leave a live change with no journal entry behind it.
+        The drop is **appended** (the op stays in the shard, the replay skips
+        it: history is never erased). A line a publish covered is refused
+        instead: the client and the server's rows carry it, so dropping it
+        would leave a live change with no journal entry behind it — `revert`
+        is the call that puts back what the session changed.
         """
         if not self.available:
-            raise EditorError("the daemon was started without --edits <dir>")
-        journal = self._load()
-        patches = journal["patches"].get(str(zone_id)) or []
-        if patches:
-            if patches[-1].get("applied"):
+            raise EditorError("the daemon was started without --project <dir>")
+        pending = [line for line in self.pending_lines() if line.zone == zone_id]
+        if not pending:
+            if any(self.published_keys()):
                 raise EditorError(
-                    "the last edit is already written to the server's database: "
-                    "use revert (it puts the recorded originals back)")
-            dropped = patches.pop()
-            if not patches:
-                journal["patches"].pop(str(zone_id))
-            self._save()
-            return dropped
-        ops = journal["zones"].get(str(zone_id)) or []
-        if not ops:
+                    "the last edit is published: the client and the server's rows "
+                    "carry it — use revert (it puts the recorded originals back)")
             return None
-        dropped = ops.pop()
-        if not ops:
-            journal["zones"].pop(str(zone_id))
-        self._save()
-        return dropped
+        last = pending[-1]
+        self.journal().drop(last)
+        return last.op if last.family == "world" and last.op else {"rows": last.rows}
 
     # -- the server's database (patches) ---------------------------------------
 
@@ -741,9 +898,6 @@ class Editor:
             written += serverrows.apply_patches(connect_, updates)
         for patch in removals:
             written += serverrows.delete_rows(connect_, patch["table"], [patch["key"]])
-        for patch in patches:
-            patch["applied"] = True
-        self._save()
         return written
 
     def _restore_patches(self, patches: list[dict]) -> None:
@@ -763,43 +917,52 @@ class Editor:
             serverrows.insert_rows(connect_, table, rows)
 
     def revert(self) -> int:
-        """Undo everything: the journal empties, the originals stand again.
+        """Undo everything: the journal's ops are dropped, the originals stand again.
 
         The rows the session wrote go back to what they held when the session
-        *first* touched them (the ledger — a publish in between does not move
-        the target), a removal re-inserts the whole row, then the client ops go
-        and the build outputs with them. The *installed* client half is
-        untouched: uninstall reads the client's own state, and `restore` is the
-        call that does both. Returns the rows put back.
+        *first* touched them (the derived ledger — a publish in between does
+        not move the target), a removal re-inserts the whole row, then every op
+        is dropped (as *history*: the ops stay in their shard and the replay
+        skips them) and the build outputs go with them. The *installed* client
+        half is untouched: uninstall reads the client's own state, and
+        `restore` is the call that does both. Returns the rows put back.
         """
         if not self.available:
-            raise EditorError("the daemon was started without --edits <dir>")
-        journal = self._load()
-        patches = [patch for entries in journal["patches"].values() for patch in entries]
-        ledger = journal.get("originals") or {}
-        written = len([patch for patch in patches if patch.get("applied")])
+            raise EditorError("the daemon was started without --project <dir>")
+        journal = self.journal()
+        written = len(
+            [patch for line in journal.live() if line.key in self.published_keys()
+             for patch in line.rows]
+        )
         if written:
-            self._restore_originals(ledger, patches)
-        journal["zones"] = {}
-        journal["patches"] = {}
-        journal["originals"] = {}
-        self._save()
-        self._clear_build(str(journal["mod"].get("id", "world-edits")))
+            self._restore_originals()
+        dropped = journal.drop_all()
+        project_mod.record_deploy(
+            self.dir,
+            {"kind": "revert", "ops": dropped, "rows": written},
+        )
+        self._clear_build(str(self._mod().get("id", "world-edits")))
         return written
 
-    def _restore_originals(self, ledger: dict, patches: list[dict]) -> None:
-        """Put the session's first originals back, per row.
+    def _restore_originals(self) -> None:
+        """Put the session's first originals back, per row, for every row a
+        publish actually wrote.
 
-        The ledger is the truth; a patch recorded before the ledger existed
-        falls back to its own `originals`, which is the best it knows. A row
-        removed and moved in the same session is re-inserted once.
+        The ledger is *derived* now (the first patch of a row, in order); a
+        patch from a migrated session falls back to its own `originals`, which
+        is the best it knows. A row removed and moved in the same session is
+        re-inserted once.
         """
         connect_ = self._write_connect()
+        ledger = self._ledger()
+        published = self.published_keys()
+        patches = [
+            patch for line in self.journal().live() if line.key in published
+            for patch in line.rows
+        ]
         updates: list[dict] = []
         inserts: dict[str, dict[str, dict]] = {}
         for patch in patches:
-            if not patch.get("applied"):
-                continue
             table, key = patch["table"], patch["key"]
             values = dict(ledger.get(f"{table}:{key}") or patch["originals"])
             if patch.get("deleted"):
@@ -827,7 +990,7 @@ class Editor:
         """The mod this session is: its own `mod.json`, else its directory."""
         if not self.available:
             return ""
-        return str(self._load()["mod"].get("id") or self.dir.name or "world-edits")
+        return str(self._mod().get("id") or self.dir.name or "world-edits")
 
     def client_state(self) -> EditorClient:
         """The client's own half, as the client itself records it (D6).
@@ -858,7 +1021,7 @@ class Editor:
         mod needing this one) leaves the session untouched, never half-put-back.
         """
         if not self.available:
-            raise EditorError("the daemon was started without --edits <dir>")
+            raise EditorError("the daemon was started without --project <dir>")
         removed = self.client_state()
         if removed.installed:
             from .. import clientinstall
@@ -883,18 +1046,26 @@ class Editor:
     # -- publishing ------------------------------------------------------------
 
     def build(self, world) -> dict[str, Any]:
-        """Assemble the authoring directory and run `mod build` on it."""
+        """Assemble the project's build outputs and run `mod build` on them.
+
+        What is built is what no publish covers yet: the pending world ops,
+        per zone (a zone the client half already carries is not rebuilt), and
+        the pending row patches.
+        """
         if not self.available:
-            raise EditorError("the daemon was started without --edits <dir>")
-        journal = self._load()
+            raise EditorError("the daemon was started without --project <dir>")
+        pending = self.pending_lines()
+        by_zone: dict[int, list[dict]] = {}
+        for line in pending:
+            if line.family == "world" and line.op and line.zone is not None:
+                by_zone.setdefault(line.zone, []).append(line.op)
+        patches: dict[str, list[dict]] = {}
+        for line, patch in self.pending_patches():
+            patches.setdefault(str(line.zone), []).append(patch)
         entries: list[dict] = []
         files: list[str] = []
         try:
-            for key in sorted(journal["zones"], key=int):
-                ops = journal["zones"][key]
-                if not ops:
-                    continue
-                zone_id = int(key)
+            for zone_id in sorted(by_zone):
                 zone = world.zone(zone_id)
                 archive = zone.archive("csv")
                 if archive is None:
@@ -908,24 +1079,23 @@ class Editor:
                     "file": name,
                 })
                 files.append(name)
-            has_patches = any(journal["patches"].values())
-            if not entries and not has_patches:
+            if not entries and not patches:
                 raise EditorError("nothing to publish: the journal holds no edit")
             (self.dir / "mod.json").write_text(
-                json.dumps(journal["mod"], indent=2, ensure_ascii=False) + "\n",
+                json.dumps(self._mod(), indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8")
             (self.dir / "client.patch.json").write_text(
                 json.dumps({"archive": entries}, indent=2) + "\n", encoding="utf-8")
             (self.dir / "server.patch.json").write_text(
-                json.dumps({"patches": journal["patches"]}, indent=1,
-                           ensure_ascii=False) + "\n", encoding="utf-8")
+                json.dumps({"patches": patches}, indent=1, ensure_ascii=False) + "\n",
+                encoding="utf-8")
             if not entries:
                 # A server-only edit (a moved door has no client half): the
                 # record is `server.patch.json`, applied by this daemon.
                 report = {"client_items": 0}
                 pack = None
             else:
-                pack = self.dir / f"{journal['mod'].get('id', 'world-edits')}.tar.gz"
+                pack = self.dir / f"{self._mod().get('id', 'world-edits')}.tar.gz"
                 report = modbuild.build_mod_pack(
                     str(self.dir), str(world.config.root), str(pack))
         except (ValueError, OSError) as error:
@@ -937,25 +1107,26 @@ class Editor:
         """Publish: the client half through the installer, the server rows
         through the database — both recorded, both reversible.
 
-        A publish **commits**: the client now carries the journal's ops, so
-        they leave it (the next edit starts from what the client holds), and
-        the rows it wrote are marked written. Keeping them would make the next
-        edit fail against its own work — the operator hit exactly that on
-        2026-10-12.
+        A publish **commits**: the client and the server's rows now carry the
+        ops, so they are not pending any more (they stay in the journal as
+        history) and the deploy log records which lines it covered. Keeping
+        them pending would make the next edit fail against its own work — the
+        operator hit exactly that on 2026-10-12.
         """
         if not self.available:
-            raise EditorError("the daemon was started without --edits <dir>")
-        journal = self._load()
-        pending = [patch for entries in journal["patches"].values()
-                   for patch in entries if not patch.get("applied")]
-        client_ops = any(journal["zones"].values())
-        if not pending and not client_ops:
-            if any(journal["patches"].values()) or self.client_state().installed:
+            raise EditorError("the daemon was started without --project <dir>")
+        lines = self.pending_lines()
+        client_ops = [
+            line for line in lines if line.family == "world" and line.op
+        ]
+        patches = [patch for _line, patch in self.pending_patches()]
+        if not lines:
+            if self.published_keys() or self.client_state().installed:
                 raise EditorError(
                     "nothing to publish: the client and the server's rows already "
                     "carry this session (revert puts back what it changed)")
             raise EditorError("nothing to publish: the journal holds no edit")
-        if pending and not self.config.db_write:
+        if patches and not self.config.db_write:
             # refused *before* any client write, so nothing lands half-applied
             self._write_connect()
         built = self.build(world) if client_ops else {
@@ -968,17 +1139,14 @@ class Editor:
                 install = clientinstall.install_pack(str(world.config.root), built["pack"])
             except Exception as error:  # InstallError, and anything the installer refuses
                 raise EditorError(f"install refused: {error}") from error
-        written = self._write_patches(pending) if pending else 0
-        if client_ops:
-            # The commit: the client holds them now, and the marker tells the
-            # panel what the last publish covered.
-            journal = self._load()
-            journal["published"] = {
-                "ops": sum(len(ops) for ops in journal["zones"].values()),
-                "at": time.time(),
-            }
-            journal["zones"] = {}
-            self._save()
+        written = self._write_patches(patches) if patches else 0
+        # The commit, as a fact in the deploy log: these lines are carried by
+        # the client and the rows are written. No op is ever erased.
+        project_mod.record_deploy(
+            self.dir,
+            {"kind": "publish", "ops": len(client_ops), "rows": written,
+             "install": bool(install), "keys": [line.key for line in lines]},
+        )
         return {**built, "install": install, "patches": written}
 
 
@@ -998,7 +1166,7 @@ def build_editor_router(world) -> APIRouter:
             raise HTTPException(
                 status_code=503,
                 detail="the editor needs an authoring directory: "
-                       "start the daemon with --edits <dir>")
+                       "start the daemon with --project <dir>")
         return editor
 
     def http(error: EditorError) -> HTTPException:

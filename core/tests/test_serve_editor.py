@@ -21,7 +21,7 @@ from camelot.zones import WorldIndex
 
 def editor_client(root, edits) -> TestClient:
     return TestClient(
-        create_app(ServeConfig(root=root, watch=False, open_browser=False, edits=edits)),
+        create_app(ServeConfig(root=root, watch=False, open_browser=False, project=edits)),
         base_url="http://127.0.0.1",
     )
 
@@ -51,7 +51,7 @@ def test_without_an_authoring_directory_the_editor_is_off(world):  # noqa: F811
     assert state["available"] is False
     response = edit(client, {"kind": "move", "id": 2, "x": 0, "y": 0})
     assert response.status_code == 503
-    assert "--edits" in response.json()["detail"]
+    assert "--project" in response.json()["detail"]
 
 
 def test_a_move_is_journaled_and_the_zone_payload_shows_it(editing, tmp_path):
@@ -68,8 +68,14 @@ def test_a_move_is_journaled_and_the_zone_payload_shows_it(editing, tmp_path):
     pine = next(row for row in zone["fixtures"] if row["id"] == 2)
     assert (pine["x"], pine["y"]) == (30000, 30000)
 
-    # the journal is on disk: a second daemon (a new app) reads the same edit
-    assert (edits / "journal.json").is_file()
+    # the journal is on disk, as one shard per author-session (P1): a second
+    # daemon (a new app) reads the same edit
+    shards = sorted((edits / "journal").glob("*.jsonl"))
+    assert len(shards) == 1
+    lines = [json.loads(line) for line in shards[0].read_text().splitlines()]
+    assert lines[0]["kind"] == "shard" and lines[0]["format"] == "camelot.journal/1"
+    assert lines[1]["kind"] == "op" and lines[1]["family"] == "world"
+    assert lines[1]["op"]["values"] == {"X": "30000", "Y": "30000"}
     again = editor_client(editing, edits)
     state = again.get("/api/v1/world/edit").json()
     assert state["zones"][0]["id"] == 0
@@ -249,7 +255,7 @@ def db_client(editing, tmp_path, **kwargs) -> TestClient:
     config.write_text(DB_CONFIG)
     return TestClient(
         create_app(ServeConfig(root=editing, watch=False, open_browser=False,
-                               edits=tmp_path / "session", db_config=config, **kwargs)),
+                               project=tmp_path / "session", db_config=config, **kwargs)),
         base_url="http://127.0.0.1",
     )
 
@@ -538,71 +544,80 @@ def test_a_publish_does_not_move_the_revert_target(editing, tmp_path, monkeypatc
     assert updates[-1][0] == str(LEFT + 19660)  # the session's first original
 
 
-def test_a_journal_without_the_ledger_still_reverts(editing, tmp_path, monkeypatch):
-    """A session opened *before* the ledger existed (the operator's, 2026-10-12)
-    carries written patches and no originals map: revert falls back to what
-    each patch recorded, rather than leaving the database on the edit."""
+def test_a_migrated_session_reverts_to_the_patches_own_originals(editing, tmp_path, monkeypatch):
+    """A session opened *before* P1 (the operator's, 2026-10-12) is a single
+    `journal.json` with written patches and no ledger. It migrates on first
+    read, and `revert` still puts back what each patch recorded — the ledger is
+    *derived* now (the first patch of a row, in order), so the old fallback is
+    the only behaviour left."""
     fake = FakeConnection([
-        [door_row()],                 # the row op's read
-        [door_row()],                 # the existence check at apply
-        [],                           # the UPDATE
         [door_row(X=LEFT + 24600)],   # the existence check at revert
         [],                           # the restoring UPDATE
     ])
     monkeypatch.setattr(serverrows, "connect", lambda _connection: fake)
-    client = db_client(editing, tmp_path, db_write=True)
-    assert edit(client, {"kind": "row-move", "table": "door", "key": "d1",
-                         "x": 24600, "y": 46957}).status_code == 200
-    assert client.post("/api/v1/world/mod/apply").status_code == 200
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "journal.json").write_text(json.dumps({
+        "schema": "camelot.editor/1",
+        "mod": {"id": "session", "version": "1", "priority": 100},
+        "zones": {},
+        "patches": {"0": [{
+            "table": "door", "key": "d1", "values": {"X": str(LEFT + 24600)},
+            "originals": {"X": str(LEFT + 19660)}, "applied": True,
+        }]},
+        "published": {"ops": 1, "at": 1},
+    }))
+    app = db_client(editing, tmp_path, db_write=True)
+    state = app.get("/api/v1/world/edit").json()
+    assert state["rows"][0]["patches"][0]["applied"] is True
+    assert state["published"]["ops"] == 1
+    # the legacy file went aside: a session is never read from two places
+    assert not (session / "journal.json").is_file()
+    assert (session / "journal.json.migrated").is_file()
+    migrated = [json.loads(line) for line in
+                next((session / "journal").glob("*.jsonl")).read_text().splitlines()]
+    assert migrated[1]["family"] == "rows" and migrated[1]["rows"][0]["key"] == "d1"
 
-    path = tmp_path / "session" / "journal.json"
-    journal = json.loads(path.read_text())
-    journal.pop("originals", None)          # an older session's journal
-    path.write_text(json.dumps(journal))
-
-    assert client.post("/api/v1/world/mod/revert").status_code == 200
+    assert app.post("/api/v1/world/mod/revert").status_code == 200
     updates = [params for sql, params in fake.statements if sql.startswith("UPDATE")]
     assert updates[-1][0] == str(LEFT + 19660)  # the patch's own original
 
 
 def test_a_published_chain_does_not_block_the_build(editing, tmp_path):
-    """The operator's own state on 2026-10-12: two ops on one row, published
-    (25344 → 20992 → 19968) so the client reads 19968 — the first op's
-    expectation no longer matches. The chain ends where the base stands, so it
-    counts as published: the build goes through instead of refusing."""
+    """The operator's own state on 2026-10-12: two ops on one row (25344 →
+    20992 → 19968), published, so the client reads 19968. A publish is a
+    *fact* now (the deploy log's keys), not an erase: the ops stay in the
+    journal, they are not pending any more, and the next edit starts from what
+    the client holds instead of refusing against its own work."""
     edits = tmp_path / "session"
     client = editor_client(editing, edits)
-    assert edit(client, {"kind": "move", "id": 2, "x": 20992,
-                         "y": 32768}).status_code == 200
-    assert edit(client, {"kind": "move", "id": 2, "x": 19968,
-                         "y": 32768}).status_code == 200
+    assert edit(client, {"kind": "move", "id": 2, "x": 20992, "y": 32768}).status_code == 200
+    assert edit(client, {"kind": "move", "id": 2, "x": 19968, "y": 32768}).status_code == 200
     assert client.post("/api/v1/world/mod/apply").status_code == 200
 
-    # the client now reads 19968; put the ops back, as a session saved before
-    # the commit-on-publish rule would have them
-    path = edits / "journal.json"
-    journal = json.loads(path.read_text())
-    journal["published"] = {}
-    journal["zones"] = {"0": [
-        {"action": "set", "id": 2, "columns": {"X": 3, "Y": 4},
-         "values": {"X": "20992", "Y": "32768"}, "expect": {"X": "32768", "Y": "32768"}},
-        {"action": "set", "id": 2, "columns": {"X": 3, "Y": 4},
-         "values": {"X": "19968", "Y": "32768"}, "expect": {"X": "20992", "Y": "32768"}},
-    ]}
-    path.write_text(json.dumps(journal))
-
-    # a new daemon reads the file: the journal is cached per instance
     fresh = editor_client(editing, edits)
+    state = fresh.get("/api/v1/world/edit").json()
+    assert state["zones"] == []              # nothing pending: the client carries it
+    assert state["published"]["ops"] == 2    # and the panel still says so
+    # the history is intact: the ops are in the shard, not erased
+    shard = next((edits / "journal").glob("*.jsonl"))
+    assert len(shard.read_text().splitlines()) == 3  # header + two ops
     zone = fresh.get("/api/v1/world/zone/0").json()
     assert zone["warnings"] == []
     pine = next(fixture for fixture in zone["fixtures"] if fixture["id"] == 2)
     assert (pine["x"], pine["y"]) == (19968, 32768)
-    built = fresh.post("/api/v1/world/mod/build")
-    assert built.status_code == 200, built.json()
+    assert fresh.post("/api/v1/world/mod/build").status_code == 400  # nothing to build
 
-    # a chain that lands somewhere else still refuses
-    journal["zones"]["0"][1]["values"] = {"X": "18000", "Y": "32768"}
-    path.write_text(json.dumps(journal))
+    # and a *pending* op another session wrote blind still refuses: a second
+    # shard names an expectation the base contradicts
+    (edits / "journal" / "2026-10-16T09-00-00-lyra.jsonl").write_text(
+        json.dumps({"kind": "shard", "format": "camelot.journal/1", "author": "lyra",
+                    "at": "2026-10-16T09:00:00Z", "base": {}}) + "\n"
+        + json.dumps({"kind": "op", "seq": 1, "at": "2026-10-16T09:00:00Z",
+                      "family": "world", "zone": 0,
+                      "op": {"action": "set", "id": 2, "columns": {"X": 3, "Y": 4},
+                             "values": {"X": "18000", "Y": "32768"},
+                             "expect": {"X": "12345", "Y": "32768"}}}) + "\n")
     again = editor_client(editing, edits)
     warnings = again.get("/api/v1/world/zone/0").json()["warnings"]
     assert any("the journal did not apply" in warning for warning in warnings), warnings
