@@ -1,5 +1,9 @@
 # Next steps: Server Content Pack Pipeline
 
+> The intent, in one line: make Camelot Forge **the Unity of DAoC servers** —
+one project folder a shard's team opens to author, version, release and ship
+the content of its server, the way a game team works on a game project.
+
 This document defines the next work after the current Studio viewer and
 character-builder milestones. The documentation/code truth audit is closed;
 unresolved findings are now an explicit implementation backlog rather than

@@ -13,14 +13,16 @@ private-server community.
 > are refused by an empirical deformation check and remain in the bind pose.
 > State: `docs/status.md`. Format reference: `docs/formats.md`.
 
-> **Where this is going (2026-10-14).** Camelot Forge — the suite this tool
-> belongs to — is becoming the content suite for **one** OpenDAoC server and
-> its client: one project holds the whole content of one shard,
-> and content leaves it as numbered, immutable **releases** — a server
-> package and a client update — promoted unchanged through environments
-> (`local`, optional `staging`, `production`) and published as a feed the
-> players' launcher reads. None of this is built yet: it is a proposal,
-> designed in the private workspace's `notes/`.
+> **Where this is going (2026-10-14).** The intent, in one line: make
+> Camelot Forge **the Unity of DAoC servers** — one project folder a shard's
+> team opens to author, version, release and ship the content of its server,
+> the way a game team works on a game project. Concretely: this tool becomes
+> the content suite for **one** OpenDAoC server and its client; one project
+> holds the whole content of one shard, and content leaves it as numbered,
+> immutable **releases** — a server package and a client update — promoted
+> unchanged through environments (`local`, optional `staging`, `production`)
+> and published as a feed the players' launcher reads. None of this is built
+> yet: it is a proposal, designed in the private workspace's `notes/`.
 
 **Principle: engine fidelity.** The project aims to reproduce the client's
 own behaviour — same tables, order and values — and to make every approximation
