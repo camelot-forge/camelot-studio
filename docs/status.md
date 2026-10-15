@@ -738,6 +738,40 @@ The flag is now `--project DIR`; `--edits` stays as the older name of the same
 directory. Measured on the operator's own client: a legacy session migrates,
 reads back with its op and its patch, and the deploy log records what happened;
 the editor's 26 tests pass.
+
+**Populate, import, and the team test (same day).** `camelot project populate`
+records the resources an *edit* depends on — a zone's placements, its catalogue
+and its metadata, read through `csv` first and `dat` for what only it carries,
+the resolution the reader itself uses — and a table whole out of
+`gamedata.mpk`. Nothing the viewer only *looks* at is fingerprinted (the
+heightmaps, the ground patches): a drift check that cried wolf on every visual
+asset would be noise, and M-2 is the measurement that could change that.
+Measured on the operator's client: **565 resources over 402 zone folders in
+0.64 s**, a 65 KB `project.json`, and `camelot project verify` reads all 568
+back in **0.61 s** — so the drift check is silent at every scale we have.
+Resource names are written *canonically* and read through the client's own case
+rule (`zone000` beside `ZONE008`), so a project populated on one machine opens
+on another. A recorded resource whose bytes moved is **refused by name** unless
+`--update` says otherwise: adopting a moved base silently is what re-base (P8)
+exists for.
+
+`camelot project import DIR` makes a 6.3 authoring directory a project **in
+place**: the same scaffolding `new` writes (and never over an operator's own
+notes, `.gitignore` or machine file), the legacy journal migrated to a shard by
+the kernel's own converter, the facts it implies (what 6.3 said was written,
+then the migration) recorded in the deploy log, the mod identity written to
+`mod.json` when the journal was its only home, and `journal.json.migrated` left
+beside the shard. Measured on a copy of the operator's session: imported, the
+scaffolding in place, and the daemon opens it (`--project`, `available: true`)
+with nothing lost.
+
+The **team test** is `core/tests/test_project_team.py`: two clones of one
+project, a commit each, a `git pull` — two shards merge as a union with no
+conflict, the deploy log keeps both sides' lines (its `.gitattributes` rule),
+the merged journal reads in the timestamp order, and a line another session
+wrote blind against the same row is **refused by name** when the journal is
+read back. That closes P1's exit criteria: the container, the base, the shards,
+the refusals, and a session that opens as a project.
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.

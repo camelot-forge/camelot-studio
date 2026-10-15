@@ -23,8 +23,10 @@ Commands:
   camelot project new NAME --client DIR
                                   create a project — the whole content of one
                                   server — and its git scaffolding; also:
-                                  info (where it stands) and verify (read the
-                                  base back against its fingerprints)
+                                  info (where it stands), populate (record what
+                                  the edits depend on), verify (read the base
+                                  back), import (make a 6.3 authoring
+                                  directory a project, in place)
   camelot serve [--root DIR]      local daemon: asset library + viewer
 
 Paths in the manifest starting with ``DAOC CLIENT/`` are resolved against the
@@ -347,11 +349,74 @@ def cmd_project(args) -> int:
             print("git: initialised (no commit, no remote — the history is yours)")
         return 0
 
+    if args.project_cmd == "import":
+        try:
+            report = projects.import_authoring(
+                args.dir,
+                name=args.name,
+                client=args.client or os.environ.get("DAOC_CLIENT"),
+                author=args.author,
+                git=args.git,
+            )
+        except projects.ProjectError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        project = report["project"]
+        print(f"imported {project.root}: {project.name} ({project.format})")
+        migration = report["migration"]
+        if migration is None:
+            print("journal: nothing to migrate (no journal.json)")
+        else:
+            print(
+                f"journal: {migration['ops']} op(s) and {migration['rows']} row "
+                f"patch(es) → journal/{migration['shard']} "
+                "(the old file stays as journal.json.migrated)"
+            )
+        for fact in report["facts"]:
+            print(f"deploy: {fact['kind']}")
+        return 0
+
     try:
         project = projects.load(args.dir)
     except projects.ProjectError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
+
+    if args.project_cmd == "populate":
+        try:
+            directory = projects.client_root(project, args.client)
+            if directory is None:
+                raise projects.ProjectError(
+                    f"{project.name}: no client resolved — write {projects.MACHINE_FILE}, "
+                    "set $DAOC_CLIENT, or pass --client"
+                )
+            if args.all_zones:
+                zones = projects.zones_on_disk(directory)
+            else:
+                zones = [int(item) for item in args.zones.replace(" ", "").split(",") if item]
+            tables = [item.strip() for item in (args.tables or "").split(",") if item.strip()]
+            if not zones and not tables:
+                raise projects.ProjectError(
+                    "populate needs to know what to record: pass --zones 0,1, --all-zones "
+                    "and/or --tables items.csv,monsters.csv"
+                )
+            found = projects.populate(directory, zones=zones, tables=tables)
+            updated, adopted = projects.add_fingerprints(project.root, found, update=args.update)
+        except (projects.ProjectError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        groups: dict[str, int] = {}
+        for resource in found:
+            groups[resource.split("#")[0]] = groups.get(resource.split("#")[0], 0) + 1
+        print(
+            f"recorded {len(found)} resource(s) from {len(zones)} zone(s) "
+            f"and {len(tables)} table(s): {len(updated.fingerprints)} in the project"
+        )
+        for prefix, count in sorted(groups.items()):
+            print(f"  {prefix}: {count} entr{'y' if count == 1 else 'ies'}")
+        if adopted:
+            print(f"adopted (the base had moved): {', '.join(adopted)}")
+        return 0
 
     if args.project_cmd == "info":
         shown = projects.info(project)
@@ -1068,6 +1133,23 @@ def main(argv=None) -> int:
                     help="run git init in the new project (no commit, no remote)")
     ip = pp.add_parser("info", help="what the project is, and where it stands")
     ip.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    mp = pp.add_parser("import", help="make a 6.3 authoring directory a project, in place")
+    mp.add_argument("dir", help="the authoring directory (mod.json, journal.json, …)")
+    mp.add_argument("--name", help="the project's name (default: mod.json's id, else the folder)")
+    mp.add_argument("--client",
+                    help="the DAoC client to record as the base (default: $DAOC_CLIENT)")
+    mp.add_argument("--author", help="the name that signs your journal shards")
+    mp.add_argument("--git", action="store_true", help="run git init (no commit, no remote)")
+    pop = pp.add_parser("populate", help="record the resources the project's edits depend on")
+    pop.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    pop.add_argument("--client", help="the client to read (default: this machine's own answers)")
+    pop.add_argument("--zones", default="", help="zone ids to record, comma-separated (e.g. 0,12)")
+    pop.add_argument("--all-zones", action="store_true",
+                     help="every zone folder the client ships (a walk, not the index)")
+    pop.add_argument("--tables", default="",
+                     help="gamedata tables to record, comma-separated (e.g. items.csv)")
+    pop.add_argument("--update", action="store_true",
+                     help="adopt a resource whose bytes moved (otherwise it is refused)")
     vp = pp.add_parser("verify", help="read the base back against the recorded fingerprints")
     vp.add_argument("--dir", default=".", help="the project's directory (default: .)")
     vp.add_argument("--client", help="the client to read (default: this machine's own answers)")

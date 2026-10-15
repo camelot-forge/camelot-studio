@@ -21,12 +21,31 @@ from camelot.mpak import write_mpak
 def base(tmp_path):
     """A synthetic base with the three shapes a real one uses: a plain file
     (the client's binary), a big archive (the tables), and an entry *inside*
-    an archive (the zone index)."""
+    an archive (the zone index). Plus two zones — one of them in an UPPER-CASE
+    folder, the way the retail extraction disagrees with itself."""
     root = tmp_path / "client"
     (root / "zones").mkdir(parents=True)
     (root / "game1127.dll").write_bytes(b"MZ fake client")
     (root / "gamedata.mpk").write_bytes(b"fake tables")
     write_mpak(str(root / "zones" / "zones.mpk"), "zones", [("zones.dat", b"the index")])
+    write_mpak(str(root / "gamedata.mpk"), "gamedata", [("items.csv", b"the items")])
+    for folder in ("zone000", "ZONE008"):
+        (root / "zones" / folder).mkdir(parents=True, exist_ok=True)
+    write_mpak(
+        str(root / "zones" / "zone000" / "csv000.mpk"),
+        "csv000",
+        [("fixtures.csv", b"the placements"), ("nifs.csv", b"the catalogue")],
+    )
+    write_mpak(
+        str(root / "zones" / "zone000" / "dat000.mpk"),
+        "dat000",
+        [("sector.dat", b"the metadata"), ("terrain.pcx", b"the heightmap")],
+    )
+    write_mpak(
+        str(root / "zones" / "ZONE008" / "csv008.mpk"),
+        "csv008",
+        [("fixtures.csv", b"another zone's placements")],
+    )
     return root
 
 
@@ -263,3 +282,172 @@ def test_cli_new_info_and_verify_round_trip(tmp_path, base, capsys, monkeypatch)
 def test_cli_refuses_a_directory_that_is_not_a_project(tmp_path, capsys):
     assert main(["project", "info", "--dir", str(tmp_path)]) == 1
     assert "not a project" in capsys.readouterr().err
+
+
+# -- populate: what an edit depends on ---------------------------------------
+
+
+def test_populate_records_what_an_edit_depends_on(base):
+    """A shelf, not a copy: a zone is recorded through the entries an *edit*
+    reads (its placements, its catalogue, its metadata) and a table whole —
+    never what the viewer only looks at (the heightmap, the ground patches)."""
+    found = pj.populate(base, zones=[0], tables=["items.csv"])
+    assert set(found) == {
+        "zones/zone000/csv000.mpk#fixtures.csv",
+        "zones/zone000/csv000.mpk#nifs.csv",
+        "zones/zone000/dat000.mpk#sector.dat",
+        "gamedata.mpk#items.csv",
+    }
+    assert not [resource for resource in found if "terrain" in resource]
+
+
+def test_populate_records_a_zone_whose_folder_is_upper_case(base):
+    """The retail extraction disagrees with itself on case (`zone000` beside
+    `ZONE008`) and a resource name is written *canonically*: the read resolves
+    the on-disk case, so a project populated on one machine reads on another."""
+    assert pj.zone_resources(base, 8) == ["zones/zone008/csv008.mpk#fixtures.csv"]
+    assert pj.read_resource(base, "zones/zone008/csv008.mpk#fixtures.csv") == (
+        b"another zone's placements"
+    )
+
+
+def test_zones_on_disk_walks_the_folders_not_the_index(base):
+    assert pj.zones_on_disk(base) == [0, 8]
+    assert pj.zones_on_disk(base / "nowhere") == []
+
+
+def test_populate_merges_into_the_project(project, base):
+    found = pj.populate(base, zones=[0, 8])
+    updated, adopted = pj.add_fingerprints(project.root, found)
+    assert adopted == []
+    assert len(updated.fingerprints) == 3 + len(found)  # the base's own three, plus these
+    again, _ = pj.add_fingerprints(project.root, found)  # idempotent
+    assert again.fingerprints == updated.fingerprints
+
+
+def test_populate_refuses_to_adopt_a_moved_base_without_being_asked(project, base):
+    """A recorded resource whose bytes changed is a *moved base*: adopting it
+    silently is what re-base (P8) exists for, so it is refused by name."""
+    found = pj.populate(base, zones=[0])
+    pj.add_fingerprints(project.root, found)
+    write_mpak(
+        str(base / "zones" / "zone000" / "csv000.mpk"),
+        "csv000",
+        [("fixtures.csv", b"the placements, moved"), ("nifs.csv", b"the catalogue")],
+    )
+    moved = pj.populate(base, zones=[0])
+    with pytest.raises(pj.ProjectError) as error:
+        pj.add_fingerprints(project.root, moved)
+    assert "zones/zone000/csv000.mpk#fixtures.csv" in str(error.value)
+    assert "verify" in str(error.value)
+    updated, adopted = pj.add_fingerprints(project.root, moved, update=True)
+    assert adopted == ["zones/zone000/csv000.mpk#fixtures.csv"]
+    assert (
+        updated.fingerprints["zones/zone000/csv000.mpk#fixtures.csv"]
+        == (moved["zones/zone000/csv000.mpk#fixtures.csv"])
+    )
+
+
+# -- import: a 6.3 authoring directory becomes a project ----------------------
+
+
+LEGACY = {
+    "schema": "camelot.editor/1",
+    "mod": {"id": "ux-session", "version": "1", "priority": 100},
+    "zones": {
+        "0": [
+            {
+                "action": "set",
+                "id": 1,
+                "columns": {"X": 3, "Y": 4},
+                "values": {"X": "25472", "Y": "47104"},
+                "expect": {"X": "25344", "Y": "47104"},
+            }
+        ]
+    },
+    "patches": {
+        "0": [
+            {
+                "table": "door",
+                "key": "d1",
+                "values": {"X": "9"},
+                "originals": {"X": "8"},
+                "applied": True,
+            }
+        ]
+    },
+    "published": {"ops": 1, "at": 1},
+}
+
+
+def test_import_makes_an_authoring_directory_a_project_in_place(tmp_path, base):
+    """The operator's own directory becomes the project: the scaffolding is
+    written around it, the legacy journal becomes one shard, and the facts a
+    6.3 file implied go to the deploy log — the old file stays beside them."""
+    session = tmp_path / "ux-session"
+    session.mkdir()
+    (session / "mod.json").write_text(json.dumps(LEGACY["mod"]))
+    (session / "journal.json").write_text(json.dumps(LEGACY))
+    (session / "notes.md").write_text("my own notes\n")
+    report = pj.import_authoring(session, client=base, author="michael")
+
+    assert report["project"].name == "ux-session"
+    assert (session / pj.PROJECT_FILE).is_file()
+    # the identity the legacy file carried survives, in the place the new model
+    # reads first (`new` does not write a mod.json)
+    assert json.loads((session / "mod.json").read_text())["id"] == "ux-session"
+    assert (session / "notes.md").read_text() == "my own notes\n"  # ours to keep
+    assert (session / "journal.json.migrated").is_file()
+    assert not (session / "journal.json").is_file()
+
+    shard = next((session / "journal").glob("*.jsonl"))
+    lines = [json.loads(line) for line in shard.read_text().splitlines()]
+    assert [line["kind"] for line in lines] == ["shard", "op", "op"]
+    assert lines[1]["family"] == "world" and lines[1]["op"]["values"]["X"] == "25472"
+    assert lines[2]["family"] == "rows" and lines[2]["rows"][0]["key"] == "d1"
+
+    # the facts: the patch 6.3 said was written, then the migration itself
+    assert [fact["kind"] for fact in report["facts"]] == ["publish", "migrated"]
+    log = pj.deploy_log(session)
+    assert [entry["kind"] for entry in log] == ["publish", "migrated"]
+    assert log[0]["keys"] == [f"{shard.name}:2"]
+    assert log[1]["shard"] == shard.name and log[1]["ops"] == 1 and log[1]["rows"] == 1
+
+
+def test_import_does_not_overwrite_what_the_operator_wrote(tmp_path, base):
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "mod.json").write_text(json.dumps(LEGACY["mod"]))
+    (session / ".gitignore").write_text("mine\n")
+    (session / pj.MACHINE_FILE).write_text('{"author": "lyra"}\n')
+    pj.import_authoring(session, client=base)
+    assert (session / ".gitignore").read_text() == "mine\n"
+    assert pj.machine(session)["author"] == "lyra"
+
+
+def test_import_refuses_a_project_and_a_directory_that_is_not_one(tmp_path, base):
+    project = pj.new(tmp_path / "hills", client=base)
+    with pytest.raises(pj.ProjectError, match="already a project"):
+        pj.import_authoring(project.root, client=base)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(pj.ProjectError, match="not an authoring directory"):
+        pj.import_authoring(empty, client=base)
+
+
+def test_cli_populate_and_import_round_trip(tmp_path, base, capsys, monkeypatch):
+    monkeypatch.delenv("DAOC_CLIENT", raising=False)
+    session = tmp_path / "ux-session"
+    session.mkdir()
+    (session / "journal.json").write_text(json.dumps(LEGACY))
+    assert main(["project", "import", str(session), "--client", str(base)]) == 0
+    shown = capsys.readouterr().out
+    assert "imported" in shown and "journal.json.migrated" in shown
+    assert "deploy: publish" in shown
+    assert main(["project", "populate", "--dir", str(session), "--zones", "0,8"]) == 0
+    shown = capsys.readouterr().out
+    assert "4 resource(s)" in shown
+    assert "zones/zone000/csv000.mpk: 2 entries" in shown
+    assert "zones/zone000/dat000.mpk: 1 entry" in shown and "zones/zone008/csv008.mpk" in shown
+    assert main(["project", "verify", "--dir", str(session), "--client", str(base)]) == 0
+    assert "7 resource(s): 7 ok" in capsys.readouterr().out

@@ -29,11 +29,12 @@ import os
 import re
 import socket
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import clientpatch
+from . import clientfs, clientpatch
 from .contract import client_build
 from .mpak import MpakArchive, MpakError
 
@@ -89,14 +90,24 @@ CACHE_POLICIES = ("shared", "local")
 #: only kinds with hard meaning; `staging` is optional (operator's answer 1).
 ENVIRONMENTS = ("local", "staging", "production")
 
+#: What a *zone*'s own archives are read for: the placements an edit rewrites
+#:and the catalogue it adds from. The terrain, the ground patches and the
+#: textures are read by the viewer and never written by us, so they are not
+#: fingerprinted — a drift check that cried wolf on every visual asset would be
+#: noise, and M-2 is the measurement that decides if that changes.
+ZONE_ENTRIES = ("fixtures.csv", "nifs.csv", "sector.dat")
+
+#: The client's own data tables live inside this archive, one entry per table.
+GAMEDATA_ARCHIVE = "gamedata.mpk"
+
 #: What `new` records of the client: its own build binary, the tables and the
 #: zone index every later read goes through. A resource is a path relative to
 #: the client root, optionally an archive entry after `#` (the zone index
-#: lives inside `zones/zones.mpk`). The per-zone and per-table resources are
-#: added by `populate` (P1b) in the same shape.
+#: lives inside `zones/zones.mpk`). `populate` adds the per-zone and per-table
+#: resources in the same shape.
 BASE_RESOURCES = (
     clientpatch.CLIENT_BINARY,
-    "gamedata.mpk",
+    GAMEDATA_ARCHIVE,
     "zones/zones.mpk#zones.dat",
 )
 
@@ -248,14 +259,17 @@ class Project:
 def read_resource(client_root: str | os.PathLike, resource: str) -> bytes:
     """One base resource's bytes: a file, or an archive entry after `#`.
 
-    `zones/zones.mpk#zones.dat` is the shape the zone index needs; plain files
-    (`gamedata.mpk`, the client binary) are the common case.
+    The path is resolved the way the game resolves it — **the on-disk case
+    wins** (`clientfs`) — because the retail extraction disagrees with itself
+    (`zones/zone000` beside `zones/ZONE008`) and a resource name is written
+    once, canonically, then read on whatever machine the operator has.
     """
     root = Path(client_root)
     path, _, entry = resource.partition("#")
-    target = root / path
-    if not target.is_file():
+    resolved = clientfs.resolve(str(root), path)
+    if resolved is None:
         raise ProjectError(f"{resource}: no {path} under {root}")
+    target = Path(resolved)
     if not entry:
         try:
             return target.read_bytes()
@@ -449,12 +463,16 @@ def new(
         path.mkdir(parents=True, exist_ok=True)
         (path / ".gitkeep").touch()
     (directory / "deploy" / "log.jsonl").touch()
-    (directory / NOTES).write_text(
-        f"# {data['name']}\n\nWhat this server changes, and why. Free form.\n", encoding="utf-8"
+    # The scaffolding is written **only when absent**: `import` runs this on a
+    # directory that may already hold an operator's own notes, .gitignore or
+    # machine file, and none of those is ours to overwrite.
+    _write_if_absent(
+        directory / NOTES,
+        f"# {data['name']}\n\nWhat this server changes, and why. Free form.\n",
     )
-    (directory / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
-    (directory / ".gitattributes").write_text(GITATTRIBUTES, encoding="utf-8")
-    (directory / f"{MACHINE_FILE}.example").write_text(MACHINE_EXAMPLE, encoding="utf-8")
+    _write_if_absent(directory / ".gitignore", GITIGNORE)
+    _write_if_absent(directory / ".gitattributes", GITATTRIBUTES)
+    _write_if_absent(directory / f"{MACHINE_FILE}.example", MACHINE_EXAMPLE)
     machine_data = {}
     if client is not None:
         machine_data["client"] = str(Path(client).expanduser())
@@ -463,14 +481,94 @@ def new(
     elif client is not None:
         machine_data["author"] = author_name(directory)
     if machine_data:
-        (directory / MACHINE_FILE).write_text(
-            json.dumps(machine_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        _write_if_absent(
+            directory / MACHINE_FILE,
+            json.dumps(machine_data, indent=2, sort_keys=True) + "\n",
         )
 
     project = load(directory)
     if git:
         _git_init(directory)
     return project
+
+
+def _write_if_absent(path: Path, content: str) -> None:
+    """Scaffolding never overwrites: an operator's own file wins."""
+    if not path.exists():
+        path.write_text(content, encoding="utf-8")
+
+
+def _name_from(directory: Path) -> str:
+    """What a 6.3 authoring directory calls itself: its `mod.json`, else the
+    directory's own name."""
+    meta = directory / "mod.json"
+    if meta.is_file():
+        try:
+            document = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            document = None
+        if isinstance(document, dict) and document.get("id"):
+            return str(document["id"])
+    return directory.name
+
+
+def import_authoring(
+    directory: str | os.PathLike,
+    *,
+    name: str | None = None,
+    client: str | os.PathLike | None = None,
+    cache: str = "shared",
+    environments=(),
+    author: str | None = None,
+    git: bool = False,
+    at: str | None = None,
+) -> dict:
+    """Make a 6.3 authoring directory into a project, **in place**.
+
+    The scaffolding `new` writes (and never over: an operator's own notes,
+    `.gitignore` and machine file stay), plus the legacy single-file journal
+    migrated to a shard — the conversion is the kernel's
+    (`journal.migrate_legacy`), the facts it owes go to the deploy log, and the
+    old file stays beside the shard as `journal.json.migrated`.
+    """
+    from . import journal as journal_mod
+
+    root = Path(directory).expanduser()
+    if (root / PROJECT_FILE).is_file():
+        raise ProjectError(f"{root} is already a project")
+    markers = (root / "mod.json", root / journal_mod.LEGACY_FILE, root / "client.patch.json")
+    if not any(marker.is_file() for marker in markers):
+        raise ProjectError(
+            f"{root} is not an authoring directory: no mod.json, no "
+            f"{journal_mod.LEGACY_FILE}, no built pack"
+        )
+    project = new(
+        root,
+        name=name or _name_from(root),
+        client=client,
+        cache=cache,
+        environments=environments,
+        author=author,
+        git=git,
+        created=at,
+    )
+    report = journal_mod.migrate_legacy(
+        root, author=author_name(root), base=project.fingerprints, at=at
+    )
+    facts = []
+    if report is not None:
+        # The identity the legacy file carried survives when it was the only
+        # place it lived: the new model reads `mod.json` first, and `new` does
+        # not write one, so an import writes it from the journal's own block.
+        if report.get("mod") and not (root / "mod.json").is_file():
+            (root / "mod.json").write_text(
+                json.dumps(report["mod"], indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        facts = journal_mod.migration_facts(report)
+        for fact in facts:
+            record_deploy(root, fact)
+    return {"project": load(root), "migration": report, "facts": facts}
 
 
 def _git_init(directory: Path) -> None:
@@ -565,6 +663,116 @@ def unlock(project: Project) -> bool:
 
 
 # -- reading the base back ---------------------------------------------------
+
+
+# -- populating: what an edit depends on -------------------------------------
+
+
+def zones_on_disk(client: str | os.PathLike) -> list[int]:
+    """The zone ids the client ships, read from the folders themselves.
+
+    The index inside `zones/zones.mpk` is the client's own truth for *what a
+    zone is*; the folders are what a populate walks, so a client whose index is
+    unreadable (or a zone the index disables) is still workable.
+    """
+    root = clientfs.resolve(str(client), "zones")
+    if root is None:
+        return []
+    found: list[int] = []
+    for name in os.listdir(root):
+        match = re.fullmatch(r"zone(\d+)", name, re.IGNORECASE)
+        if match:
+            found.append(int(match.group(1)))
+    return sorted(found)
+
+
+def zone_resources(
+        client: str | os.PathLike, zone_id: int, *, entries=ZONE_ENTRIES
+    ) -> list[str]:
+        """The resources one zone's own data lives in, canonically named.
+
+        `csv` answers first and `dat` answers only what it carries — the resolution
+        the *reader* itself uses (`Zone.data_entry`), so one entry is one resource
+        and not two fingerprints of the same value.
+        """
+        archives: dict[str, set[str]] = {}
+        for logical in ("csv", "dat"):
+            relative = f"zones/zone{zone_id:03d}/{logical}{zone_id:03d}.mpk"
+            resolved = clientfs.resolve(str(client), relative)
+            if resolved is None:
+                continue
+            try:
+                archive = MpakArchive(resolved)
+            except MpakError:
+                continue
+            try:
+                archives[relative] = {name.casefold() for name in archive.entries}
+            finally:
+                archive.close()
+        found: list[str] = []
+        for entry in entries:
+            for relative, names in archives.items():
+                if entry.casefold() in names:
+                    found.append(f"{relative}#{entry}")
+                    break
+        return found
+
+
+def populate(
+    client: str | os.PathLike,
+    *,
+    zones: Iterable[int] = (),
+    tables: Iterable[str] = (),
+) -> dict[str, str]:
+    """The resources a project's *edits* depend on, fingerprinted.
+
+    A shelf, not a copy (`project.md` §6): what a zone is read for is its
+    placements and its catalogue, and a table is read *whole* out of
+    `gamedata.mpk` — everything else the client ships stays the client's.
+    """
+    found: dict[str, str] = {}
+    for zone_id in zones:
+        for resource in zone_resources(client, int(zone_id)):
+            found[resource] = fingerprint_resource(client, resource)
+    for table in tables:
+        resource = f"{GAMEDATA_ARCHIVE}#{table}"
+        found[resource] = fingerprint_resource(client, resource)
+    return found
+
+
+def add_fingerprints(
+    root: str | os.PathLike, found: dict[str, str], *, update: bool = False
+) -> tuple[Project, list[str]]:
+    """Record what `populate` read, **without moving the base**.
+
+    A resource already recorded with another value is a *moved base*: it is
+    refused by name unless the caller says `update=True`, because adopting it
+    silently is what re-base (P8) exists for. Returns the project and the
+    resources whose value changed.
+    """
+    project = load(root)
+    recorded = dict(project.fingerprints)
+    moved = sorted(
+        resource
+        for resource, value in found.items()
+        if resource in recorded and recorded[resource] != value
+    )
+    if moved and not update:
+        raise ProjectError(
+            "the base moved under this project: "
+            + ", ".join(moved)
+            + " — run `camelot project verify`, or pass --update to adopt it"
+        )
+    recorded.update(found)
+    data = dict(project.data)
+    base = dict(data.get("base") or {})
+    client = dict(base.get("client") or {})
+    client["fingerprints"] = dict(sorted(recorded.items()))
+    base["client"] = client
+    data["base"] = base
+    path = project.root / PROJECT_FILE
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return load(project.root), moved
 
 
 def verify(project: Project, client=None) -> list[dict]:

@@ -38,6 +38,7 @@ replaced, so a merged journal can be read back without a second file:
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -48,16 +49,26 @@ from typing import Any
 __all__ = [
     "FAMILIES",
     "FORMAT",
+    "LEGACY_FILE",
+    "LEGACY_SCHEMA",
     "Journal",
     "JournalError",
     "Line",
+    "migrate_legacy",
+    "now",
     "replay",
+    "stamp_from_epoch",
 ]
 
 #: The shard format tag: a reader that does not know it refuses the file, by
 #: name. A silent misread of a journal is the most expensive bug a project can
 #: have.
 FORMAT = "camelot.journal/1"
+
+#: The single file 6.3 wrote instead of shards (`camelot serve --edits`), and
+#: the schema it carried. `migrate_legacy()` reads it once and moves it aside.
+LEGACY_FILE = "journal.json"
+LEGACY_SCHEMA = "camelot.editor/1"
 
 #: What a line can be about. `world` is a zone's placements (a fixture op, with
 #: the server rows it carries); `rows` is a server row edited on its own;
@@ -77,6 +88,25 @@ def now(moment: str | None = None) -> str:
     if moment:
         return str(moment)
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def stamp_from_epoch(value: Any) -> str | None:
+    """`time.time()` → the journal's `…Z` stamp, or None when it is not one.
+    (A 6.3 session stamped its journal with a float.)"""
+    if value is None:
+        return None
+    try:
+        moment = datetime.fromtimestamp(float(value), UTC)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+    return moment.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _stamp_of(path: Path) -> str:
+    try:
+        return stamp_from_epoch(path.stat().st_mtime) or now()
+    except OSError:
+        return now()
 
 
 def _stamp_for_name(moment: str) -> str:
@@ -371,6 +401,116 @@ class Journal:
         """Forget what was read: the next reader re-reads the files (a `git
         pull` brings ops, and the daemon must see them)."""
         self._lines = None
+
+
+def _zone_key(key: Any) -> int:
+    try:
+        return int(key)
+    except (TypeError, ValueError):
+        raise JournalError(f"{LEGACY_FILE}: {key!r} is not a zone id") from None
+
+
+def migrate_legacy(
+    directory: str | os.PathLike,
+    *,
+    author: str = "unknown",
+    base: dict | None = None,
+    at: str | None = None,
+) -> dict | None:
+    """The 6.3 single-file journal (`journal.json`) → one shard, **once**.
+
+    Lossless: every op becomes a line, every row patch a line of its own (with
+    the originals it already carried), and the ops a publish had already
+    covered come back as `applied` — the deploy *facts* are the project's
+    business, not this module's. The legacy file is **moved aside** as
+    `journal.json.migrated`, never deleted: a session is never read from two
+    places, and an operator who wants to look can.
+
+    Returns the report — `dir`, `shard`, `ops`, `rows`, `applied` (line keys),
+    `published` (the op count 6.3 recorded), `at` — or None when there is
+    nothing to migrate. A file whose schema this build does not know is refused
+    **by name**.
+    """
+    root = Path(directory)
+    path = root / LEGACY_FILE
+    if not path.is_file():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise JournalError(f"{path}: {error}") from error
+    if not isinstance(document, dict) or document.get("schema") != LEGACY_SCHEMA:
+        found = document.get("schema") if isinstance(document, dict) else None
+        raise JournalError(
+            f"{path}: this journal is {found!r}; this build understands "
+            f"{LEGACY_SCHEMA} and migrates it to shards"
+        )
+    moment = now(at or _stamp_of(path))
+    journal = Journal(root / "journal", author=author, base=dict(base or {}), at=moment)
+    zones = document.get("zones") or {}
+    patches = document.get("patches") or {}
+    ops = 0
+    rows = 0
+    applied: list[str] = []
+    for key in sorted(zones, key=_zone_key):
+        for op in zones.get(key) or ():
+            journal.append_op(op, zone=_zone_key(key), at=moment)
+            ops += 1
+    for key in sorted(patches, key=_zone_key):
+        for patch in patches.get(key) or ():
+            line = journal.append_rows([patch], zone=_zone_key(key), at=moment)
+            rows += 1
+            if patch.get("applied"):
+                applied.append(line.key)
+    published = document.get("published") or {}
+    path.rename(root / f"{LEGACY_FILE}.migrated")
+    block = document.get("mod")
+    return {
+        "dir": str(root),
+        "shard": journal.session().name,
+        "ops": ops,
+        "rows": rows,
+        "applied": applied,
+        "published": int(published.get("ops") or 0),
+        "published_at": stamp_from_epoch(published.get("at")),
+        #: The mod identity the 6.3 file carried. `mod.json` answers first in
+        #: the new model, so a caller that *imports* keeps this one.
+        "mod": dict(block) if isinstance(block, dict) else {},
+        "at": moment,
+    }
+
+
+def migration_facts(report: dict) -> list[dict]:
+    """The deploy-log lines a migration owes.
+
+    A 6.3 file had already *published* some of its ops — they were cleared from
+    the file, so they cannot become shard lines, only a fact — and the
+    migration itself is one. The caller appends these where its log lives
+    (`project.record_deploy`).
+    """
+    facts: list[dict] = []
+    if report["applied"] or report["published"]:
+        facts.append(
+            {
+                "kind": "publish",
+                "ops": report["published"],
+                "keys": list(report["applied"]),
+                "legacy": True,
+                "at": report["published_at"] or report["at"],
+            }
+        )
+    facts.append(
+        {
+            "kind": "migrated",
+            "from": LEGACY_FILE,
+            "ops": report["ops"],
+            "rows": report["rows"],
+            "published": report["published"],
+            "shard": report["shard"],
+            "at": report["at"],
+        }
+    )
+    return facts
 
 
 def replay(
