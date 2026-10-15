@@ -15,7 +15,7 @@ private-server community.
 
 > **Where this is going (2026-10-14).** Camelot Forge — the suite this tool
 > belongs to — is becoming the content suite for **one** OpenDAoC server and
-> its client: one project (the *Monde*) holds the whole content of one shard,
+> its client: one project holds the whole content of one shard,
 > and content leaves it as numbered, immutable **releases** — a server
 > package and a client update — promoted unchanged through environments
 > (`local`, optional `staging`, `production`) and published as a feed the

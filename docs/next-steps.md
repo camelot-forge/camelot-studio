@@ -405,7 +405,7 @@ manifest-only path is understood and reproducible.
 
 > **Reversed 2026-10-14 (operator decision).** One server, one content set.
 > The product is a content suite for **one** OpenDAoC server and its client:
-> everything authored lands in one project (the Monde) and leaves it as
+> everything authored lands in one project and leaves it as
 > numbered, immutable releases -- a server package and a client update --
 > promoted unchanged through environments. The mod-ecosystem target (many
 > authors, many mods per server, mods portable between servers) is dropped,
