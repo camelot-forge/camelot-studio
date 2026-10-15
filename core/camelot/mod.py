@@ -1,4 +1,4 @@
-"""The mod deployment document a pack carries.
+"""The deployment document a pack carries.
 
 A pack does not ship SQL, and it does not choose ids. It declares how many
 ids it needs per table, and describes its rows as columns and values with a
@@ -6,10 +6,15 @@ logical name for each row that other rows may reference.
 
 Two consequences, and they are the reason for the shape:
 
-- **overlap is impossible.** No mod picks an id, so two mods cannot claim
+- **overlap is impossible.** No writer picks an id, so two rows cannot claim
   the same one and there is no conflict policy to design;
-- **a mod cannot execute arbitrary statements** against a server's database,
-  which matters when the mods come from strangers.
+- **a pack cannot execute arbitrary statements** against a server's
+  database.
+
+Both rules were written when a pack was a mod from a stranger; since
+2026-10-14 the product is one server's content suite (one project, numbered
+releases), so what they buy is smaller — but they are cheaper to keep than to
+prove unnecessary (the design: `workspace/notes/`).
 
 The **client section** is the payload's list of destinations: what the mod
 replaces on a player's machine (a loose file, an entry of an archive, a row

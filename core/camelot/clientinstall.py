@@ -8,9 +8,12 @@ workspace (`notes/phase5-client-assets.md`):
   copy kept under `.camelot/pristine/`, plus the winning payloads, so removing
   a mod restores the exact bytes and an interrupted run self-heals: there is
   one writer (`_recompute`), it is deterministic, and state is saved last.
-- **claims and priority.** Two mods claiming one destination are resolved by
+- **claims and priority.** A destination claimed twice is resolved by
   priority; a tie at the top refuses the whole operation before anything is
-  written. The state records who owns what.
+  written. The state records who owns what. (Written for independent mods;
+  since 2026-10-14 the product is one content set, so a destination normally
+  has a single owner — the state is kept because it is what makes a removal
+  exact.)
 - **read it back.** The client refuses a bad archive silently (measured: it
   exits during the loading screen, `notes/test-a-report.md`), so
   every materialization is verified by reading the result back.

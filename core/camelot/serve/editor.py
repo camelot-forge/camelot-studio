@@ -1,11 +1,12 @@
 """The editor: a zone's placements, edited and published (spec §6/§9, 6.3).
 
 D2: the daemon is the only writer, the browser a pure consumer. An editing
-session is *one mod's authoring directory* (`camelot serve --edits DIR`, the
-Phase 5 format): `mod.json` names it, `journal.json` holds the ops the user
-made, and `build` assembles the same `fixtures.csv` + `client.patch.json` +
-pack the `camelot mod build` command line would — the editor is a front end
-to the toolchain, never a parallel implementation.
+session is *the project's own authoring directory* (`camelot serve --edits
+DIR`, becoming `--project DIR`: the Monde of the
+`workspace/notes/` design): `mod.json` names it, `journal.json`
+holds the ops the user made, and `build` assembles the same `fixtures.csv` +
+`client.patch.json` + pack the `camelot mod build` command line would — the
+editor is a front end to the toolchain, never a parallel implementation.
 
 The ops are zone-local, as `fixtures.csv` is:
 
