@@ -100,16 +100,18 @@ says `Norse` and `Half Ogre` where the server's `race` table says
 have dropped two of the eighteen races — a failure that would only surface
 in-game. A projection refuses an unknown race rather than defaulting.
 
-**The mod deployment document** (`core/camelot/mod.py`) is what a pack
-carries for the loader, and it settles two things the XML package format
-could not. A mod declares *how many* ids it needs per table and describes
-its rows as columns and values; it ships no SQL and never chooses an id.
-The manager allocates, records and writes, so overlap between mods is
-impossible by construction rather than detected, and a third-party mod
-cannot execute arbitrary statements against a database. The `client`
-section carries the mod's client half: the destinations it replaces on
-players' machines (a loose file, an archive entry, a gamedata row edit),
-applied by `camelot client install` with claims resolved by priority.
+**The deployment document** (`core/camelot/mod.py`) is what a pack carries
+for the loader, and it settles two things the XML package format could not.
+The pack declares *how many* ids it needs per table and describes its rows
+as columns and values; it ships no SQL and never chooses an id. The manager
+allocates, records and writes, so overlap between writers is impossible by
+construction rather than detected, and nothing a pack carries can execute
+arbitrary statements against a database. *(2026-10-14: the third-party
+framing is retired — the pack is one release of one server's content, not a
+mod; `docs/next-steps.md`.)* The `client` section carries the pack's client
+half: the destinations it replaces on players' machines (a loose file, an
+archive entry, a gamedata row edit), applied by `camelot client install`
+with claims resolved by priority.
 
 Against V2 that produces 906 declarative rows and one allocation
 (`npctemplate`, 906), with no `TemplateId` anywhere in the output.
@@ -485,10 +487,10 @@ The canonical roadmap is `docs/next-steps.md`. The immediate order is:
    Camelot Hills (counts and shots in the workspace report);
    **(c)** the editor (gizmos, snap, add/remove, the undo journal,
    the authoring directory) **plus the publish path** — **done 2026-10-12**:
-   `--edits DIR` opens an editing session (the journal lives in the Phase 5
-   authoring directory; `build` runs the same `mod build` path and `apply`
-   the same `client install`); the viewer carries the gizmo and the panel
-   (the workspace report has the byte-level proof and the W-5 recipe);
+   `--edits DIR` opens an editing session (the journal lives in the
+   project's authoring directory; `build` runs the same `mod build` path and
+   `apply` the same `client install`); the viewer carries the gizmo and the
+   panel (the workspace report has the byte-level proof and the W-5 recipe);
    **(c2)** editing the server's own rows — **done 2026-10-12**: a fixture
    move carries the rows that stand inside its own meshes (B2, the case W-1
    measured — Camelot Hills' keep carries its two doors, and, as measured,
@@ -669,7 +671,11 @@ draft asked for: one line per op, with **both sides** (`expect` / `originals`
 on one side, what was written on the other), grouped per zone, the server
 rows beside them, the count in the tab's badge, and the publish chain
 (build / revert / restore all) with the reload hints and the pack line under
-it. `lib/world/journal.ts` holds the reading, unit-tested (11 tests). The
+it. *(2026-10-14: the pivot replaces this chain with **releases** — one
+server package and one client update — and **environments** (`local`,
+optional `staging`, `production`) with promotion between them; phases P3–P5
+of the private workspace's `notes/`. None of that is implemented
+yet.)* `lib/world/journal.ts` holds the reading, unit-tested (11 tests). The
 last hex palette went with it: the page now uses the same tokens and dock
 grammar as the rest of the studio, mono included.
 
@@ -717,8 +723,8 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 .venv/bin/camelot server export --config /path/to/serverconfig.xml \
   --out server-rows.json
 .venv/bin/camelot serve --root "$DAOC_CLIENT" --server-rows server-rows.json
-# The world editor (6.3): one authoring directory per editing session. The
-# journal, the assembled fixtures.csv and the built pack live in DIR; `apply`
+# The world editor (6.3): the project's authoring directory. The journal,
+# the assembled fixtures.csv and the built pack live in DIR; `apply`
 # installs through the same path as `camelot client install` (and refuses
 # while the game runs). Open /world, click an object, move it.
 .venv/bin/camelot serve --root "$DAOC_CLIENT" --edits /path/to/authoring

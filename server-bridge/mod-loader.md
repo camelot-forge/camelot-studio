@@ -1,239 +1,151 @@
-# Mod loader — design
+# Server installer — design
 
-> Status: proposal, 2026-10-05. Nothing here is built yet. Grounded in
-> measurements recorded in
-> `workspace/notes`.
+> Supersedes the 2026-10-05 mod-loader design (the reversal is dated
+> 2026-10-14): the product is one server's content suite, so the Installer
+> applies *one release* of *one server* — there are no third-party mods to
+> arbitrate between, and no portability between servers to design for. The
+> design being implemented is `workspace/notes/server-install.md`
+> (phase P5); nothing here is built yet. The hook measurements this rests on
+> are in `workspace/notes`.
 
 ## What this is
 
-The piece that turns a pack from *data a human applies* into *a mod an
-operator installs, updates and removes*. It is an OpenDAoC plugin: a C#
-script in the server's script folder, discovered through the
-`IDatabaseUpdater` extension point, running once at boot.
+The server's half of a deploy: it turns a **release**'s server package into
+rows in the server's own database, records what it did, and can reverse it.
+Applied twice, it changes nothing the second time; reversed, the rows it
+touched go back to the values they held.
 
-It is not a package manager with dependencies and a repository. It runs one
-folder of mods, deterministically, at boot.
+It is a small C# script in the server's script folder, discovered through the
+`IDatabaseUpdater` extension point (the `[DatabaseUpdate]` attribute) and run
+once at boot, after the database is initialized and the scripts are compiled.
 
-## The shape: the manager owns identity
+It is not a service, a daemon or a package manager: no socket, no port, no
+database of its own, no dependency graph. One folder in, one state file out.
 
-**A mod never chooses where its rows live.** It declares *how many* ids it
-needs per table, and the manager allocates them, records them, and writes
-every row itself.
+The old mod loader arbitrated ids between third-party mods; with one content
+set that arbitration is unnecessary. Three of its ideas survive intact and
+are adopted here:
 
-Three things follow, and they are the point of the design:
+- a package ships declarative rows, never SQL;
+- the server owns the write;
+- the applied set is recorded.
 
-- **overlap is impossible by construction.** Not detected — impossible. Two
-  mods cannot claim the same ids because neither of them picks ids at all.
-  There is no conflict-resolution policy to design, and no range to entrust
-  to a third party;
-- **mods are portable between servers.** The same mod installed on two
-  servers receives different ids, and neither server cares;
-- **a mod author needs to know nothing about id spaces**, which is what an
-  ecosystem of third-party authors requires.
+## The contract: a folder and `state.json`
 
-## What it does not do
+Beside the server (not inside it), one folder the operator can back up:
 
-- **No client files.** A mod that brings a model or a texture needs client
-  formats written (MPAK is done and validated in-client; NIF writing is not).
-  The pack carries its `client` section and its payload members; the loader
-  **notes** how many items a pack declares and applies none of them — client
-  files live on players' machines. Applying them is `camelot client install`
-  (claims resolved by priority, every touched file rebuilt from the client's
-  own originals, removals exact); the design is
-  `notes/phase5-client-assets.md` in the workspace.
-- **No script mods.** A mod shipping `.cs` cannot be managed at runtime: the
-  server compiles the script folder once, *before* the hook runs. Such a mod
-  needs its files placed before boot, by an installer, not by this loader.
-- **No dependency resolution.** A mod declares what it requires; a missing
-  requirement skips that mod and records why. Ordering is by explicit
-  priority, not by graph.
-
-## The pack describes rows; it does not ship SQL
-
-A pack carries declarative rows. The manager generates the SQL, which is
-what makes allocation possible and what keeps a third-party mod from
-executing arbitrary statements against the server's database.
-
-```json
-{
-  "mod": {"id": "daoc.studio.spawns", "version": "0.2.1", "priority": 100},
-  "requires": [],
-  "allocations": [
-    {"table": "npctemplate", "count": 906}
-  ],
-  "rows": [
-    {
-      "table": "npctemplate",
-      "id": "spawn:albion_stone_minotaur",
-      "values": {
-        "Name": "Albion Stone Minotaur",
-        "ClassType": "DOL.GS.GameNPC",
-        "Model": 88,
-        "Size": "50-58",
-        "Level": "1-5"
-      }
-    }
-  ]
-}
+```text
+<server>/camelot/
+  releases/0009/…            # the server packages, as built
+  state.json                 # the applied releases, per table, with originals
+  applied/0009/applied.json  # one line per row: written, skipped, or refused
 ```
 
-- **`id`** is an optional logical name, local to the mod. A row that other
-  rows reference needs one; a row nothing points at does not.
-- **`values`** are column names and values. **No ids**: the row's key column
-  is filled by the manager from the allocation.
-- **references** to another row of the same mod use the logical name, and
-  the manager substitutes the allocated id. References to *existing* game
-  data (a client model id, a spell id) are literal and stay literal —
-  only the mod's own new rows are allocated.
+`state.json` is the whole contract, and the other surfaces read it: Deploy's
+dry run compares against it, the Console shows it. Per release and per table
+it records the rows written, the values they held before (the reversal data),
+and the ids allocated. Nothing else is stored and nothing is derived: the
+file is the truth a later deploy, a dry run or a rollback reads.
 
-## A mod is one archive, read in memory, never extracted
+## Declarative rows, never SQL
 
-A mod is the `.tar.gz` our builder already emits -- one artifact, covered by
-its own `checksums.lock`, with a self-describing `PACK.json`. A directory of
-loose files would be inspectable without `tar tzf`, and that is its only
-advantage: it is not atomic, and an operator editing an installed file makes
-the provenance dishonest about what was actually deployed.
+A package ships **rows** — a table, a key, column names and values — never
+statements. The Installer generates the SQL itself, which is what lets it
+record originals and keeps a package from executing arbitrary statements
+against a database. No writer chooses an id either: the ids a release uses
+are the ones the project allocated, and the release carries them.
 
-**The loader never extracts.** The manifest and the row descriptions are
-JSON, small, and read straight out of the archive. Nothing the loader
-handles is written to disk, which removes the one real hazard of accepting
-archives from third parties -- path traversal during extraction. The pack's
-client payloads are applied elsewhere: extraction happens on the operator's
-machine, in `camelot client install`, never in the server process.
+## Content, and state: the ownership map
 
-The cost is reading gzip and tar in C#, which .NET 10 provides directly
-(`GZipStream` and `System.Formats.Tar`); no external dependency.
+The database holds content *and* state. The Installer only ever writes
+content, on a published map of what that means:
 
-## What the manager has to know, and where it gets it
-
-The manager needs a schema for each table it writes. It does not hard-code
-one: it **reflects over the server's own `DataObject` types**, exactly as
-`AutoXMLDatabaseUpdate` already does to guess a package's type. That yields
-the column names and their types, so values can be written as parameters
-rather than interpolated strings.
-
-Two things reflection does **not** give, and which stay as small built-in
-maps in the manager:
-
-1. **the allocatable key column per table** — `npctemplate`'s `TemplateId`
-   is not declared as a key (`DbNpcTemplate` declares none; see the issue on
-   `AutoXMLDatabaseUpdate`), so reflection cannot find it;
-2. **the reference checks used before uninstall** (below), which are
-   per-table knowledge about what points at what.
-
-Both maps grow only when support for a new table is added, and both live in
-the loader rather than in a pack, so a mod cannot claim an id column or
-assert that nothing references it.
-
-## Provenance and allocation
-
-One table, created by the loader if absent:
-
-```sql
-CREATE TABLE IF NOT EXISTS `camelot_mod` (
-  `ModId`       VARCHAR(255) NOT NULL,
-  `Version`     VARCHAR(64)  NOT NULL,
-  `TableName`   VARCHAR(255) NOT NULL,
-  `IdLow`       BIGINT       NOT NULL,
-  `IdHigh`      BIGINT       NOT NULL,
-  `AppliedAt`   DATETIME     NOT NULL,
-  `Result`      VARCHAR(255) NOT NULL,
-  PRIMARY KEY (`ModId`, `TableName`)
-);
-```
-
-**Allocation is stable across updates.** A mod keeps the ids it was given
-the first time, because in-game data may already point at them: an item a
-player is wearing, a creature in a saved spawn. An update that fits the
-block reuses it unchanged.
-
-**Blocks are rounded up.** A mod declaring 906 ids receives a round block
-rather than exactly 906, so an update that adds content still fits and does
-not force a reinstall. The cost is unused ids, which are free; the cost of
-being wrong without headroom is a stable-id violation, which is not. The
-exact rounding is a constant in the loader.
-
-`Result` is `SUCCESS` or the failure text. A mod that fails is recorded and
-retried on the next boot, not swept away, and an operator can see what went
-wrong without reading the server log.
-
-**No row-level provenance.** Recording every row would make the table as
-large as the content and would still not survive an operator editing rows by
-hand. The allocated block is the contract: the manager owns it, and removal
-deletes exactly it.
-
-## Uninstall refuses to destroy data in use
-
-Removing a mod whose content is already referenced in game would leave
-players pointing at rows that no longer exist — an item slot, a saved spawn,
-a character. Before deleting anything, the manager runs the table's
-reference checks and **refuses** if any of them finds a hit:
-
-| table | check before uninstall |
+| Ours (content) | Theirs (state) — never written, never copied |
 |---|---|
-| `npctemplate` | is any row of `mob` using a `TemplateId` in the block? |
+| `mob`, `worldobject`, `door`, `path` (spawns and world rows) | `character`, `inventory`, `house*`, `guild`, `account` |
+| `gamedata` tables: items, monsters, spells, styles, loot, shops | sessions, chat, logs, statistics |
+| the release's own files | anything written at runtime by players |
 
-A refusal is reported with the count and the referring table, and nothing is
-deleted. Forcing the removal is deliberately **not** offered: an operator who
-truly wants it can delete the rows with SQL and accept the consequences,
-which is a decision made outside the tool rather than a flag that makes
-destruction convenient.
+The map lives in the code as a table (`OWNED_TABLES`), is reported by
+`camelot server tables`, and is what the Installer validates a release
+against: a release that names a table outside the map is **refused by name**,
+before anything is written. *Consequence, and it is a good one:* the local
+test server is never a copy of production — it is a fresh baseline plus the
+content, and an `expect` check is legitimate on our tables only.
 
-## Lifecycle
+## Applying a release
 
-One boot, decided by what is on disk versus what the provenance table says:
+At boot the Installer applies the releases marked as *wanted* for its
+environment, in order; on demand the Console asks it to apply or reverse one.
+Both paths write the same records.
 
-| on disk | provenance | action |
-|---|---|---|
-| absent | absent | nothing |
-| present, same version | present | nothing |
-| present, new version | present | **update** — rows regenerated, block reused |
-| present | absent | **install** — allocate, generate, record |
-| absent | present | **uninstall** — reference checks, then delete |
+**Idempotent.** Applying release N twice changes nothing the second time —
+the state says so, and the second run is a recorded no-op.
 
-## Where it hooks, and the hazard
+**Recorded.** Every row's previous values are written to `state.json` before
+the row is touched, so a reversal is exact: the recorded values back for an
+edit, the whole row for a removal. A new row's id goes to a tombstone when
+the row is removed — never reused, not even after a rollback.
 
-`UpdateDatabase()`, reached once at boot after `CompileScripts()` and
-`Properties.InitProperties` and before the world managers. The mod folder is
-a server property, defaulting to `scripts/mods`, read through
-`ServerProperties` like every other path in the server.
+**Reversible.** Reversing release N writes back the originals it recorded and
+marks the release reversed. In the pipeline, a rollback is a *forward
+release* carrying earlier content, never a backwards movement.
 
-**The hazard:** `if (!UpdateDatabase()) return false;` — an exception
-escaping the loader makes the server **refuse to boot**. The loader catches
-everything per mod, records the failure, and continues. One bad mod must
-never stop a server from starting, which is also how `AutoXMLDatabaseUpdate`
-behaves.
+**One transaction per release.** Half-applied is impossible by construction:
+the rows of one release go in one transaction; if any statement fails, the
+transaction is rolled back and the state file is not touched, and the log
+says what failed and where.
 
-## Failure policy
+**The id-space check.** The release carries the ids it allocated and the
+id-space snapshot it allocated against. The Installer compares the snapshot
+with the server's actual tables: equal → apply; grown but no collision →
+apply and report; collision → **refuse, naming the id and the row that holds
+it**.
 
-| situation | behaviour |
-|---|---|
-| unreadable manifest | that mod is skipped and recorded; the boot continues |
-| a required mod is absent | that mod is skipped and recorded |
-| a row fails to write | the mod's transaction is rolled back; recorded as failed |
-| an update would exceed the allocated block | refused, and recorded: the mod must be reinstalled |
-| a reference check fails on uninstall | refused, and recorded |
+**Offline-safe.** No network, no downloads: everything the Installer needs is
+in `camelot/releases/<n>/`. A server that cannot reach the internet is still
+updated by copying a folder.
 
-Nothing is ever half-applied: each mod's rows go in one transaction.
+## What it deliberately does not do
 
-## Decisions
+- **No client files.** A release's client half is applied on the clients:
+  `camelot client install` on the operator's machines, the feed and a
+  launcher on the players'. The server never touches a client.
+- **No scripts, no schema.** The server compiles its script folder once,
+  *before* the hook runs, and a schema change cannot be written by us at all.
+  Both travel as **manual steps** attached to the release (`needs.manual`),
+  each ticked in the deploy log; a release whose steps are unticked stays
+  **visibly incomplete** in the log, in the Console and in `verify`.
+- **No reload.** The running world reads its own rows once, at startup. The
+  release *names* the ritual it needs (`needs.reload` — `doors`, `mob`,
+  `object` — and `needs.restart`); a human performs it in game or the Console
+  performs it, and the deploy log records the result.
+- **No dependency resolution, no priorities.** One release of one server:
+  there is nothing to arbitrate between and no ordering to negotiate.
+- **No second writer.** No other part of the suite writes a server's tables:
+  the Console asks the Installer, Deploy hands it a folder, and the Studio
+  never talks to a server.
 
-- **The manager owns identity.** A mod declares how many ids it needs; the
-  manager allocates, records and writes. Overlap is impossible by
-  construction, conflict policy does not exist, and mods are portable
-  between servers.
-- **Packs carry declarative rows, not SQL.** The manager generates the
-  statements, which is what makes allocation possible and what keeps a
-  third-party mod from executing arbitrary SQL.
-- **Blocks are rounded up**, so an update fits without a reinstall.
-- **A mod is a `.tar.gz`, read in memory and never extracted** -- atomic,
-  checksummed, and free of the path-traversal hazard.
-- **Client payloads are applied outside the server** (2026-10-08): the pack
-  carries them, the loader notes their count at apply time, and
-  `camelot client install` applies them on each client. The earlier decision
-  deferred them with their section reserved; the section is now filled.
-- **Uninstall refuses when the mod's content is in use**, and forcing is not
-  offered.
-- **The manager reflects over the server's `DataObject` types** for column
-  names and types, with only the allocatable key column and the reference
-  checks kept as small built-in maps, in the loader rather than in a pack.
+## The unmanaged fallback
+
+A server that does not run the Installer can still be written directly: that
+is `--db-write` today, and it remains, behind Deploy, as the documented
+fallback. Same rows, fewer guarantees — no record on the server, no
+idempotence, and the originals live on the operator's machine instead of in
+`state.json`.
+
+## The hook, and the hazard
+
+`UpdateDatabase()` is reached once at boot, after the scripts are compiled —
+the same moment the DOL XML packages already use. The measured hazard:
+`if (!UpdateDatabase()) return false;` — an exception escaping the hook makes
+the server **refuse to boot**. The Installer catches everything, records the
+failure in its own records, and returns; one bad release must never stop a
+server from starting.
+
+## Status
+
+Proposal, 2026-10-14; implemented by phase P5 of the vision. The C# is a
+later piece, and its contract comes first: `core/tests/` carries a **fake
+installer** that reads the same folder and writes the same `state.json`, so
+the Studio side is testable without a server.

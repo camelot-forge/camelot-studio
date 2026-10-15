@@ -13,6 +13,15 @@ private-server community.
 > are refused by an empirical deformation check and remain in the bind pose.
 > State: `docs/status.md`. Format reference: `docs/formats.md`.
 
+> **Where this is going (2026-10-14).** Camelot Forge — the suite this tool
+> belongs to — is becoming the content suite for **one** OpenDAoC server and
+> its client: one project (the *Monde*) holds the whole content of one shard,
+> and content leaves it as numbered, immutable **releases** — a server
+> package and a client update — promoted unchanged through environments
+> (`local`, optional `staging`, `production`) and published as a feed the
+> players' launcher reads. None of this is built yet: it is a proposal,
+> designed in the private workspace's `notes/`.
+
 **Principle: engine fidelity.** The project aims to reproduce the client's
 own behaviour — same tables, order and values — and to make every approximation
 explicit. Animation channels are applied absolute (statics included, following

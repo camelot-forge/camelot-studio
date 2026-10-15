@@ -29,10 +29,12 @@ OpenDAoC adapter
 real DAoC client verification
 ```
 
-The canonical pack is server-neutral: it must not depend on either server's
-database tables, script directories or C# types. The server must consume
-stable IDs, manifests, glTF/JSON artifacts and reports. It must not duplicate
-NIF, KFA, MPAK or fig3 parsing in C#.
+The pack is declarative and data-first -- stable IDs, manifests, glTF/JSON
+artifacts, reports, and server rows, never SQL. **Server neutrality is no
+longer a product goal** (reversed 2026-10-14 -- see "Server neutrality and
+package boundary" below): there is one target, OpenDAoC, and a pack is one
+release of one server's content. The server must not duplicate NIF, KFA,
+MPAK or fig3 parsing in C#.
 
 ## Evidence policy
 
@@ -50,24 +52,28 @@ record the result as confirmed, disproved or unresolved.
 
 ## Server neutrality and package boundary
 
-**OpenDAoC is the target platform**, and the only one. It is not part of the
-canonical Studio schema -- the contract stays neutral so the pack is portable
--- but there is one projection, one adapter and one deployment path to build
-and keep working:
+**Server neutrality is no longer a product goal** (reversed 2026-10-14,
+operator decision): one server, one target. What replaced it:
 
-- a neutral logical model, appearance, slot, animation and dependency model;
+- **the family tag** -- every change carries the family it lands in
+  (`world` | `rows` | `tables` | `assets` | `rules`), which is what a release
+  needs to build both halves: the server package and the client update;
+- **the projection naming** -- `targets/opendaoc/…` stays, kept as a name for
+  the one projection's home rather than a promise of siblings.
+
+There is one projection, one deployment path and one server to keep working:
+
+- a logical model of appearance, slots and animation;
 - a client profile describing the supported DAoC build and asset mappings;
 - an OpenDAoC projection mapping logical ids onto its own tables and wire
   format;
-- an OpenDAoC plugin implementing the install/update/uninstall lifecycle;
+- an Installer applying one release idempotently
+  (`server-bridge/mod-loader.md`);
 - target-specific ID maps, range checks and compatibility metadata.
 
-The projections may share most of their structure, but they must not be assumed
-to produce identical database or script files. A pack can therefore be
-server-agnostic while still requiring a small adapter for each supported
-server. Ordinary asset deployment should use data, generated XML and optional
-script plugins; a server-core change is reserved for genuinely new protocol or
-runtime capabilities.
+A pack is built for that one target and deployed to that one server; ordinary
+content deployment uses declarative rows and data files, and a server-core
+change stays reserved for genuinely new protocol or runtime capabilities.
 
 ### Impact of an asset change
 
@@ -83,10 +89,12 @@ new ID. The client distribution and the server projection must be released as
 one compatible content unit, with an explicit fallback or rejection policy for
 unpatched clients.
 
-### Portable pack layout
+### Pack layout
 
-The first pack format should be declarative and data-first, not an arbitrary
-C# plugin. A proposed layout is:
+**The pack is not a portable unit** (reversed 2026-10-14, with the section
+above): it is the **server package** of one release of one server, cut from
+the project's change log against a recorded base. The per-mod client profile
+and the dependency list are gone with the ecosystem. A proposed layout is:
 
 ```text
 content-pack/
@@ -94,28 +102,28 @@ content-pack/
   manifest/content.json
   manifest/appearance.json
   manifest/animations.json
-  profiles/client-<build>.json
   targets/opendaoc/...
   client/patch-manifest.json
   checksums.lock
 ```
 
-`pack.json` should carry a schema version, pack ID/version, client profile,
-dependencies, entry points, target support and artifact hashes. The canonical
-manifests use namespaced logical IDs; generated target files map those IDs to
-OpenDAoC values. The runtime plugin is the mod loader of the section under
-Phase 4, not a collection of small adapters.
+`pack.json` should carry a schema version, pack ID/version, the client build,
+entry points, the target and artifact hashes. The canonical manifests use
+namespaced logical IDs; generated target files map those IDs to OpenDAoC
+values. The lifecycle that consumes the pack is the Installer's
+(`server-bridge/mod-loader.md`), not a collection of small adapters.
 
 Visual regression evidence uses both a structured record and a screenshot when
 available. The record includes race, gender, selected options, expected and
 actual result, client/browser build, pack version, relevant IDs and artifact
 hashes.
 
-## OpenDAoC first adapter
+## OpenDAoC: the only target
 
-OpenDAoC is the first server target. The canonical Studio pack remains
-server-neutral; this only prioritizes the first projection, validation loop and
-deployment documentation.
+OpenDAoC is the only server target (2026-10-14; the earlier "first of
+several" framing is dropped with server neutrality -- see the section above).
+What follows is the reconnaissance that chose it, the acceptance gate and its
+measured outcomes.
 
 The official documentation was last updated on 2026-07-22. Its current
 integration-relevant statements are:
@@ -149,7 +157,7 @@ record these differences rather than silently copying the guide:
 - script compilation and XML package deployment need explicit release-artifact
   verification; an empty runtime script directory can otherwise look healthy.
 
-The first OpenDAoC adapter acceptance gate is therefore:
+The OpenDAoC acceptance gate is therefore:
 
 1. pin the `DAOC CLIENT V2` profile, exact client build and relevant hashes;
    **measured 2026-09-24: the corpus is client build `1.130`**
@@ -307,8 +315,8 @@ describe, without embedding proprietary client binaries:
 - source client version, schema version and generation metadata;
 - validation status and unresolved references.
 
-Each server target should consume this contract through a small adapter. The
-adapters must not reimplement client table or fig3 semantics.
+OpenDAoC should consume this contract through a small adapter. The adapter
+must not reimplement client table or fig3 semantics.
 
 **Delivered (2026-09-24) as `core/camelot/contract.py`, schema `1.0.0`.** The
 manifest covers the fields above except the per-item extension and the dye,
@@ -357,11 +365,12 @@ animation states, 0 unresolved, ~4.5 s, byte-identical on rebuild.
 
 **Delivered (2026-10-06)**: the pack carries a **deployment document**
 instead of an XML data package -- declarative rows plus an allocation
-request, designed in `server-bridge/mod-loader.md`. A mod declares how many
-ids it needs and describes its rows; the manager allocates, records and
-writes. No mod chooses an id, so overlap is impossible rather than
-detected, and no mod ships SQL, so a third-party mod cannot execute what it
-likes against a database.
+request, designed in `server-bridge/mod-loader.md` at the time (that design
+is superseded by the Installer, 2026-10-14). The pack declares how many ids
+it needs and describes its rows; the manager allocates, records and writes.
+No writer chooses an id, so overlap is impossible rather than detected, and
+a pack ships no SQL: nothing it carries can execute what it likes against a
+database.
 
 **Delivered (2026-10-07)**: the loader
 (`server-bridge/camelot-mod-loader/`) consumes the document on a booted
@@ -392,7 +401,16 @@ selection, spawn and reload. Use the emulator and the real client as
 acceptance environments. Add a bridge or daochook integration only after the
 manifest-only path is understood and reproducible.
 
-### The target is a mod ecosystem, not a one-off pack (2026-10-05)
+### The target is a mod ecosystem, not a one-off pack (2026-10-05; reversed 2026-10-14)
+
+> **Reversed 2026-10-14 (operator decision).** One server, one content set.
+> The product is a content suite for **one** OpenDAoC server and its client:
+> everything authored lands in one project (the Monde) and leaves it as
+> numbered, immutable releases -- a server package and a client update --
+> promoted unchanged through environments. The mod-ecosystem target (many
+> authors, many mods per server, mods portable between servers) is dropped,
+> and with it the arbitration and portability story below. This section is
+> kept as the record of the superseded decision.
 
 The intended product is not a single pack for one server. It is a format many
 authors publish against, so a server operator can add, update and remove mods
@@ -480,6 +498,13 @@ reach, no fork to maintain, and independence from the XML defects -- our path
 stops depending on that fix, though the fix is still worth upstreaming for
 everyone else.
 
+**Where the design lives now.** The pivot's design is the private workspace's
+`workspace/notes/`: the vision (the scope, the phases P1-P8,
+the invariants, the acceptance scenario) and its satellites -- project,
+pipeline, client update, server install, console. Where this document and
+that spec set disagree, the spec set is the authority; this document keeps
+the delivered state and the measurements.
+
 ## Phase 5 — Editing and productization
 
 The server pack works end to end, the MPAK output *is* validated against the
@@ -513,8 +538,10 @@ Decided 2026-10-11 (operator request, reconnaissance done the same day): a
 map viewer **and editor** that renders the world from the client's own data,
 shows the server's spawns, edits placements, and publishes the result through
 the Phase 5 chain. The design is `notes/phase6-world-editor.md` in the
-private workspace; it is **not** a new pipeline — it is a front end over
-`mod build` / `client install` / the loader.
+private workspace; it is **not** a new pipeline — it is a front end over the
+pack build and client install the studio already has. (2026-10-14: the pivot
+folds that chain into **releases** -- one server package and one client
+update -- and **environments**; see the note under Phase 4.)
 
 The reconnaissance measured the three sides: the client ships the world per
 zone (`zones/`, 2.3 GB — a 256×256 PCX heightmap, terrain patches,
@@ -546,8 +573,8 @@ In order (each step testable without the game, except the ladder):
    **authoring directory**;
 5. **6.4 — spawns and publishing**: the DB (or an exported snapshot) as a
    layer, spawn editing, `mob`/`worldobject` in the loader's schema (their
-   key is a GUID: mod rows get deterministic ids derived from the mod, not
-   allocated blocks), and the publish flow;
+   key is a GUID: new rows get deterministic ids derived from the change,
+   not allocated blocks), and the publish flow;
 6. **6.5 — later**: terrain and texture editing (needs a BC1 encoder and
    regenerated patches; Uthgard's HMapEdit proves the client accepts edited
    terrain), the dungeon/city variants of the editor, and new décor models
@@ -570,10 +597,13 @@ content authorable in the same pipeline as everything else.
 
 ## Decisions recorded (continued)
 
-- **The product is a mod ecosystem, not a single pack.** The pack format is
-  the mod format: a manifest of logical ids, target projections and checksums
-  is what a mod author publishes and an operator installs. See the section
-  under Phase 4.
+- **The product is a mod ecosystem, not a single pack** -- **reversed
+  2026-10-14** (operator decision): one server, one content set. The product
+  is a content suite for one shard: one project holds the server's whole
+  content and leaves it as numbered, immutable releases. The mod bullets that
+  follow -- install/update/remove, the loader, id ranges, client-file
+  precedence -- are kept as the record of the superseded position; see the
+  reversal note under Phase 4.
 - **Mods must be installable, updatable and removable**, with a server
   restart at most. This makes *provenance* a requirement, not a nicety: the
   server has to know which rows belong to which mod.
@@ -599,10 +629,10 @@ content authorable in the same pipeline as everything else.
 - The canonical client corpus is `DAOC CLIENT V2`, resolved through
   `$DAOC_CLIENT`; its exact build version must be recorded in the client
   profile.
-- **OpenDAoC is the only target.** The contract stays server-neutral so the
-  pack is portable, but there is one projection, one adapter and one
-  deployment path: OpenDAoC's. DOLSharp is superseded and is not supported;
-  see the decision note under Phase 4.
+- **OpenDAoC is the only target.** The contract is declarative -- rows and
+  manifests, never SQL -- and there is one projection and one deployment
+  path: OpenDAoC's. DOLSharp is superseded and is not supported; see the
+  decision note under Phase 4.
 - OpenDAoC is the end-to-end acceptance target.
 - Visual observations are stored as structured reproduction cases plus
   screenshots when available; no single storage format needs to be chosen by
