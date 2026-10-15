@@ -689,6 +689,21 @@ with both sides, Delete removing and journaling, and the session left clean).
 The three older harnesses still pass (46 viewer + 32 builder + the world
 grammar probe, whose tool clicks now go through the keys the strip
 documents).
+**The project's first slice (2026-10-15).** The spec set in the private
+workspace (`notes/`) makes the product the content suite of one server;
+its first phase is the container. `camelot project new|info|verify`
+(`core/camelot/project.py`) create and read a project: `project.json` (the
+schema `camelot.project/1`, the base fingerprints, the cache policy, the
+environments), the git scaffolding (a `.gitignore` for the derived data and
+for this machine's own file, a `.gitattributes` with the LFS rules and the
+union merge of the deploy log) and `machine.json` — untracked on purpose,
+because nothing tracked may be machine-specific. The base is **referenced by
+fingerprint** and never copied: the three resources a real client is read
+through (`game1127.dll`, `gamedata.mpk`, `zones/zones.mpk#zones.dat` — 5.9 MB,
+582 KB and 9.8 KB) hash in **0.4 s** on the operator's rig, which answers M-4;
+`verify` reads them back as `ok` / `moved` / `missing`, naming the resource
+that moved. 22 unit tests, none of which needs a client (the synthetic base is
+three files a fixture writes); `ruff check` and `ruff format --check` clean.
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.
@@ -723,6 +738,14 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 .venv/bin/camelot server export --config /path/to/serverconfig.xml \
   --out server-rows.json
 .venv/bin/camelot serve --root "$DAOC_CLIENT" --server-rows server-rows.json
+# The project (P1 of the private workspace's `notes/`): the whole content
+# of one server in one folder. `new` records the base by fingerprint (three
+# resources, ~0.4 s on the operator's rig) and writes the git scaffolding; the
+# derived data (ids.json, the cache, the release payloads, the feed) stays out
+# of git, and this machine's own paths live in the untracked machine.json.
+.venv/bin/camelot project new camelot-hills --client "$DAOC_CLIENT" --git
+.venv/bin/camelot project info --dir camelot-hills
+.venv/bin/camelot project verify --dir camelot-hills
 # The world editor (6.3): the project's authoring directory. The journal,
 # the assembled fixtures.csv and the built pack live in DIR; `apply`
 # installs through the same path as `camelot client install` (and refuses

@@ -20,6 +20,11 @@ Commands:
                                   (mod.json, client/, client.patch.json)
   camelot client install PACK     apply a mod's client half to a client
                                   directory (also: uninstall, status, verify)
+  camelot project new NAME --client DIR
+                                  create a project — the whole content of one
+                                  server — and its git scaffolding; also:
+                                  info (where it stands) and verify (read the
+                                  base back against its fingerprints)
   camelot serve [--root DIR]      local daemon: asset library + viewer
 
 Paths in the manifest starting with ``DAOC CLIENT/`` are resolved against the
@@ -307,6 +312,89 @@ def cmd_server(args) -> int:
     counts = ", ".join(f"{name} {count:,}" for name, count in snapshot.counts().items())
     print(f"wrote {args.out}: {counts}")
     return 0
+
+
+def cmd_project(args) -> int:
+    from pathlib import Path
+
+    from . import project as projects
+
+    if args.project_cmd == "new":
+        names = [item.strip() for item in args.environments.split(",") if item.strip()]
+        try:
+            created = projects.new(
+                Path(args.dir) / args.name,
+                name=args.name,
+                client=args.client or os.environ.get("DAOC_CLIENT"),
+                cache=args.cache,
+                environments=names,
+                author=args.author,
+                git=args.git,
+            )
+        except projects.ProjectError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        shown = projects.info(created)
+        print(
+            f"created {shown['root']}: {shown['resources']} base resources, "
+            f"environments {', '.join(shown['environments'])}"
+        )
+        if shown["build"]:
+            print(f"client build: {shown['build']}")
+        else:
+            print("client build: not recorded (no client given)")
+        if shown["git"]:
+            print("git: initialised (no commit, no remote — the history is yours)")
+        return 0
+
+    try:
+        project = projects.load(args.dir)
+    except projects.ProjectError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    if args.project_cmd == "info":
+        shown = projects.info(project)
+        rows = (
+            ("root", shown["root"]),
+            ("created", shown["created"]),
+            (
+                "base",
+                f"{shown['build'] or 'no build'} · {shown['resources']} resources",
+            ),
+            ("client", shown["client"] or "not resolved on this machine"),
+            ("author", shown["author"]),
+            ("git", "yes" if shown["git"] else "no"),
+            ("cache", shown["cache"]),
+            ("environments", ", ".join(shown["environments"])),
+            ("journal", f"{len(shown['shards'])} shard(s)"),
+            ("releases", str(len(shown["releases"]))),
+        )
+        print(f"{shown['name']}  ({shown['format']})")
+        for key, value in rows:
+            print(f"  {key:<13} {value}")
+        if shown["lock"]:
+            print(
+                f"  {'lock':<13} held by {shown['lock']['author']} "
+                f"(pid {shown['lock']['pid']} on {shown['lock']['host']})"
+            )
+        return 0
+
+    try:
+        findings = projects.verify(project, args.client)
+    except projects.ProjectError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    wrong = 0
+    for finding in findings:
+        if finding["state"] != "ok":
+            wrong += 1
+        line = f"{finding['state']:<8} {finding['resource']}"
+        if finding["detail"]:
+            line += f"  {finding['detail']}"
+        print(line)
+    print(f"{len(findings)} resource(s): {len(findings) - wrong} ok, {wrong} not")
+    return 1 if wrong else 0
 
 
 def cmd_serve(args) -> int:
@@ -961,6 +1049,27 @@ def main(argv=None) -> int:
     ep.add_argument("--config", help="the server's own serverconfig.xml (DBConnectionString)")
     ep.add_argument("--dsn", help="mysql://user:password@host:port/database instead")
     p.set_defaults(func=cmd_server)
+
+    p = sub.add_parser("project", help="the project: the whole content of one server")
+    pp = p.add_subparsers(dest="project_cmd", required=True)
+    np = pp.add_parser("new", help="create a project (and its git scaffolding)")
+    np.add_argument("name", help="the project's name; also its directory's name")
+    np.add_argument("--dir", default=".", help="where to create it (default: .)")
+    np.add_argument("--client",
+                    help="the DAoC client to record as the base (default: $DAOC_CLIENT)")
+    np.add_argument("--cache", choices=("shared", "local"), default="shared",
+                    help="where derived data lives (default: shared)")
+    np.add_argument("--environments", default="local,production",
+                    help="comma-separated names (default: local,production; staging is optional)")
+    np.add_argument("--author", help="the name that signs your journal shards")
+    np.add_argument("--git", action="store_true",
+                    help="run git init in the new project (no commit, no remote)")
+    ip = pp.add_parser("info", help="what the project is, and where it stands")
+    ip.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    vp = pp.add_parser("verify", help="read the base back against the recorded fingerprints")
+    vp.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    vp.add_argument("--client", help="the client to read (default: this machine's own answers)")
+    p.set_defaults(func=cmd_project)
 
     args = ap.parse_args(argv)
     return args.func(args)
