@@ -24,7 +24,7 @@
 <section class="card">
 	<h3>
 		<Bone size={14} /> Bones
-		<span class="card-meta">{joints.length > 0 ? joints.length : 'no sidecar'}</span>
+		<span class="card-meta">{joints.length > 0 ? joints.length : 'no .skin.json'}</span>
 		<button
 			type="button"
 			class="eye"
@@ -74,9 +74,9 @@
 			type="button"
 			class="link"
 			onclick={() => (showTable = !showTable)}
-			title={`the client’s own table (figures/animnode.dat) carries 175 channels; 0–${MAX_VERIFIED} are the ones our corpus verified`}
+			title={`the client’s own table (figures/animnode.dat) carries 175 channels; 0–${MAX_VERIFIED} are the ones checked against the client`}
 		>
-			{showTable ? 'Hide' : 'Show'} canonical table (0–{MAX_VERIFIED})
+			{showTable ? 'Hide' : 'Show'} the channel table (0–{MAX_VERIFIED})
 			<ChevronDown size={14} class={showTable ? 'flip' : ''} />
 		</button>
 	{/if}
@@ -84,8 +84,8 @@
 	{#if tableOpen}
 		{#if query}
 			<p class="hint">
-				{filterJoints(canonicalJoints(), query).length} of the canonical table’s {MAX_VERIFIED + 1} channels
-				match “{query}”.
+				{filterJoints(canonicalJoints(), query).length} of the table’s {MAX_VERIFIED + 1} channels match
+				“{query}”.
 			</p>
 		{/if}
 		<ul class="bones table">
