@@ -704,10 +704,14 @@ def _http(error: WorldError) -> HTTPException:
     return HTTPException(status_code=404, detail=str(error))
 
 
-def build_world_router(config: ServeConfig) -> APIRouter:
+def build_world_router(config: ServeConfig, world: World | None = None) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
-    world = World(config)
-    world.editor = Editor(config)
+    # The world (and its editor) may be built by the caller and shared — that
+    # is what lets Home read the *same* session, and what a project switch
+    # (slice 2b) will re-point once instead of per router.
+    world = world if world is not None else World(config)
+    if world.editor is None:
+        world.editor = Editor(config)
     server_rows = ServerRows(config)
 
     @router.get("/world/index", response_model=WorldIndexPayload)

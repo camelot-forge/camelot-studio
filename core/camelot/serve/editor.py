@@ -345,6 +345,25 @@ class Editor:
             for patch in line.rows
         ]
 
+    def pending_counts(self) -> dict[str, int]:
+        """What a save would still write, counted the way the panel counts it:
+        the **objects** the journal owes (distinct fixture ids — a group moved
+        five times is five objects, not twenty-five gestures) and the rows the
+        database has not been given yet (distinct `table:key`). One definition,
+        so the chip, the panel and Home cannot disagree."""
+        if not self.available:
+            return {"fixtures": 0, "rows": 0}
+        fixtures = {
+            int(line.op["id"])
+            for line in self.pending_lines()
+            if line.family == "world" and line.op
+        }
+        rows = {
+            f"{patch.get('table')}:{patch.get('key')}"
+            for _line, patch in self.pending_patches()
+        }
+        return {"fixtures": len(fixtures), "rows": len(rows)}
+
     def pending_patches(self) -> list[tuple[journal_mod.Line, dict]]:
         """The row patches no publish covers yet, with the line that carries
         them (the build and the write both need the pairing)."""
@@ -410,6 +429,7 @@ class Editor:
             read_only=bool(self.config.read_only),
             holder=self._holder() if self.config.read_only else "",
             mod=mod,
+            pending=self.pending_counts(),
             zones=[EditorZone(id=zone, ops=ops) for zone, ops in sorted(zones.items())],
             rows=[EditorRowOp(zone=zone, patches=patches) for zone, patches in sorted(rows.items())],
             pack=pack,

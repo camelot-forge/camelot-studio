@@ -267,7 +267,7 @@ check(
 );
 check(
 	'the app bar carries the session chip and the two actions',
-	(await text('.appbar .session'))?.endsWith('not saved') === true &&
+	(await text('.appbar .chip'))?.endsWith('not saved') === true &&
 		(await page.locator('.appbar button:has-text("save")').count()) === 1 &&
 		(await page.locator('.appbar button:has-text("undo")').count()) === 1,
 	await text('.appbar .session')

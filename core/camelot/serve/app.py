@@ -12,10 +12,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from .. import __version__
 from .api import build_router
 from .config import ServeConfig
+from .editor import Editor
+from .home import build_home_router
 from .index import AssetIndex
 from .security import host_allowed, origin_allowed
 from .watcher import IndexWatcher
-from .world import build_world_router
+from .world import World, build_world_router
 
 
 def create_app(config: ServeConfig) -> FastAPI:
@@ -62,8 +64,15 @@ def create_app(config: ServeConfig) -> FastAPI:
             response.headers["cache-control"] = "no-cache"
         return response
 
+    # One world and one editor for every router: Home reads the same session
+    # the world editor writes (`home.md` §1), and the switch will re-point them
+    # here and nowhere else.
+    world = World(config)
+    world.editor = Editor(config)
+
     app.include_router(build_router(config, index, watcher))
-    app.include_router(build_world_router(config))
+    app.include_router(build_world_router(config, world))
+    app.include_router(build_home_router(config, world))
 
     static_dir = config.static_dir
     if static_dir and Path(static_dir).exists():

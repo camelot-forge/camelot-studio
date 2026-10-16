@@ -392,6 +392,11 @@ class EditorState(BaseModel):
     mod: dict[str, Any] = {}
     zones: list[EditorZone] = []
     rows: list[EditorRowOp] = []
+    #: What a save would still write, counted the way the panel counts it
+    #: (`fixtures` = distinct fixture ids, `rows` = distinct `table:key` the
+    #: database has not been given). One definition, so the chip, the panel and
+    #: Home's rows cannot disagree.
+    pending: dict[str, int] = {}
     pack: EditorPack | None = None
     client: EditorClient | None = None
     #: What was last published: the op count at that moment, so the panel can
@@ -429,3 +434,76 @@ class EditorRestore(BaseModel):
     client: EditorClient
     rows: int = 0
     state: EditorState
+
+
+class HomeDaemon(BaseModel):
+    """What this daemon serves, said before anything else is asked (`home.md`
+    §1): the client it reads, the port, the version and the build."""
+
+    version: str
+    build: str = "unknown"
+    host: str
+    port: int
+    client: str
+    zones: int = 0
+
+
+class HomeProject(BaseModel):
+    """The project this daemon serves — or nothing, and `held`/`read_only` say
+    why it cannot be written (`project.md` §D13)."""
+
+    path: str
+    name: str
+    #: `{"fixtures": n, "rows": m}` — what a save would still write.
+    pending: dict[str, int] = {}
+    read_only: bool = False
+    holder: str = ""
+
+
+class HomeRecent(BaseModel):
+    """One row of the machine's list: the entry, plus what the disk says
+    *now* (`home.md` §D1 — the registry carries no copies)."""
+
+    path: str
+    name: str
+    opened: str = ""
+    exists: bool
+    project: bool
+
+
+class HomePayload(BaseModel):
+    """Home's first paint: the daemon's facts, the current project, the
+    machine's list. Health is asked one row at a time (`/home/health`)."""
+
+    daemon: HomeDaemon
+    project: HomeProject | None = None
+    recents: list[HomeRecent] = []
+    #: Set when the registry itself is unreadable: named, and the list empty —
+    #: a convenience never stands between the operator and a folder.
+    recent_error: str = ""
+
+
+class HomeHealth(BaseModel):
+    """One project's `verify` (`home.md` §D2): `ok`, `changed`, `missing`,
+    `no-client`, or `not-a-project` with the refusal's own words."""
+
+    path: str
+    name: str = ""
+    state: str
+    detail: str = ""
+    findings: list[dict[str, Any]] = []
+
+
+class HomeBrowseEntry(BaseModel):
+    name: str
+    path: str
+    project: bool = False
+
+
+class HomeBrowse(BaseModel):
+    """A folder's sub-folders, for a path field's completion — the daemon is
+    local, so the browser never needs a file picker (`home.md` §D7)."""
+
+    path: str
+    parent: str | None = None
+    dirs: list[HomeBrowseEntry] = []

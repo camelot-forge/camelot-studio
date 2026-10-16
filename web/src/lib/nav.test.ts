@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { APP_NAV, activeSection } from './nav';
 
 describe('activeSection', () => {
-	it('maps the three destinations', () => {
+	it('maps the four destinations', () => {
 		expect(activeSection('/')).toBe('figures');
+		expect(activeSection('/home')).toBe('home');
 		expect(activeSection('/builder')).toBe('builder');
 		expect(activeSection('/world')).toBe('world');
 	});
@@ -13,6 +14,7 @@ describe('activeSection', () => {
 		expect(activeSection('/world/zones/45')).toBe('world');
 		expect(activeSection('/builder/')).toBe('builder');
 		expect(activeSection('/builder/x')).toBe('builder');
+		expect(activeSection('/home/')).toBe('home');
 	});
 
 	it('falls back to figures for anything else', () => {
@@ -23,7 +25,7 @@ describe('activeSection', () => {
 
 describe('APP_NAV', () => {
 	it('orders the destinations and covers each section once', () => {
-		expect(APP_NAV.map((item) => item.id)).toEqual(['figures', 'builder', 'world']);
+		expect(APP_NAV.map((item) => item.id)).toEqual(['home', 'figures', 'builder', 'world']);
 		expect(new Set(APP_NAV.map((item) => item.id)).size).toBe(APP_NAV.length);
 	});
 

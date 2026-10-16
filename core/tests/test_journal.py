@@ -258,7 +258,11 @@ def test_a_family_this_build_does_not_know_is_refused(tmp_path):
 
 def test_invalidate_re_reads_what_a_pull_brought(tmp_path):
     """The daemon must see ops that arrived by `git pull` without a restart."""
-    journal = jr.Journal(tmp_path / "journal", author="michael")
+    # The clock is pinned on purpose: the order is (at, shard, seq), and a
+    # wall clock that drifts past the teammate's timestamp flips it — this
+    # test failed for real the day after it was written (2026-10-16, 21:07Z).
+    journal = jr.Journal(tmp_path / "journal", author="michael",
+                         at="2026-10-16T07:00:00Z")
     journal.append_op(op(1, "10", "5"), zone=0)
     reader = jr.Journal(tmp_path / "journal")
     assert len(reader.ops()) == 1

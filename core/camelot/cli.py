@@ -493,6 +493,8 @@ def cmd_project(args) -> int:
 
 
 def cmd_serve(args) -> int:
+    from pathlib import Path
+
     from .serve.config import (
         DEFAULT_HOST,
         DEFAULT_PORT,
@@ -561,6 +563,18 @@ def cmd_serve(args) -> int:
         elif claim["holder"] is not None:
             claimed = str(cfg.project)
             print(f"  project: {cfg.project} (held by {claim['holder']['author']})")
+        # The machine's list of recent projects (`home.md` §D1): a daemon that
+        # serves a project is the only thing that knows one was opened — and
+        # only a *project* belongs in the list, a legacy authoring directory
+        # does not.
+        if (Path(cfg.project) / projects.PROJECT_FILE).is_file():
+            from . import recent
+
+            try:
+                recent.record(cfg.project, name=projects.load(cfg.project).name,
+                              directory=cfg.config_dir)
+            except (projects.ProjectError, recent.RecentError) as error:
+                print(f"  (not listed as a recent project: {error})", file=sys.stderr)
 
     url = f"http://{'localhost' if cfg.is_loopback else host}:{port}/"
     print(f"camelot serve: root={cfg.root}")

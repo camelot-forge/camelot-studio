@@ -100,6 +100,57 @@ export interface AssetQuery {
 	limit?: number;
 }
 
+// --- Home, the front door (P2 slice 2a, `notes/home.md`) --------------
+
+export interface HomeDaemon {
+	version: string;
+	build: string;
+	host: string;
+	port: number;
+	client: string;
+	zones: number;
+}
+
+/** The project this daemon serves — `pending` counts what a save would still
+ * write, the way the panel counts it. */
+export interface HomeProject {
+	path: string;
+	name: string;
+	pending: Record<string, number>;
+	read_only: boolean;
+	holder: string;
+}
+
+/** One row of the machine's list: the entry, plus what the disk says *now*. */
+export interface HomeRecent {
+	path: string;
+	name: string;
+	opened: string;
+	exists: boolean;
+	project: boolean;
+}
+
+export interface HomePayload {
+	daemon: HomeDaemon;
+	project: HomeProject | null;
+	recents: HomeRecent[];
+	recent_error: string;
+}
+
+export interface HomeHealth {
+	path: string;
+	name: string;
+	state: 'ok' | 'changed' | 'missing' | 'no-client' | string;
+	detail: string;
+	findings: Array<Record<string, unknown>>;
+}
+
+export interface HomeBrowse {
+	path: string;
+	parent: string | null;
+	dirs: Array<{ name: string; path: string; project: boolean }>;
+}
+
 // --- the world (Phase 6.2) ----------------------------------------------------
 
 export interface WorldSearchHit {
@@ -378,6 +429,14 @@ export interface EditorState {
 	mod: Record<string, unknown>;
 	zones: EditorZone[];
 	rows: EditorRowOp[];
+	/** What a save would still write, counted by the daemon (`pending_counts`):
+	 * `fixtures` = distinct fixture ids, `rows` = distinct `table:key` the
+	 * database has not been given. One definition, one number. */
+	pending: Record<string, number>;
+	/** Set when another process holds the checkout: every write refuses, and
+	 * `holder` names who to close or stop (`project.md` §D13). */
+	read_only: boolean;
+	holder: string;
 	pack: EditorPack | null;
 	client: EditorClient | null;
 	/** What was last published: the op count at that moment (the panel's own
@@ -458,6 +517,15 @@ async function detailOf(res: Response): Promise<string> {
 		// not JSON: the status line is all there is
 	}
 	return detail;
+}
+
+/** A GET for the routes that *refuse with a reason* (Home's health and browse:
+ * "not a project: …", "no such directory"): the operator reads the daemon's
+ * own sentence, not a status code. */
+async function getDetailed<T>(path: string, signal?: AbortSignal): Promise<T> {
+	const res = await fetch(`${getApiBase()}/api/v1${path}`, { signal });
+	if (!res.ok) throw new Error(await detailOf(res));
+	return (await res.json()) as T;
 }
 
 /** A JSON request that carries the daemon's own refusal message, not a code. */
@@ -567,6 +635,13 @@ export const api = {
 		return (await res.json()) as AnimStateSummary[];
 	},
 	events: () => new EventSource(`${getApiBase()}/api/v1/events`),
+
+	// --- home (P2 slice 2a) ------------------------------------------------
+	home: (signal?: AbortSignal) => get<HomePayload>('/home', signal),
+	homeHealth: (path: string, signal?: AbortSignal) =>
+		getDetailed<HomeHealth>(`/home/health?path=${encodeURIComponent(path)}`, signal),
+	homeBrowse: (path: string, signal?: AbortSignal) =>
+		getDetailed<HomeBrowse>(`/home/browse?path=${encodeURIComponent(path)}`, signal),
 
 	// --- the world ---------------------------------------------------------
 	worldIndex: (signal?: AbortSignal) => get<WorldIndex>('/world/index', signal),

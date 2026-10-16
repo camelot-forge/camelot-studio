@@ -32,6 +32,7 @@
 		type RowPick,
 		type RowProposal
 	} from '$lib/world/viewer';
+	import ProjectChip from '$lib/components/ProjectChip.svelte';
 	import {
 		Compass,
 		Crosshair,
@@ -167,22 +168,10 @@
 	// Written = in the server's database; the rest is the journal's promise.
 	const writtenRows = $derived(editPatches.filter((patch) => patch.applied === true).length);
 	const editClient = $derived(edit?.client ?? null);
-	/** The objects a save would still write: the *items* the journal owes, never
-	 * the gestures — a group moved five times is five objects, not twenty-five
-	 * ops. A publish empties the fixture ops (the pack now carries them), so the
-	 * count falls back to zero by itself; the rows are those the database has
-	 * not been given yet. */
-	const unsavedFixtures = $derived(
-		new Set((edit?.zones ?? []).flatMap((zone) => zone.ops).map((op) => op.id)).size
-	);
-	const unsavedRows = $derived(
-		new Set(
-			editPatches
-				.filter((patch) => patch.applied !== true)
-				.map((patch) => `${patch.table}:${patch.key}`)
-		).size
-	);
-	const changes = $derived(unsavedFixtures + unsavedRows);
+	/** The objects a save would still write — counted by the daemon now
+	 * (`Editor.pending_counts`, one definition for the chip, the panel and
+	 * Home): the *items* the journal owes, never the gestures. */
+	const changes = $derived((edit?.pending?.fixtures ?? 0) + (edit?.pending?.rows ?? 0));
 	/** Like a repository: unsaved changes exist, or they do not. */
 	const dirty = $derived(changes > 0);
 	/** The journal, read the way the operator reads it (lib/world/journal). */
@@ -949,9 +938,12 @@
 	>
 		{#snippet actions()}
 			{#if editing && edit}
-				<span class="session" class:on={dirty} title="the edits this session still holds">
-					{dirty ? `${changes} not saved` : 'saved'}
-				</span>
+				<ProjectChip
+					name={edit.dir?.split('/').filter(Boolean).pop() ?? ''}
+					pending={changes}
+					readOnly={edit.read_only}
+					holder={edit.holder}
+				/>
 				<button
 					class="btn btn--secondary"
 					onclick={undo}
@@ -1630,23 +1622,8 @@
 		height: 100%;
 		display: block;
 	}
-	/* The session's own state, in the app bar beside the two actions it colours. */
-	.session {
-		display: inline-flex;
-		align-items: center;
-		height: var(--h-control-md);
-		padding: 0 10px;
-		border: 1px solid var(--border-input);
-		border-radius: var(--r-md);
-		background: var(--surface-input);
-		font-size: var(--fs-small);
-		color: var(--text-3);
-	}
-	.session.on {
-		border-color: var(--warn-border);
-		background: var(--warn-tint);
-		color: var(--warn-text);
-	}
+	/* The session's own state is the project chip now (`ProjectChip.svelte`,
+	   `home.md` §D5): <name> · <state>, the same chip in every tool. */
 	.status {
 		font-size: var(--fs-small);
 		line-height: 1.4;

@@ -29,7 +29,7 @@
 </script>
 
 <header class="appbar">
-	<a class="brand" href={resolve('/')} aria-label="Camelot Studio">
+	<a class="brand" href={resolve('/home')} aria-label="Camelot Studio">
 		<span class="logo" aria-hidden="true"><Castle size={20} /></span>
 		<span class="titles">
 			<span class="name">Camelot Studio</span>
