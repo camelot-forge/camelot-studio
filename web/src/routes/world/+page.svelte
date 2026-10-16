@@ -949,18 +949,14 @@
 	>
 		{#snippet actions()}
 			{#if editing && edit}
-				<span
-					class="session"
-					class:on={dirty}
-					title="what the session still holds, and where it stands"
-				>
+				<span class="session" class:on={dirty} title="the edits this session still holds">
 					{dirty ? `${changes} not saved` : 'saved'}
 				</span>
 				<button
 					class="btn btn--secondary"
 					onclick={undo}
 					disabled={(!editOps && !editRows) || busyEdit}
-					title="drop the journal's last op (server rows first)"
+					title="undo the last edit (its server rows first)"
 				>
 					undo
 				</button>
@@ -968,7 +964,7 @@
 					class="btn btn--primary"
 					onclick={apply}
 					disabled={busyEdit || !changes}
-					title="save the session: the client's files and the server's rows (the game reads them after /reload)"
+					title="write the client's files and the server's rows (the game reads them after /reload)"
 				>
 					save{dirty ? ` (${changes})` : ''}
 				</button>
@@ -1183,7 +1179,7 @@
 						onclick={() => setSession('view')}
 						title={canEdit
 							? 'view — browse; the tools step back to inspection'
-							: 'no editing session (start the daemon with --edits): view only'}
+							: 'no project (start the daemon with --project): view only'}
 					>
 						View
 					</button>
@@ -1192,7 +1188,9 @@
 						class:on={editing}
 						disabled={!canEdit}
 						onclick={() => setSession('edit')}
-						title={canEdit ? 'edit — the tools are armed' : 'start the daemon with --edits to edit'}
+						title={canEdit
+							? 'edit — the tools are armed'
+							: 'start the daemon with --project to edit'}
 					>
 						Edit
 					</button>
@@ -1246,7 +1244,7 @@
 					type="button"
 					class:on={tab === 'journal'}
 					onclick={() => (tab = 'journal')}
-					title="the session's own history, and what a save would publish"
+					title="this session's edits, one line each"
 				>
 					Journal
 					{#if changes}<span class="badge" class:warn={dirty}>{changes}</span>{/if}
@@ -1329,7 +1327,7 @@
 							{#if selected.ground}
 								<p class="hint">
 									a ground row's <code>z</code> belongs to the terrain: the editor writes the position
-									and the client drops it on the ground (W-3, measured in game).
+									and the client drops it on the ground.
 								</p>
 							{/if}
 							{#if proposals.length}
@@ -1438,10 +1436,8 @@
 				{:else}
 					{#if journals.count === 0}
 						<p class="hint">
-							Nothing journalled: the scene is what the client ships. A gesture, a field or a
-							removal writes one line here — and none of it reaches the files until <strong
-								>save</strong
-							>.
+							No edits yet — the scene is the client's own. Every edit is written here first; a
+							<strong>save</strong> is what writes the client and the rows.
 						</p>
 					{:else}
 						{#each journals.zones as journalZone (journalZone.id)}
@@ -1450,7 +1446,7 @@
 									<h4>
 										Zone {journalZone.id}
 										<span class="card-meta"
-											>{journalZone.entries.length} op{journalZone.entries.length === 1
+											>{journalZone.entries.length} edit{journalZone.entries.length === 1
 												? ''
 												: 's'}</span
 										>
@@ -1502,7 +1498,7 @@
 								type="button"
 								onclick={build}
 								disabled={busyEdit || !changes}
-								title="assemble the authoring directory and run mod build"
+								title="build the pack from these edits"
 							>
 								build
 							</button>
@@ -1510,7 +1506,7 @@
 								type="button"
 								onclick={revert}
 								disabled={busyEdit}
-								title="empty the journal (the client half, if installed, stays — restore all takes it too)"
+								title="drop every pending edit (what is already published stays; restore all takes it back)"
 							>
 								revert
 							</button>
@@ -1519,13 +1515,13 @@
 								type="button"
 								onclick={restore}
 								disabled={busyEdit || (!changes && !editClient?.installed)}
-								title="put everything back: the client half, the server rows, the journal"
+								title="put the client, the rows and the edits back as they were"
 							>
 								restore all
 							</button>
 						</div>
 						<p class="hint">
-							journal: {editOps} fixture op{editOps === 1 ? '' : 's'},
+							journal: {editOps} fixture edit{editOps === 1 ? '' : 's'},
 							{editRows} row patch{editRows === 1 ? '' : 'es'}{writtenRows
 								? ` (${writtenRows} written)`
 								: ''}
@@ -1577,7 +1573,7 @@
 					type="button"
 					class="sb-link"
 					onclick={() => viewer?.clearMeasure()}
-					title="let the measurement go (Escape)">clear</button
+					title="clear the measurement (Escape)">clear</button
 				>
 			{:else}
 				<span>
@@ -1589,8 +1585,8 @@
 		{/snippet}
 		{#snippet right()}
 			{#if editing && edit}
-				<span class="sb-nums" title="what a save would still write, and what is published">
-					{clientNote} · journal: {editOps} fixture op{editOps === 1 ? '' : 's'}, {editRows} row patch{editRows ===
+				<span class="sb-nums" title="what a save would write, and what is already published">
+					{clientNote} · journal: {editOps} fixture edit{editOps === 1 ? '' : 's'}, {editRows} row patch{editRows ===
 					1
 						? ''
 						: 'es'}{writtenRows ? ` (${writtenRows} written)` : ''}

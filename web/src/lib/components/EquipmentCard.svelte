@@ -20,7 +20,7 @@
 		<span class="card-meta">per slot · {material || 'default'}</span>
 	</h3>
 	{#if pieces.length === 0}
-		<p class="hint">The figure carries no named piece.</p>
+		<p class="hint">No named equipment on this figure.</p>
 	{:else}
 		<dl class="meta">
 			{#each pieces as piece (piece)}
@@ -31,8 +31,8 @@
 		</dl>
 	{/if}
 	<p class="hint">
-		Read-only: the assembly picks one piece per slot, and the rail's material is what changes it.
-		The per-variant picker belongs to a base figure (load one from <strong>Figures</strong>).
+		Read-only: the assembly picks one piece per slot; the rail's material changes it. Picking a
+		variant needs a base figure (load one from <strong>Figures</strong>).
 	</p>
 </section>
 

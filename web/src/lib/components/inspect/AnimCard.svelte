@@ -68,16 +68,17 @@
 <section class="card">
 	<h3>
 		<Film size={14} /> Animation
-		<span class="card-meta">{fromTables ? 'the figure’s own set' : 'the resolver’s idle'}</span>
+		<span class="card-meta">{fromTables ? 'the figure’s own set' : 'the idle'}</span>
 	</h3>
 
 	{#if rows.length === 0}
-		<p class="hint">No clip for this figure: the client’s tables link no animation to it.</p>
+		<p class="hint">The client’s tables name no animation for this figure.</p>
 	{:else}
 		{#if !fromTables}
 			<p class="hint">
-				The tables link no anim set to this figure (<code>monnifs</code> → <code>anims</code> →
-				<code>animnifs</code>), so the viewer plays the idle its resolver picks.
+				The tables name no animation set for this figure (<code>monnifs</code> → <code>anims</code>
+				→
+				<code>animnifs</code>), so the viewer plays the idle.
 			</p>
 		{/if}
 		<ul class="states">

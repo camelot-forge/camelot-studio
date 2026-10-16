@@ -161,7 +161,7 @@
 			</div>
 			<label class="other">
 				<input type="checkbox" bind:checked={showOther} onchange={onShowOther} />
-				include unclassified entries
+				include unrecognised entries
 			</label>
 		</div>
 

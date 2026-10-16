@@ -14,8 +14,8 @@
 	const skins = $derived(model.meshTextures.size);
 	const bonesTitle = $derived(
 		figureJoints(model.skinJson).length > 0
-			? 'joints the .skin.json sidecar names (the NIF’s own rig)'
-			: 'bones the exported glTF carries (no .skin.json sidecar)'
+			? 'the joints named by the .skin.json file (the NIF’s own rig)'
+			: 'the bones the exported glTF carries (no .skin.json file)'
 	);
 </script>
 
@@ -43,7 +43,7 @@
 		</div>
 		<div>
 			<dt>Skins</dt>
-			<dd class="nums" title="mesh slots that carry a client sheet">{skins}</dd>
+			<dd class="nums" title="the meshes that use a client texture">{skins}</dd>
 		</div>
 	</dl>
 </section>

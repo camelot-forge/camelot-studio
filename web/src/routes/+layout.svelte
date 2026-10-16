@@ -6,8 +6,11 @@
 </script>
 
 <svelte:head>
-	<title>Camelot Studio — DAoC viewer</title>
-	<meta name="description" content="View Dark Age of Camelot figures exported to glTF" />
+	<title>Camelot Studio</title>
+	<meta
+		name="description"
+		content="View and edit Dark Age of Camelot content: figures, characters, zones"
+	/>
 	<meta name="theme-color" content="#141414" />
 	<link rel="icon" href={favicon} />
 </svelte:head>

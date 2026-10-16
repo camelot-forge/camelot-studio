@@ -50,9 +50,9 @@
 
 	{#if joints.length === 0}
 		<p class="hint">
-			No <code>.skin.json</code> sidecar for this figure, so its own joint names are unknown. The
-			canonical table below is what the client’s <code>animnode.dat</code> maps a KFA channel to
-			(175 channels there; 0–{MAX_VERIFIED} are the ones our corpus verified).
+			No <code>.skin.json</code> file for this figure, so its own joint names are unknown. The table
+			below is the client’s <code>animnode.dat</code>: the joint each KFA channel names (175
+			channels; 0–{MAX_VERIFIED} checked against the client).
 		</p>
 	{/if}
 
