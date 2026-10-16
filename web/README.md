@@ -26,6 +26,29 @@ pnpm lint        # prettier --check + eslint
 pnpm format      # prettier --write
 ```
 
+## Verifying in a browser
+
+The app is served from `build/` by `camelot serve`: `pnpm build`, then reload —
+no daemon restart (static files are read per request).
+
+Two levels, and they do not replace each other:
+
+- **The probes are the contract** — `scripts/dock_probe.mjs`,
+  `world_mouse_probe.mjs`, `viewer_probe.mjs`, `builder_probe.mjs`, driven
+  headless with `--use-gl=swiftshader --enable-unsafe-swiftshader` so the
+  canvas renders on a machine with no GPU:
+  `node scripts/dock_probe.mjs http://127.0.0.1:8763 /tmp/camelot-ux`.
+  Versioned and deterministic; a copy pass does not need the gesture probes,
+  but `dock_probe` asserts labels and does.
+- **The Playwright MCP is for reading** — the agent drives a real browser from
+  its own tool list (snapshot, click, console, network) for a question the
+  probes do not assert. Setup, the Chrome-channel pitfall and the WebGL
+  caveat: `../AGENTS.md` § The Playwright MCP.
+
+Either way: port 8762 is the operator's own daemon — read it, never edit
+through it; anything that writes gets a scratch daemon and its own project
+(`--project /tmp/<name>`, port 8763+), which is what the probes do.
+
 ## How to use
 
 Export a figure with the core CLI, then drop the artifacts into the viewer:
