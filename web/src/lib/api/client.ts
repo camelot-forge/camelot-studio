@@ -555,13 +555,16 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
  * sentence when the answer is not JSON at all. A page pointed at another
  * process (a daemon older than this front, a dev server without its proxy)
  * gets an HTML page where it expected JSON, and the browser's own "JSON.parse:
- * unexpected character" says nothing about why (measured 2026-10-17). */
+ * unexpected character" says nothing about why (measured 2026-10-17). The
+ * request's own URL is in the sentence: it is the one fact that says which
+ * port the page is really talking to. */
 export async function readJson<T>(res: Response): Promise<T> {
 	if (!res.ok) throw new Error(await detailOf(res));
 	const type = res.headers.get('content-type') ?? '';
 	if (!type.includes('json')) {
 		throw new Error(
-			`the answer is not JSON (${type || 'no content type'}) — is this the daemon's own port?`
+			`the answer from ${res.url || 'the daemon'} is not JSON ` +
+				`(${type || 'no content type'}) — is this the daemon's own port?`
 		);
 	}
 	return (await res.json()) as T;
