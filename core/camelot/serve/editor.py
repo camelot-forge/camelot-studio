@@ -209,7 +209,18 @@ class Editor:
             document = json.loads(meta.read_text(encoding="utf-8"))
             if isinstance(document, dict):
                 return document
-        return {"id": self.dir.name or "world-edits", "version": "1", "priority": 100}
+        return {"id": self._identity(), "version": "1", "priority": 100}
+
+    def _identity(self) -> str:
+        """The pack's own id when no `mod.json` carries one: the **project's**
+        name, never the folder's — a release rebuilt in a clone (another
+        directory, the same project) must produce the same bytes
+        (`pipeline.md` §D5), and the pack's deployment document carries this
+        id."""
+        try:
+            return project_mod.slug(project_mod.load(self.dir).name)
+        except project_mod.ProjectError:
+            return self.dir.name or "world-edits"
 
     def _base(self) -> dict:
         """The base fingerprints a new shard records it was written against
@@ -1067,7 +1078,7 @@ class Editor:
 
     # -- publishing ------------------------------------------------------------
 
-    def build(self, world) -> dict[str, Any]:
+    def build(self, world, *, lines=None, zones=None, out_dir=None) -> dict[str, Any]:
         """Assemble the project's build outputs and run `mod build` on them.
 
         What is built is what no publish covers yet: the pending world ops,
@@ -1077,18 +1088,35 @@ class Editor:
         about to be written over and against what this project already dropped,
         and what it allocates is recorded in `ids.json` — so rebuilding the same
         journal allocates the same ids, byte for byte.
+
+        `lines`/`zones` are a **release's own range** (`release.py`): what the
+        release holds, and the zones whose files it ships whole — a zone a drop
+        emptied is rewritten too, because the file is a file and not a diff.
+        `out_dir` is where the derived files land (a scratch directory, for a
+        release: the project's own root files are the 6.3 authoring ones, and a
+        cut never touches them).
         """
         if not self.available:
             raise EditorError("the daemon was started without --project <dir>")
         self._writable()
-        pending = self.pending_lines()
+        out = Path(out_dir) if out_dir is not None else self.dir
+        scoped = zones is not None
+        pending = list(lines) if lines is not None else self.pending_lines()
         by_zone: dict[int, list[journal_mod.Line]] = {}
         for line in pending:
             if line.zone is not None:
                 by_zone.setdefault(line.zone, []).append(line)
-        patches: dict[str, list[dict]] = {}
-        for line, patch in self.pending_patches():
-            patches.setdefault(str(line.zone), []).append(patch)
+        if scoped:
+            by_zone = {int(zone): by_zone.get(int(zone), []) for zone in zones}
+            patches = {}
+            for zone in by_zone:
+                found = self.patches(int(zone))
+                if found:
+                    patches[str(zone)] = found
+        else:
+            patches = {}
+            for line, patch in self.pending_patches():
+                patches.setdefault(str(line.zone), []).append(patch)
         entries: list[dict] = []
         files: list[str] = []
         try:
@@ -1097,13 +1125,13 @@ class Editor:
                 lines = by_zone[zone_id]
                 self._allocate(zone, lines)
                 ops = [line.op for line in lines if line.family == "world" and line.op]
-                if not ops:
+                if not ops and not scoped:
                     continue
                 archive = zone.archive("csv")
                 if archive is None:
                     raise EditorError(f"zone {zone_id}: no csv archive to target")
                 name = f"fixtures-zone{zone_id:03d}.csv"
-                (self.dir / name).write_bytes(
+                (out / name).write_bytes(
                     gamedata.encode_table(self.working_table(zone)))
                 entries.append({
                     "archive": os.path.relpath(archive, str(world.config.root)).replace(os.sep, "/"),
@@ -1113,12 +1141,12 @@ class Editor:
                 files.append(name)
             if not entries and not patches:
                 raise EditorError("nothing to publish: the journal holds no edit")
-            (self.dir / "mod.json").write_text(
+            (out / "mod.json").write_text(
                 json.dumps(self._mod(), indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8")
-            (self.dir / "client.patch.json").write_text(
+            (out / "client.patch.json").write_text(
                 json.dumps({"archive": entries}, indent=2) + "\n", encoding="utf-8")
-            (self.dir / "server.patch.json").write_text(
+            (out / "server.patch.json").write_text(
                 json.dumps({"patches": patches}, indent=1, ensure_ascii=False) + "\n",
                 encoding="utf-8")
             if not entries:
@@ -1127,9 +1155,9 @@ class Editor:
                 report = {"client_items": 0}
                 pack = None
             else:
-                pack = self.dir / f"{self._mod().get('id', 'world-edits')}.tar.gz"
+                pack = out / f"{self._mod().get('id', 'world-edits')}.tar.gz"
                 report = modbuild.build_mod_pack(
-                    str(self.dir), str(world.config.root), str(pack))
+                    str(out), str(world.config.root), str(pack))
         except (ValueError, OSError) as error:
             raise EditorError(f"build refused: {error}") from error
         return {"pack": str(pack) if pack is not None else None, "entries": entries,

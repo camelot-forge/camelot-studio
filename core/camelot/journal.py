@@ -116,6 +116,25 @@ def _stamp_for_name(moment: str) -> str:
     return stamp.removesuffix("Z")
 
 
+#: `<stamp>-<author>-<n>.jsonl` — the second session of one second.
+_INDEXED_SHARD = re.compile(r"^(?P<stem>.+)-(?P<index>\d+)\.jsonl$")
+
+
+def _shard_order(shard: str) -> tuple[str, int]:
+    """The order two shards of one stamp are read in: the one opened first.
+
+    `X-author.jsonl` comes before `X-author-2.jsonl` — and *lexicographically*
+    it does not ("-" sorts before "."), so two sessions in the same second
+    would replay the later one's ops first. That is a chain replayed out of
+    order, which refuses or, worse, applies. The index is compared as a number
+    instead; a name that carries none is the first.
+    """
+    found = _INDEXED_SHARD.match(shard)
+    if found is None:
+        return (shard, 0)
+    return (f"{found.group('stem')}{_SHARD_SUFFIX}", int(found.group("index")))
+
+
 @dataclass(frozen=True)
 class Line:
     """One line of one shard, with where it came from — a refusal must be able
@@ -252,7 +271,7 @@ class Journal:
         a build and a report all read the same way."""
         return sorted(
             (line for line in self.lines() if line.kind in kinds),
-            key=lambda line: (line.at, line.shard, line.seq),
+            key=lambda line: (line.at, _shard_order(line.shard), line.seq),
         )
 
     def drops(self) -> list[Line]:

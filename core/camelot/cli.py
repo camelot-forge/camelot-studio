@@ -475,6 +475,67 @@ def cmd_project(args) -> int:
             )
         return 0
 
+    if args.project_cmd == "release":
+        from . import release as release_mod
+
+        try:
+            record = release_mod.cut(project.root, client=args.client)
+        except (release_mod.ReleaseError, projects.ProjectError, release_mod.ReleaseError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        families = ", ".join(f"{name} {count}" for name, count in record["families"].items())
+        server = record["artifacts"]["server"] or {}
+        client_half = record["artifacts"]["client"] or {}
+        print(f"release {record['number']:04d}  {record['cut_at']}  {families or '—'}")
+        print(f"  server  {server.get('pack', '—')}")
+        if server.get("rows"):
+            print(f"  rows    {server['rows']}")
+        if client_half:
+            print(f"  client  version {client_half['version']} · {client_half['patchlist']}")
+        else:
+            print("  client  none (this release has no client half)")
+        needs = record["needs"].get("reload") or []
+        print(f"  order   {record['order']}" + (f" · reload: {', '.join(needs)}" if needs else ""))
+        return 0
+
+    if args.project_cmd == "releases":
+        from . import release as release_mod
+
+        try:
+            history = release_mod.releases(project.root)
+        except release_mod.ReleaseError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        if not history:
+            print("no releases yet")
+            return 0
+        for item in history:
+            families = ", ".join(
+                f"{name} {count}" for name, count in (item.get("families") or {}).items()
+            )
+            client_half = (item.get("artifacts") or {}).get("client") or {}
+            line = f"{int(item['number']):04d}  {item.get('cut_at', '')}  {families or '—'}"
+            if client_half:
+                line += f"  client v{client_half.get('version')}"
+            print(line)
+        return 0
+
+    if args.project_cmd == "verify" and getattr(args, "rebuild", None):
+        from . import release as release_mod
+
+        try:
+            report = release_mod.rebuild(project.root, args.rebuild, client=args.client)
+        except (release_mod.ReleaseError, projects.ProjectError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(f"release {report['number']:04d}: rebuilt {report['found'] or '(nothing built)'}")
+        print(f"  recorded {report['expected'] or '(no server artifact)'}")
+        if report["same"]:
+            print("  the same bytes — the journal plus the base reproduce it")
+            return 0
+        print("  DIFFERENT — this release is not reproducible from what is here")
+        return 1
+
     try:
         findings = projects.verify(project, args.client)
     except projects.ProjectError as error:
@@ -1224,6 +1285,14 @@ def main(argv=None) -> int:
     vp = pp.add_parser("verify", help="read the base back against the recorded fingerprints")
     vp.add_argument("--dir", default=".", help="the project's directory (default: .)")
     vp.add_argument("--client", help="the client to read (default: this machine's own answers)")
+    vp.add_argument("--rebuild", type=int, metavar="N",
+                    help="rebuild release N from the journal plus the base and compare the "
+                         "bytes (pipeline.md §D5: what a CI job runs)")
+    rp = pp.add_parser("release", help="cut the next release (the range since the last one)")
+    rp.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    rp.add_argument("--client", help="the client the build is against (default: this machine's)")
+    ls = pp.add_parser("releases", help="the release history, oldest first")
+    ls.add_argument("--dir", default=".", help="the project's directory (default: .)")
     p.set_defaults(func=cmd_project)
 
     args = ap.parse_args(argv)

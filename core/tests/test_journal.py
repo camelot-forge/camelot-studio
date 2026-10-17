@@ -205,6 +205,24 @@ def test_a_malformed_line_is_refused_with_its_file_and_line(tmp_path):
     assert "line 2" in str(error.value)
 
 
+def test_two_shards_of_one_second_read_in_the_order_they_were_created(tmp_path):
+    """Two sessions in the same second get two files (`-2`), and
+    *lexicographically* the suffixed name sorts **before** the plain one
+    ("-" < "."): the total order must still read the first session first, or a
+    chain of ops on one row replays out of order — which the replay refuses.
+    Found 2026-10-17 while a release was rebuilt inside a clone."""
+    first = jr.Journal(tmp_path / "journal", author="michael", at="2026-10-17T10:00:00Z")
+    first.append_op(op(1, "2", expect_x="1"), zone=0)
+    second = jr.Journal(tmp_path / "journal", author="michael", at="2026-10-17T10:00:00Z")
+    second.append_op(op(1, "3", expect_x="2"), zone=0)
+
+    names = sorted(path.name for path in (tmp_path / "journal").glob("*.jsonl"))
+    assert names[0].endswith("-2.jsonl")  # the one that is *not* first in time
+
+    reader = jr.Journal(tmp_path / "journal")
+    assert [line.op["values"]["X"] for line in reader.ops()] == ["2", "3"]
+
+
 def test_a_shard_without_a_header_is_refused_by_name(tmp_path):
     directory = tmp_path / "journal"
     directory.mkdir()
