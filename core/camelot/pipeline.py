@@ -29,7 +29,7 @@ import json
 import shutil
 from pathlib import Path
 
-from . import clientinstall, contract
+from . import clientinstall, contract, installer
 from . import project as project_mod
 from . import release as release_mod
 from .mpak import MpakArchive, MpakError
@@ -39,10 +39,6 @@ FORMAT = "camelot.plan/1"
 #: The two halves of an environment's folder (§D9).
 CLIENT = "client"
 SERVER = "server"
-#: The Installer's own folder, beside the server's files (S §D2).
-INSTALLER = "camelot"
-RELEASES = "releases"
-APPLIED = "applied"
 #: The feed the players' launcher reads (C §D4): a directory in the project,
 #: rebuildable and never committed.
 FEED = "feed"
@@ -115,12 +111,13 @@ def client_of(env_root) -> Path:
 
 
 def installer_of(env_root) -> Path:
-    """The Installer's own folder, beside the server's files (S §D2)."""
-    return Path(env_root) / SERVER / INSTALLER
+    """The Installer's own folder, beside the server's files (S §D2). One
+    definition, shared with the module that reads and writes it (`installer`)."""
+    return installer.folder(env_root)
 
 
 def _release_folder(env_root, number: int) -> Path:
-    return installer_of(env_root) / RELEASES / f"{int(number):04d}"
+    return installer.releases_folder(env_root, number)
 
 
 def _relative(root, path: Path) -> str:
@@ -393,7 +390,7 @@ def plan(root, number, *, env, adopt=False) -> dict:
             if item["family"] == "server":
                 item["verdict"], item["why"] = "refused", id_refusals[0]
 
-    applied = installer_of(env_root) / APPLIED / f"{int(number):04d}" / "applied.json"
+    applied = installer.applied_path(env_root, number)
     counts = {verdict: 0 for verdict in VERDICTS}
     for item in items:
         counts[item["verdict"]] += 1

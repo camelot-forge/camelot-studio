@@ -13,11 +13,10 @@ import json
 from pathlib import Path
 
 import pytest
-from test_pipeline import _editor, _environment, _move, _project  # noqa: F401
-from test_project import base  # noqa: F401  (the synthetic client, for the chain)
+from test_pipeline import _environment, _project
 from test_release import served_client  # noqa: F401  (what `client` wraps)
-from test_serve_editor import editing  # noqa: F401
-from test_zones import world  # noqa: F401
+from test_serve_editor import editing  # noqa: F401  (the fixture `served_client` asks for)
+from test_zones import world  # noqa: F401  (the fixture `editing` asks for)
 
 from camelot import envs, installer
 from camelot import pipeline as pipe

@@ -546,13 +546,12 @@ def apply(project: project_mod.Project, env: str, *, release=None, connect=None)
                 f"{env_root}: release {number:04d} is not there — "
                 f"`camelot project deploy {number} --env {env}` hands it over"
             )
-    needs: tuple = ()
     try:
-        needs = tuple(
+        needs: tuple = tuple(
             (release_mod.load(project.root, number).get("needs") or {}).get("reload") or ()
         )
-    except (release_mod.ReleaseError, KeyError):
-        needs = ()
+    except release_mod.ReleaseError:
+        needs = ()  # a release this machine does not hold: the ritual is not ours to name
     connection = connection_for(project, env)
     write = connect or serverrows.connect
     applied = installer.apply(
