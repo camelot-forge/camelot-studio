@@ -140,6 +140,127 @@ export interface HomePayload {
 	recent_error: string;
 }
 
+/** One environment, as the Deploy page reads it (`pipeline.md` §6). */
+export interface DeployEnvironment {
+	name: string;
+	root: string | null;
+	exists: boolean;
+	live: { release: number; at?: string; from?: string | null } | null;
+	client: { path: string; exists: boolean } | null;
+	problem: string | null;
+}
+
+/** One cut, as the page lists it: what it holds, where it is live, its reload. */
+export interface DeployRelease {
+	number: number;
+	cut_at: string | null;
+	families: Record<string, number>;
+	order: string;
+	needs: { reload?: string[]; restart?: boolean; manual?: string[] };
+	server: { sha256: string | null; pack?: string | null };
+	client: { version: number | null; patchlist?: string | null };
+	live_in: string[];
+}
+
+/** What the players' launcher can fetch (C §D4), read from the project. */
+export interface DeployFeed {
+	path: string;
+	present: boolean;
+	version: number | string | null;
+	files: number;
+	bytes: number;
+	release: number | null;
+}
+
+/** One line of `deploy/log.jsonl` — the record of an attempt. */
+export interface DeployLogLine {
+	kind: string;
+	env?: string;
+	release?: number;
+	number?: number;
+	outcome?: string;
+	at?: string;
+	from?: string | null;
+	wrote?: string[];
+	items?: Record<string, number>;
+	families?: Record<string, number>;
+}
+
+/** One row of the dry run (`pipeline.md` §3): what, ours, theirs, verdict, why. */
+export interface DeployItem {
+	family: string;
+	what: string;
+	ours: string | null;
+	theirs: string | null;
+	size: number | null;
+	verdict: string;
+	why: string;
+	source?: string;
+}
+
+/** The dry run itself: the deploy without the writes. */
+export interface DeployPlan {
+	format: string;
+	project: string;
+	release: number;
+	env: string;
+	root: string;
+	order: string;
+	items: DeployItem[];
+	counts: Record<string, number>;
+	needs: { reload?: string[]; restart?: boolean; manual?: string[] };
+	ids: { checked: number; collisions: string[] };
+	evidence: { path: string; present: boolean };
+	refusals: string[];
+}
+
+/** The plan executed: the outcome, the files written, the log line. */
+export interface DeployOutcome {
+	plan: DeployPlan;
+	outcome: string;
+	wrote: string[];
+	fact: DeployLogLine;
+}
+
+/** One environment read back (`pipeline.md` §D11). */
+export interface DeployVerify {
+	env: string;
+	root: string;
+	release: number | null;
+	server: { release: number | null; files: { what: string; ok: boolean }[] };
+	client: { ok: boolean | null; problems: string[]; installs: string[] };
+	problems: string[];
+	ok: boolean;
+}
+
+/** What the page asks the pipeline: which release, which environment. */
+export interface DeployAsk {
+	release: number;
+	env: string;
+	adopt?: boolean;
+	source?: string;
+}
+
+/** A cut, as the page learns it back (`pipeline.md` §2). */
+export interface DeployCut {
+	number: number;
+	cut_at: string;
+	families: Record<string, number>;
+	order: string;
+	needs: { reload?: string[]; restart?: boolean };
+}
+
+export interface DeployPage {
+	project: string;
+	root: string;
+	read_only: boolean;
+	pending?: { fixtures: number; rows: number };
+	environments: DeployEnvironment[];
+	releases: DeployRelease[];
+	feed: DeployFeed;
+	log: DeployLogLine[];
+}
+
 export interface HomeHealth {
 	path: string;
 	name: string;
@@ -756,5 +877,12 @@ export const api = {
 	worldModBuild: () => send<EditorBuild>('POST', '/world/mod/build'),
 	worldModApply: () => send<EditorBuild>('POST', '/world/mod/apply'),
 	worldModRevert: () => send<EditorState>('POST', '/world/mod/revert'),
-	worldModRestore: () => send<EditorRestore>('POST', '/world/mod/restore')
+	worldModRestore: () => send<EditorRestore>('POST', '/world/mod/restore'),
+
+	// --- the pipeline (P4) -------------------------------------------------
+	deploy: (signal?: AbortSignal) => get<DeployPage>('/deploy', signal),
+	deployPlan: (ask: DeployAsk) => send<DeployPlan>('POST', '/deploy/plan', ask),
+	deployPush: (ask: DeployAsk) => send<DeployOutcome>('POST', '/deploy/deploy', ask),
+	deployCut: () => send<DeployCut>('POST', '/deploy/cut'),
+	deployVerify: (env: string) => send<DeployVerify>('POST', '/deploy/verify', { env })
 };
