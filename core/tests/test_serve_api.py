@@ -14,7 +14,8 @@ def _make_app(tmp_path, nif_path, **overrides):
     (root / "anims").mkdir(exist_ok=True)
     shutil.copy(nif_path, root / "figures" / "synth.nif")
     (root / "anims" / "idle.kfa").write_bytes(b"kfa")
-    cfg = ServeConfig(root=root, cache_dir=tmp_path / "cache", static_dir=None, **overrides)
+    settings = {"static_dir": None, **overrides}
+    cfg = ServeConfig(root=root, cache_dir=tmp_path / "cache", **settings)
     return create_app(cfg)
 
 
@@ -210,3 +211,31 @@ class TestEvents:
         assert sse_frame("asset.added", {"id": "x"}) == (
             'event: asset.added\ndata: {"id":"x"}\n\n'
         )
+
+
+class TestUnknownApiPathsAreJson:
+    """A route this build does not have is a fact about the *daemon*, and the
+    page's own fallback must not answer it: a client told `index.html` where it
+    expected JSON shows the browser's parse error instead of the reason
+    (measured 2026-10-17 — a page pointed at a daemon older than the front read
+    "JSON.parse: unexpected character at line 1 column 1")."""
+
+    def test_an_unknown_api_path_is_a_json_404_that_names_it(self, tmp_path, nif_path):
+        built = tmp_path / "build"
+        built.mkdir()
+        (built / "index.html").write_text("<!doctype html><html></html>", encoding="utf-8")
+        client = _client(_make_app(tmp_path, nif_path, static_dir=built))
+
+        r = client.get("/api/v1/nope/deeper")
+        assert r.status_code == 404
+        assert r.headers["content-type"].startswith("application/json")
+        assert r.json()["detail"] == "no such route: /api/v1/nope/deeper"
+
+    def test_the_page_fallback_still_answers_a_route(self, tmp_path, nif_path):
+        built = tmp_path / "build"
+        built.mkdir()
+        (built / "index.html").write_text("<!doctype html><html></html>", encoding="utf-8")
+        client = _client(_make_app(tmp_path, nif_path, static_dir=built))
+
+        r = client.get("/home")
+        assert r.status_code == 200 and r.text.startswith("<!doctype html>")

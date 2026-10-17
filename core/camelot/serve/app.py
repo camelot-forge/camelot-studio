@@ -91,7 +91,16 @@ def create_app(config: ServeConfig) -> FastAPI:
             (the operator's Firefox did exactly that, 2026-10-12 — the panel
             now stamps the build, and this is the fix). The hashed files
             themselves are content-addressed and keep their caching.
+
+            An **unknown API path** is answered as JSON, never by the page: a
+            route this build does not have is a fact about the daemon, and a
+            client that gets `index.html` where it expected JSON shows the
+            browser's own parse error instead of the reason (measured
+            2026-10-17: a page pointed at an older daemon read "JSON.parse:
+            unexpected character at line 1 column 1").
             """
+            if full_path.startswith("api/"):
+                return JSONResponse({"detail": f"no such route: /{full_path}"}, status_code=404)
             candidate = root / full_path
             if full_path and candidate.is_file():
                 return FileResponse(candidate)

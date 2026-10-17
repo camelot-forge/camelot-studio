@@ -548,7 +548,22 @@ function queryString(params: Record<string, string | number | undefined>): strin
 
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
 	const res = await fetch(`${getApiBase()}/api/v1${path}`, { signal });
-	if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+	return readJson<T>(res);
+}
+
+/** `res.json()`, with the daemon's own refusal when there is one — and a plain
+ * sentence when the answer is not JSON at all. A page pointed at another
+ * process (a daemon older than this front, a dev server without its proxy)
+ * gets an HTML page where it expected JSON, and the browser's own "JSON.parse:
+ * unexpected character" says nothing about why (measured 2026-10-17). */
+export async function readJson<T>(res: Response): Promise<T> {
+	if (!res.ok) throw new Error(await detailOf(res));
+	const type = res.headers.get('content-type') ?? '';
+	if (!type.includes('json')) {
+		throw new Error(
+			`the answer is not JSON (${type || 'no content type'}) — is this the daemon's own port?`
+		);
+	}
 	return (await res.json()) as T;
 }
 
@@ -570,7 +585,7 @@ async function detailOf(res: Response): Promise<string> {
 async function getDetailed<T>(path: string, signal?: AbortSignal): Promise<T> {
 	const res = await fetch(`${getApiBase()}/api/v1${path}`, { signal });
 	if (!res.ok) throw new Error(await detailOf(res));
-	return (await res.json()) as T;
+	return readJson<T>(res);
 }
 
 /** A JSON request that carries the daemon's own refusal message, not a code. */
@@ -580,8 +595,7 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
 		headers: body === undefined ? undefined : { 'content-type': 'application/json' },
 		body: body === undefined ? undefined : JSON.stringify(body)
 	});
-	if (!res.ok) throw new Error(await detailOf(res));
-	return (await res.json()) as T;
+	return readJson<T>(res);
 }
 
 export const api = {
@@ -665,8 +679,7 @@ export const api = {
 			`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim?state=${encodeURIComponent(slot)}`,
 			{ signal }
 		);
-		if (!res.ok) throw new Error(await detailOf(res));
-		return (await res.json()) as AnimClip;
+		return readJson<AnimClip>(res);
 	},
 	/** The figure's own anim set, read from the client's tables. An empty list
 	 * means the tables do not cover this figure: the viewer keeps the idle its
