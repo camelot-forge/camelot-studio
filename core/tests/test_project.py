@@ -337,6 +337,8 @@ def test_cli_serve_takes_the_checkout_and_lets_it_go(tmp_path, base, capsys, mon
         json.dumps({"author": "Michael", "client": str(base)})
     )
     monkeypatch.setattr(uvicorn, "run", lambda *arguments, **keywords: None)
+    # the machine's list of projects is not a test's to write (`home.md` §D1)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
     assert (
         main(["project", "open", str(project.root), "--root", str(base), "--no-open", "--no-watch"])
@@ -356,6 +358,8 @@ def test_a_second_daemon_on_a_held_checkout_runs_read_only(tmp_path, base, capsy
     project = pj.new(tmp_path / "camelot-hills", client=base)
     holder = pj.lock(project.root, author="Lyra")
     monkeypatch.setattr(uvicorn, "run", lambda *arguments, **keywords: None)
+    # the machine's list of projects is not a test's to write (`home.md` §D1)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
     assert (
         main(
