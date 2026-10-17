@@ -13,8 +13,9 @@ than a branch inside this one, but OpenDAoC is the only one there is.
 from __future__ import annotations
 
 from . import opendaoc
+from .opendaoc import OWNED_TABLES, owned, owned_key
 
-__all__ = ["TARGETS", "opendaoc"]
+__all__ = ["OWNED_TABLES", "TARGETS", "opendaoc", "owned", "owned_key"]
 
 #: Registered projections, by the name a pack writes under `targets/`.
 TARGETS = {"opendaoc": opendaoc}

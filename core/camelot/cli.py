@@ -296,7 +296,17 @@ def _default_static_dir() -> str | None:
 
 
 def cmd_server(args) -> int:
-    from . import serverrows
+    from . import serverrows, targets
+
+    if getattr(args, "server_cmd", None) == "tables":
+        # The ownership map, as the Installer reads it (`server-install.md` §D4):
+        # content is ours, state is theirs.
+        for name, facts in sorted(targets.OWNED_TABLES.items()):
+            note = facts.get("client")
+            kind = "write" if facts.get("write") else (f"read · the client's {note}" if note else "read")
+            print(f"  {name:<14} {facts.get('key')!s:<16} {kind}")
+        print(f"  {len(targets.OWNED_TABLES)} table(s): the content this project may name")
+        return 0
 
     if bool(args.config) == bool(args.dsn):
         print("error: pass exactly one of --config or --dsn", file=sys.stderr)
@@ -315,6 +325,112 @@ def cmd_server(args) -> int:
     counts = ", ".join(f"{name} {count:,}" for name, count in snapshot.counts().items())
     print(f"wrote {args.out}: {counts}")
     return 0
+
+
+def cmd_env(args) -> int:
+    """An environment's server half: its own database and the folder the
+    Installer reads (`server-install.md` §D6)."""
+    from pathlib import Path
+
+    from . import envs, installer
+    from . import project as projects
+
+    try:
+        project = projects.load(args.dir)
+    except projects.ProjectError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    try:
+        if args.env_cmd == "provision":
+            def step(path: Path) -> None:
+                print(f"  importing {path.name} …", flush=True)
+
+            record = envs.provision(
+                project,
+                args.env,
+                baseline=args.baseline,
+                yes=args.yes,
+                on_file=step,
+            )
+            baseline = record["baseline"]
+            print(f"provisioned {args.env}: {record['database']} from {baseline['files']} file(s)")
+            print(f"  {record['tables']} table(s) · {baseline['bytes']:,} bytes of SQL imported")
+            print(f"  baseline {baseline['sha256']}")
+            cleared = record.get("installer") or {}
+            if cleared.get("dropped"):
+                print(
+                    f"  installer  the record is started over: "
+                    f"{len(cleared['dropped'])} applied release(s) described the database "
+                    "that is gone"
+                )
+            if cleared.get("kept"):
+                print(
+                    f"  handed     release {', '.join(cleared['kept'])} — "
+                    f"`camelot env apply {args.env}` puts its rows back"
+                )
+            print(f"  record   {envs.record_path(envs.folder(project, args.env))}")
+            return 0
+        if args.env_cmd == "status":
+            shown = envs.describe(project, args.env)
+            print(f"{args.env}  {shown['root']}  {'there' if shown['exists'] else 'no folder'}")
+            print(f"  database   {shown['database']}")
+            record = shown["record"]
+            if record:
+                baseline = record.get("baseline") or {}
+                print(
+                    f"  baseline   {baseline.get('files')} file(s) · "
+                    f"{baseline.get('sha256')} imported {record.get('imported')}"
+                )
+                print(f"  tables     {record.get('tables')}")
+            else:
+                print("  baseline   not provisioned yet")
+            folder = shown["installer"]
+            print(
+                f"  installer  {len(folder['releases'])} release(s) handed over · "
+                f"{len(folder['applied'])} applied · state {'yes' if folder['state'] else 'no'}"
+            )
+            return 0
+        if args.env_cmd == "verify":
+            report = envs.verify(project, args.env)
+            print(f"{args.env}  {report['root']}  {report['database']}  {report['tables']} table(s)")
+            for problem in report["problems"]:
+                print(f"  {problem}")
+            return 0 if report["ok"] else 1
+        if args.env_cmd == "apply":
+            applied = envs.apply(project, args.env, release=args.release)
+            if applied.get("unchanged"):
+                print(
+                    f"{args.env} holds release {applied['release']:04d} already: "
+                    "nothing was written"
+                )
+                return 0
+            print(f"applied release {applied['release']:04d} to {args.env}")
+            print(
+                f"  {applied['written']} row(s) written · {applied['skipped']} skipped "
+                f"(already what the release says)"
+            )
+            needs = applied["fact"].get("needs") or []
+            if needs:
+                print(f"  reload     {', '.join('/reload ' + name for name in needs)}")
+            print(f"  evidence   {installer.applied_path(applied['folder'], applied['release'])}")
+            print(f"  state      {installer.state_path(applied['folder'])}")
+            return 0
+        if args.env_cmd == "reload":
+            fact = envs.reload(project, args.env)
+            needs = fact.get("needs") or []
+            print(
+                f"recorded: {args.env} reload {fact.get('release') or '—'}"
+                + (f" · {' '.join('/reload ' + name for name in needs)}" if needs else "")
+            )
+            return 0
+    except envs.EnvError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    except (projects.ProjectError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(f"error: unknown env command {args.env_cmd!r}", file=sys.stderr)
+    return 2
 
 
 def print_plan(table: dict) -> None:
@@ -1349,7 +1465,36 @@ def main(argv=None) -> int:
     ep.add_argument("--out", required=True, help="snapshot file to write")
     ep.add_argument("--config", help="the server's own serverconfig.xml (DBConnectionString)")
     ep.add_argument("--dsn", help="mysql://user:password@host:port/database instead")
+    tp = sp.add_parser("tables", help="the tables this project owns, and its keys")
     p.set_defaults(func=cmd_server)
+
+    p = sub.add_parser("env", help="an environment's server half: its database and its folder")
+    envp = p.add_subparsers(dest="env_cmd", required=True)
+    pp_ = envp.add_parser("provision", help="drop the environment's database and import the baseline")
+    pp_.add_argument("env", nargs="?", default="local", help="local, staging, production (default: local)")
+    pp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    pp_.add_argument("--baseline", help="OpenDAoC's database checkout (default: machine.json)")
+    pp_.add_argument("--yes", action="store_true",
+                     help="provisioning deletes the environment's database: say so")
+    sp_ = envp.add_parser("status", help="what an environment holds")
+    sp_.add_argument("env", nargs="?", default="local")
+    sp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    vp_ = envp.add_parser("verify", help="read an environment back (the database and the folder)")
+    vp_.add_argument("env", nargs="?", default="local")
+    vp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    rp_ = envp.add_parser("reload", help="record the post-deploy ritual a release named")
+    rp_.add_argument("env", nargs="?", default="local")
+    ap_ = envp.add_parser("apply", help="write a handed-over release's rows into the environment")
+    ap_.add_argument("env", nargs="?", default="local")
+    ap_.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    ap_.add_argument(
+        "--release",
+        type=int,
+        default=None,
+        help="the release to apply (default: the newest one it holds that is not applied)",
+    )
+    rp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    p.set_defaults(func=cmd_env)
 
     p = sub.add_parser("project", help="the project: the whole content of one server")
     pp = p.add_subparsers(dest="project_cmd", required=True)

@@ -86,7 +86,13 @@ def names(project: project_mod.Project) -> list[str]:
 
 def folder(project: project_mod.Project, env: str) -> Path:
     """Where an environment lives on this machine. Refused by name when the
-    project does not declare it, or when this machine has no folder for it."""
+    project does not declare it, or when this machine has no folder for it.
+
+    `machine.json` gives either the folder alone (the first shape the format
+    had) or an object with one: the object carries this machine's other answers
+    too — the environment's database, its baseline, its connection — and `root`
+    is the folder among them (`server-install.md` §D6).
+    """
     declared = names(project)
     if str(env) not in declared:
         raise PipelineError(
@@ -94,12 +100,13 @@ def folder(project: project_mod.Project, env: str) -> Path:
             f"({', '.join(declared) if declared else 'none declared'})"
         )
     mapped = (project_mod.machine(project.root).get("environments") or {}).get(str(env))
-    if not mapped:
+    root = mapped.get("root") if isinstance(mapped, dict) else mapped
+    if not root:
         raise PipelineError(
             f"{project.name}: {env!r} has no folder on this machine — add "
             f'"{env}": "…" to {project_mod.MACHINE_FILE}'
         )
-    return Path(str(mapped)).expanduser()
+    return Path(str(root)).expanduser()
 
 
 def client_of(env_root) -> Path:

@@ -21,6 +21,9 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot client install P.tar.gz` / `uninstall MOD` / `status` / `verify` / `free-ids` | apply, remove, inspect and read back a pack's client half; list the model ids a mod may use |
 | `camelot client patch [--max-id N] [--restore]` | raise the client's model-id ceiling in place (unmanaged clients; `.orig` backup, byte-exact restore) |
 | `camelot server export --out F [--config C\|--dsn D]` | export the server's world rows (`mob`/`worldobject`/`door`/`path`) to a snapshot the viewer reads; needs `pymysql` (extra `mysql`) |
+| `camelot server tables` | the server tables this project owns — the map the Installer validates a release against |
+| `camelot project new\|open\|info\|verify\|import\|populate\|release\|releases\|deploy\|promote\|envs` | the project: one server's whole content in one folder (release, dry run, deploy to an environment) |
+| `camelot env provision\|status\|verify\|apply\|reload [ENV]` | an environment's server half: its own database built from OpenDAoC's baseline, what it holds, the Installer's step, the reload ritual, the read-back |
 | `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--db-write] [--edits D] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only; `--edits` turns on the **world editor** (6.3: select, move/rotate/scale with snap, catalog add, remove, the undo journal, `build`/`apply`/`revert`/`restore`); `--db-write` lets it also patch the server's **existing** world rows (B2: a keep's own doors move with the keep) |
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
@@ -877,6 +880,22 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 .venv/bin/camelot project release --dir camelot-hills
 .venv/bin/camelot project releases --dir camelot-hills
 .venv/bin/camelot project verify --dir camelot-hills --rebuild 1
+# An environment's server half (P5 of `notes/`): `provision` drops the
+# environment's *own* database and imports OpenDAoC's baseline into it (110
+# files, 72 MB, ~15 s on the operator's machine), then starts the Installer's
+# record over; the environment never gets the database the authoring server
+# edits. `deploy` hands the release over, `apply` writes its rows from here
+# (what the server's own Installer will do), `reload` records the in-game
+# ritual the release named, `verify` reads it all back. This machine's answers
+# (the folder, the database, the baseline, the connection) live in the untracked
+# machine.json.
+.venv/bin/camelot env provision local --yes --dir camelot-hills
+.venv/bin/camelot env status local --dir camelot-hills
+.venv/bin/camelot project deploy 1 --env local --dir camelot-hills
+.venv/bin/camelot env apply local --dir camelot-hills
+.venv/bin/camelot env reload local --dir camelot-hills
+.venv/bin/camelot env verify local --dir camelot-hills
+.venv/bin/camelot server tables                      # the tables this project owns
 # Home is the front door (P2 of `notes/`): the daemon serves it at /home.
 # The browser lands there when the daemon was started without a project, and on
 # /world when it was started with one. From the page, Open / New project /

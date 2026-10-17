@@ -72,7 +72,10 @@ There is one projection, one deployment path and one server to keep working:
 - an OpenDAoC projection mapping logical ids onto its own tables and wire
   format;
 - an Installer applying one release idempotently
-  (`server-bridge/mod-loader.md`);
+  (`server-bridge/mod-loader.md`): its **contract** and its step are implemented
+  (`core/camelot/installer.py` — `camelot/releases/NNNN/`, `state.json`,
+  `applied/NNNN/applied.json`, the ownership map, `camelot env apply` for an
+  environment this machine reaches); the C# half that runs *on a server* is not;
 - target-specific ID maps, range checks and compatibility metadata.
 
 A pack is built for that one target and deployed to that one server; ordinary

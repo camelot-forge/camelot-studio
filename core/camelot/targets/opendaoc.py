@@ -28,11 +28,14 @@ __all__ = [
     "DEFAULT_MODEL_FIELDS",
     "DEFAULT_SIZE_RANGE",
     "NPC_CLASS",
+    "OWNED_TABLES",
     "RACE_IDS",
     "SERVER_RACE_NAMES",
     "OpendaocFigure",
     "RaceTableReport",
     "creature_row",
+    "owned",
+    "owned_key",
     "pack_model",
     "pack_race_gender",
     "parse_race_sql",
@@ -315,3 +318,36 @@ def creature_row(
         "id": f"{_ROW_ID_PREFIX}:{model_id}",
         "values": values,
     }
+
+
+#: The tables this suite *owns* — content, never state (`server-install.md`
+#: §D3/§D4). The map is data because three things read it: the Installer
+#: refuses a release that names a table outside it, `camelot server tables`
+#: reports it, and a re-base (P8) asks it what may be rewritten. `write` says
+#: whether the suite ever writes that table, and `key` is the column a row is
+#: named by (`serverrows.KEY_COLUMNS` is the same fact for the rows we edit).
+OWNED_TABLES = {
+    "mob": {"key": "Mob_ID", "write": True},
+    "worldobject": {"key": "WorldObject_ID", "write": True},
+    "door": {"key": "Door_ID", "write": True},
+    "path": {"key": "PathID", "write": False},
+    # The client's own tables (`gamedata.mpk`): ours in the client half, and
+    # the server's copy is the loader's to import — the suite edits the client's
+    # entries and never these rows.
+    "items": {"key": "Id_nb", "write": False, "client": "items.csv"},
+    "monsters": {"key": "ID", "write": False, "client": "monsters.csv"},
+    "spells": {"key": "SpellID", "write": False, "client": "spells.csv"},
+    "styles": {"key": "StyleID", "write": False, "client": "styles.csv"},
+    "loot": {"key": "LootTemplate", "write": False, "client": "loot.csv"},
+    "shops": {"key": "MerchantID", "write": False, "client": "merchants.csv"},
+}
+
+
+def owned(table: str) -> bool:
+    """Is this table one the project's content may name?"""
+    return str(table) in OWNED_TABLES
+
+
+def owned_key(table: str) -> str | None:
+    found = OWNED_TABLES.get(str(table))
+    return str(found["key"]) if found else None
