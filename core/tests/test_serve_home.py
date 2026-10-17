@@ -11,6 +11,7 @@ and the switch warns about what it leaves behind instead of refusing.
 
 import json
 import os
+import signal
 import subprocess
 from pathlib import Path
 
@@ -34,14 +35,17 @@ def machine(tmp_path):
 
 def home_app(root, project=None, config_dir=None, **kwargs):
     """The daemon as `create_app` builds it — the session is reachable on
-    `app.state` for the tests that need the lock to be real."""
+    `app.state` for the tests that need the lock to be real. `config_dir` is
+    only passed when a test names one: the default is the machine's own, and a
+    test must never write there."""
+    if config_dir is not None:
+        kwargs["config_dir"] = config_dir
     return create_app(
         ServeConfig(
             root=root,
             watch=False,
             open_browser=False,
             project=project,
-            config_dir=config_dir,
             **kwargs,
         )
     )
@@ -210,6 +214,34 @@ def test_a_daemon_that_serves_a_project_lists_it(tmp_path, base, monkeypatch, ca
     # and without a project the browser lands on Home, the front door
     assert main(["serve", "--root", str(base), "--no-open", "--no-watch"]) == 0
     assert "/home" in capsys.readouterr().out
+
+
+def test_the_lock_is_dropped_when_the_daemon_is_asked_to_stop(base, tmp_path, monkeypatch):  # noqa: F811
+    """P §D13: the daemon drops the lock when it stops — and it stops *by
+    signal*, which is the one path a `finally` never runs on (uvicorn
+    re-raises the signal once its graceful shutdown is done, so the call after
+    `uvicorn.run(...)` is never reached). The handler uvicorn restores before
+    re-raising is ours, so this is where the lock has to go."""
+    project = pj.new(tmp_path / "avalon", client=base, name="Avalon")
+    session = home_app(base, project=project.root, config_dir=tmp_path / "config").state.session
+    assert session.claim()["held"] is True
+    assert pj.lock_state(project.root) is not None
+
+    before = signal.getsignal(signal.SIGTERM)
+    real_signal = signal.signal  # the restored call must not land in `calls`
+    try:
+        session.release_on_signal()
+        handler = signal.getsignal(signal.SIGTERM)
+        # what the signal would do, with nothing actually signalled
+        calls: list[tuple] = []
+        monkeypatch.setattr(signal, "signal", lambda signum, fn: calls.append((signum, fn)))
+        monkeypatch.setattr(os, "kill", lambda pid, signum: calls.append((pid, signum)))
+        handler(signal.SIGTERM, None)
+    finally:
+        real_signal(signal.SIGTERM, before)
+
+    assert pj.lock_state(project.root) is None  # the lock was dropped
+    assert calls == [(signal.SIGTERM, signal.SIG_DFL), (os.getpid(), signal.SIGTERM)]
 
 
 # --- the doors (slice 2b) -----------------------------------------------------

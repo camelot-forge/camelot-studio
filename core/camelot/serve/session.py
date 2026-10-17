@@ -15,6 +15,8 @@ drops it when the daemon stops.
 """
 from __future__ import annotations
 
+import os
+import signal
 from pathlib import Path
 
 from .. import project as project_mod
@@ -98,6 +100,26 @@ class Session:
             return
         project_mod.release(self.claimed)
         self.claimed = None
+
+    def release_on_signal(self, signals=(signal.SIGTERM, signal.SIGINT)) -> None:
+        """Drop the lock when the process is *asked* to stop (`project.md`
+        §D13) — the one moment a `finally` misses.
+
+        `uvicorn` catches the signal, shuts down gracefully, then re-raises it
+        so the process exits with the code a stop expects: the run never
+        returns, so nothing after `uvicorn.run(...)` runs. It restores the
+        handlers it found before re-raising, which is exactly what makes this
+        work: our handler is the one that runs then — it drops the lock and
+        lets the signal do its job.
+        """
+
+        def stop(signum, _frame):
+            self.release()
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+        for signum in signals:
+            signal.signal(signum, stop)
 
     def _remember(self, root: Path | None = None) -> str:
         """Put a project at the front of the machine's list (`home.md` §D1).

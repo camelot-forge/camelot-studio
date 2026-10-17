@@ -581,6 +581,10 @@ def cmd_serve(args) -> int:
 
     import uvicorn
 
+    # The lock is dropped when the daemon stops — including when it is stopped
+    # by a signal, which is the usual way and the one a `finally` misses
+    # (uvicorn re-raises the signal once its shutdown is done).
+    session.release_on_signal()
     try:
         uvicorn.run(app, host=cfg.host, port=cfg.port, log_level=args.log_level)
     finally:
