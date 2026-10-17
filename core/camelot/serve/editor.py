@@ -316,8 +316,32 @@ class Editor:
         return {"ops": int(last.get("ops") or 0), "at": last.get("at")}
 
     def pending_lines(self) -> list[journal_mod.Line]:
-        """The ops no publish covers yet, in the journal's total order."""
-        return self.journal().live_except(self.published_keys())
+        """The op lines the working copy holds beyond the newest release's cut
+        (`project.md` §D5), in the journal's total order — or, while no release
+        exists, the ops no publish covers yet: the same idea at a finer grain,
+        which is all there was before P3.
+
+        A drop beyond the cut is pending like any op (it changes what the next
+        release holds); a drop *below* it is part of what the last release
+        carries, so it is not.
+        """
+        cut = self._release_cut()
+        if cut is None:
+            return self.journal().live_except(self.published_keys())
+        journal = self.journal()
+        dropped = journal.dropped()
+        return [line for line in journal.pending(cut) if line.key not in dropped]
+
+    def _release_cut(self) -> dict[str, int] | None:
+        """The newest release's cut, when the project has one. The import is
+        local: `release` reads the editor, so it cannot be imported by it."""
+        from .. import release as release_mod
+
+        try:
+            history = release_mod.releases(self.dir)
+        except release_mod.ReleaseError:
+            return None
+        return dict(history[-1].get("log") or {}) if history else None
 
     # -- migrating the legacy single file -------------------------------------- 
 
@@ -356,8 +380,43 @@ class Editor:
         self._journal = None
         return entry
 
+    def live_change_lines(self, zone_id: int) -> list[journal_mod.Line]:
+        """The zone's live lines that carry a change — a fixture op or row
+        patches — in the journal's order: what a drop names, and what `undo`
+        walks back from."""
+        return [
+            line
+            for line in self.journal().live()
+            if line.zone == zone_id and (line.op or line.rows)
+        ]
+
+    def live_op_lines(self, zone_id: int) -> list[journal_mod.Line]:
+        """The zone's live world lines, in the journal's order — what a drop
+        names, and what `live_ops` reads."""
+        return [
+            line
+            for line in self.journal().live()
+            if line.zone == zone_id and line.family == "world" and line.op
+        ]
+
+    def live_ops(self, zone_id: int) -> list[dict]:
+        """**Every** fixture op the journal still holds for the zone — pending
+        or carried by a release — in the journal's order.
+
+        This is the *state* as the journal describes it, which is what a build
+        replays (`working_table`) and what the viewer shows. `pending` is a
+        different question: what a save would still *write* (`pipeline.md`
+        §D5, `project.md` §D5) — a release covers ops the client of *this*
+        machine already carries, while a clone's pristine client has to be
+        given them again.
+        """
+        if not self.available:
+            return []
+        return [line.op for line in self.live_op_lines(zone_id)]
+
     def ops(self, zone_id: int) -> list[dict]:
-        """The zone's *pending* fixture ops (what the client does not carry)."""
+        """The zone's *pending* fixture ops (what neither a publish nor the
+        newest release covers yet): what a save would write."""
         if not self.available:
             return []
         return [
@@ -493,10 +552,13 @@ class Editor:
     def working_table(self, zone: Zone) -> gamedata.Table:
         """The base table with this zone's journal applied.
 
-        An op the base *already shows* counts as applied — `apply` writes the
-        edit into the client, so the journal then describes a state the base
-        carries; replaying it must be a no-op, not a conflict (the operator
-        hit exactly this right after their first in-game check, 2026-10-12).
+        Every op the journal still holds is replayed — a release's build is
+        given a *pristine* base on another machine as readily as this one's
+        edited client — and an op the base *already shows* counts as applied:
+        `apply` writes the edit into the client, so the journal then describes
+        a state the base carries; replaying it must be a no-op, not a conflict
+        (the operator hit exactly this right after their first in-game check,
+        2026-10-12).
         And so does a *run* of ops on one row whose last step is where the base
         already stands: that is a chain a publish has carried (25344 → 20992 →
         19968 landing on a base that reads 19968), and refusing it would leave
@@ -505,10 +567,16 @@ class Editor:
         still refuses: that is a real conflict, not a replay.
         """
         table = self.base_table(zone)
-        pending = list(self.ops(zone.info.zone_id))
+        lines = self.live_op_lines(zone.info.zone_id)
+        ops = [line.op for line in lines]
+        # The ops a publish or a release already covers: the run heuristic below
+        # may only swallow *those* (the base can legitimately show their last
+        # step), never a pending one.
+        pending = {line.key for line in self.pending_lines()}
+        covered = {index for index, line in enumerate(lines) if line.key not in pending}
         index = 0
-        while index < len(pending):
-            op = pending[index]
+        while index < len(ops):
+            op = ops[index]
             if self._already_applied(table, op):
                 index += 1
                 continue
@@ -516,30 +584,36 @@ class Editor:
                 table = gamedata.apply_row_ops(table, [op])
                 index += 1
             except gamedata.TableError as error:
-                carried = self._published_run(table, pending, index)
+                carried = self._published_run(table, ops, index, covered)
                 if carried is None:
                     raise EditorError(str(error)) from error
                 index += carried
         return table
 
-    def _published_run(self, table: gamedata.Table, pending: list[dict],
-                       index: int) -> int | None:
+    def _published_run(self, table: gamedata.Table, ops: list[dict], index: int,
+                       covered: set[int]) -> int | None:
         """How many ops to skip when the run that starts here was published.
 
         A run is the consecutive ops on one row. It counts as published when
-        its *last* step is a state the table already shows — whatever the
-        intermediate steps asked for, a published chain ends where the base
-        stands.
+        every op in it is covered (a publish or a release wrote it) *and* its
+        last step is a state the table already shows — whatever the
+        intermediate steps asked for, a covered chain ends where the base
+        stands. A pending op anywhere in the run ends the question: a real
+        conflict must be refused, not swallowed.
         """
-        row_id = pending[index].get("id")
-        if row_id is None:
+        row_id = ops[index].get("id")
+        if row_id is None or index not in covered:
             return None
         end = index
-        while end + 1 < len(pending) and pending[end + 1].get("id") == row_id:
+        while (
+            end + 1 < len(ops)
+            and ops[end + 1].get("id") == row_id
+            and (end + 1) in covered
+        ):
             end += 1
         if end == index:
             return None
-        return end - index + 1 if self._already_applied(table, pending[end]) else None
+        return end - index + 1 if self._already_applied(table, ops[end]) else None
 
     @staticmethod
     def _already_applied(table: gamedata.Table, op: dict) -> bool:
@@ -874,25 +948,31 @@ class Editor:
                  "originals": {name: str(stored.get(name, "")) for name in values}}]
 
     def undo(self, zone_id: int) -> dict | None:
-        """Drop the zone's last pending op — exact, because ops are additive.
+        """Drop the zone's last live op — exact, because ops are additive.
 
         The drop is **appended** (the op stays in the shard, the replay skips
-        it: history is never erased). A line a publish covered is refused
-        instead: the client and the server's rows carry it, so dropping it
-        would leave a live change with no journal entry behind it — `revert`
-        is the call that puts back what the session changed.
+        it: history is never erased), and it is pending work like any change:
+        the next release ships the zone's file whole, so a target that took the
+        previous cut converges on the next deploy (`project.md` §D5).
+
+        The one refusal left is the publish-only path: an op a publish carried
+        *and* no release covers — a publish never rewrites the file, so the
+        client would keep the edit with no journal entry behind it. Cut a
+        release (or use revert, which puts the recorded originals back).
         """
         if not self.available:
             raise EditorError("the daemon was started without --project <dir>")
         self._writable()
-        pending = [line for line in self.pending_lines() if line.zone == zone_id]
-        if not pending:
-            if any(self.published_keys()):
-                raise EditorError(
-                    "the last edit is published: the client and the server's rows "
-                    "carry it — use revert (it puts the recorded originals back)")
+        lines = self.live_change_lines(zone_id)
+        if not lines:
             return None
-        last = pending[-1]
+        last = lines[-1]
+        if self._release_cut() is None and last.key in self.published_keys():
+            raise EditorError(
+                "the last edit is published and no release carries it yet: the client "
+                "holds it — cut a release (the drop travels with it), or use revert, "
+                "which puts the recorded originals back"
+            )
         self.journal().drop(last)
         return last.op if last.family == "world" and last.op else {"rows": last.rows}
 

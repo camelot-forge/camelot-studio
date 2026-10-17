@@ -384,7 +384,7 @@ def _zone_fixtures(world: World, zone: Zone) -> tuple[list[Any], list[str]]:
     client's own rows and says so, rather than showing half an edit.
     """
     editor = world.editor
-    if editor is None or not editor.ops(zone.info.zone_id):
+    if editor is None or not editor.live_ops(zone.info.zone_id):
         return zone.fixtures(), []
     try:
         return editor.fixtures(zone), []

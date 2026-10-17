@@ -206,3 +206,20 @@ def test_a_release_needs_a_client_and_a_free_checkout(served_client, tmp_path, m
     )
     with pytest.raises(rel.ReleaseError, match="held by lyra"):
         rel.cut(project.root)
+
+
+def test_a_release_clears_the_work_waiting(served_client, tmp_path):
+    """`project.md` §D5: "pending" is what the working copy holds beyond the
+    newest release's cut — not what the last publish covered. The chip, Home and
+    the panel read this one number, so it is asserted here once: a release
+    clears it, and the next edit brings it back."""
+    project = _project(tmp_path, served_client)
+    editor = _editor(project, served_client)
+    _move(editor)
+    assert editor.pending_counts() == {"fixtures": 1, "rows": 0}
+
+    rel.cut(project.root)
+
+    assert editor.pending_counts() == {"fixtures": 0, "rows": 0}
+    _move(editor, x=25472)
+    assert editor.pending_counts() == {"fixtures": 1, "rows": 0}
