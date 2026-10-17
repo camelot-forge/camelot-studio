@@ -43,6 +43,9 @@ SERVER = "server"
 INSTALLER = "camelot"
 RELEASES = "releases"
 APPLIED = "applied"
+#: The feed the players' launcher reads (C §D4): a directory in the project,
+#: rebuildable and never committed.
+FEED = "feed"
 #: The install's own record of what a client holds (C §D7).
 STATE = ".camelot/state.json"
 
@@ -57,6 +60,7 @@ __all__ = [
     "PipelineError",
     "client_of",
     "deploy",
+    "feed",
     "folder",
     "installer_of",
     "live",
@@ -526,6 +530,47 @@ def live(root, *, env=None) -> dict[str, dict]:
     if env is not None:
         return {str(env): found[str(env)]} if str(env) in found else {}
     return dict(sorted(found.items()))
+
+
+def feed(root) -> dict:
+    """What the players can fetch, read from the project's own `feed/` (C §D4):
+    the launcher's two text files, and our record beside them. A feed that is
+    not there yet is a fact, not an error — building it is P6."""
+    where = Path(root) / FEED
+    found: dict = {
+        "path": str(where),
+        "present": where.is_dir(),
+        "version": None,
+        "files": 0,
+        "bytes": 0,
+        "release": None,
+    }
+    if not found["present"]:
+        return found
+    version = where / "version-new.txt"
+    if version.is_file():
+        text = version.read_text(encoding="utf-8").strip()
+        found["version"] = int(text) if text.isdigit() else (text or None)
+    patchlist = where / "patchlist-new.txt"
+    if patchlist.is_file():
+        lines = patchlist.read_text(encoding="utf-8").splitlines()
+        # line 1 is the base URL the launcher downloads from; the rest are
+        # `path \t md5 \t size` (C §3)
+        found["files"] = max(0, len(lines) - 1)
+        found["bytes"] = sum(
+            int(parts[2])
+            for parts in (line.split("\t") for line in lines[1:])
+            if len(parts) >= 3 and parts[2].strip().isdigit()
+        )
+    record = where / "release.json"
+    if record.is_file():
+        try:
+            found["release"] = int(
+                json.loads(record.read_text(encoding="utf-8")).get("release")
+            )
+        except (ValueError, TypeError, OSError):
+            found["release"] = None
+    return found
 
 
 def verify(root, *, env) -> dict:

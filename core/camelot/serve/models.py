@@ -606,3 +606,21 @@ class HomeBrowse(BaseModel):
     path: str
     parent: str | None = None
     dirs: list[HomeBrowseEntry] = []
+
+
+class DeployAsk(BaseModel):
+    """One question to the pipeline (`pipeline.md` §6): which release, which
+    environment, and whether the operator adopts bytes that changed outside the
+    tool (`--adopt`). `source` names the environment a promotion comes from; a
+    plain deploy leaves it empty."""
+
+    release: int
+    env: str
+    adopt: bool = False
+    source: str | None = None
+
+
+class DeployEnvAsk(BaseModel):
+    """One environment, for the read-back (`verify`)."""
+
+    env: str

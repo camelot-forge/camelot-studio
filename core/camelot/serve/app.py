@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from .. import __version__
 from .api import build_router
 from .config import ServeConfig
+from .deploy import build_deploy_router
 from .editor import Editor
 from .home import build_home_router
 from .index import AssetIndex
@@ -76,6 +77,7 @@ def create_app(config: ServeConfig) -> FastAPI:
     app.include_router(build_router(config, index, watcher))
     app.include_router(build_world_router(config, world))
     app.include_router(build_home_router(config, world, session))
+    app.include_router(build_deploy_router(config, world))
 
     static_dir = config.static_dir
     if static_dir and Path(static_dir).exists():
