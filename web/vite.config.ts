@@ -37,14 +37,15 @@ export default defineConfig({
 	server: {
 		// `pnpm dev` proxies the daemon API (see `camelot serve`), so the browser
 		// stays same-origin and no CORS/host exceptions are needed. The default is
-		// the operator's own session (8762, `notes`); a scratch daemon
-		// is named explicitly: `CAMELOT_API=http://127.0.0.1:8763 pnpm dev`.
-		// Pointing at a daemon older than this front is the one mistake that
-		// reads as a JSON error in the console (2026-10-17: a 6.3-era daemon on
-		// 8760 answered every unknown `/api` path with its own index.html).
+		// the daemon `camelot serve` starts by itself — port 8760, the same one
+		// `notes` uses for the operator's session; a scratch daemon is
+		// named explicitly: `CAMELOT_API=http://127.0.0.1:8763 pnpm dev`. Pointing
+		// at a daemon older than this front is the one mistake that reads as a JSON
+		// error in the console (2026-10-17: a daemon from before the project routes
+		// answered every unknown `/api` path with its own index.html).
 		proxy: {
 			'/api': {
-				target: process.env.CAMELOT_API ?? 'http://127.0.0.1:8762',
+				target: process.env.CAMELOT_API ?? 'http://127.0.0.1:8760',
 				changeOrigin: true
 			}
 		}

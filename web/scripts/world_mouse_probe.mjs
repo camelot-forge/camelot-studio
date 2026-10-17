@@ -4,7 +4,7 @@
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
 
-const base = process.argv[2] ?? 'http://127.0.0.1:8762';
+const base = process.argv[2] ?? 'http://127.0.0.1:8760';
 const outDir = process.argv[3] ?? '/tmp/camelot-ux';
 const zoneName = process.argv[4] ?? 'Camelot Hills';
 mkdirSync(outDir, { recursive: true });

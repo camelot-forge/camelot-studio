@@ -2,14 +2,14 @@
 // Journal), driven like an operator. Throwaway harness; exits non-zero on a
 // failed check.
 //
-//   node scripts/dock_probe.mjs http://127.0.0.1:8762 /tmp/camelot-ux "Camelot Hills"
+//   node scripts/dock_probe.mjs http://127.0.0.1:8760 /tmp/camelot-ux "Camelot Hills"
 //
 // The world half writes into the *operator's* session through its own routes
 // and reverts at the end (the journal is left empty, as it found it).
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
 
-const base = process.argv[2] ?? 'http://127.0.0.1:8762';
+const base = process.argv[2] ?? 'http://127.0.0.1:8760';
 const outDir = process.argv[3] ?? '/tmp/camelot-ux';
 const zoneName = process.argv[4] ?? 'Camelot Hills';
 mkdirSync(outDir, { recursive: true });
