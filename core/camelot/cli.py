@@ -317,6 +317,35 @@ def cmd_server(args) -> int:
     return 0
 
 
+def print_plan(table: dict) -> None:
+    """The dry run as the operator reads it (`pipeline.md` §3): the lines that
+    belong to the release, then one row per item — what, verdict, why — then
+    the count."""
+    print(f"release {int(table['release']):04d} → {table['env']}  {table['root']}")
+    print(f"  {'order':<9} {table['order']}")
+    reloads = (table.get("needs") or {}).get("reload") or []
+    if reloads:
+        print(f"  {'reload':<9} {', '.join(reloads)}")
+    evidence = table.get("evidence") or {}
+    print(
+        f"  {'evidence':<9} {evidence.get('path', '')} "
+        + ("(there)" if evidence.get("present") else "(not there yet)")
+    )
+    checked = (table.get("ids") or {}).get("checked") or 0
+    if checked:
+        held = len((table.get("ids") or {}).get("collisions") or [])
+        print(f"  {'ids':<9} {checked} checked, {held} already held here")
+    print()
+    width = max((len(item["verdict"]) for item in table["items"]), default=0)
+    for item in table["items"]:
+        print(f"  {item['verdict']:<{width}}  {item['what']}")
+        print(f"  {'':<{width}}  {item['why']}")
+    counts = table.get("counts") or {}
+    summary = ", ".join(f"{count} {name}" for name, count in counts.items() if count)
+    print()
+    print(f"  {len(table['items'])} item(s): {summary or 'none'}")
+
+
 def cmd_project(args) -> int:
     from pathlib import Path
 
@@ -519,6 +548,84 @@ def cmd_project(args) -> int:
                 line += f"  client v{client_half.get('version')}"
             print(line)
         return 0
+
+    if args.project_cmd == "envs":
+        from . import pipeline as pipe
+
+        declared = pipe.names(project)
+        if not declared:
+            print("no environments declared")
+            return 0
+        held = pipe.live(project.root)
+        print(f"environments  {project.name}")
+        for name in declared:
+            try:
+                where = pipe.folder(project, name)
+            except pipe.PipelineError as error:
+                print(f"  {name:<12} {error}")
+                continue
+            fact = held.get(name)
+            state = (
+                f"release {int(fact['release']):04d} since {fact.get('at', '')}"
+                if fact
+                else "nothing deployed"
+            )
+            print(f"  {name:<12} {where}  {state}")
+        return 0
+
+    if args.project_cmd in ("deploy", "promote"):
+        from . import pipeline as pipe
+
+        try:
+            if args.project_cmd == "promote":
+                report = pipe.promote(
+                    project.root, args.number, frm=args.frm, to=args.to, adopt=args.adopt
+                )
+            elif args.dry_run:
+                table = pipe.plan(project.root, args.number, env=args.env, adopt=args.adopt)
+                print_plan(table)
+                return 1 if table["refusals"] else 0
+            else:
+                report = pipe.deploy(
+                    project.root, args.number, env=args.env, adopt=args.adopt
+                )
+        except (pipe.PipelineError, projects.ProjectError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print_plan(report["plan"])
+        env = report["plan"]["env"]
+        print()
+        if report["outcome"] == "unchanged":
+            print(f"nothing written: {env} already holds release {args.number:04d}")
+            return 0
+        print(f"written: {len(report['wrote'])} file(s)")
+        for name in report["wrote"]:
+            print(f"  {name}")
+        reloads = report["plan"]["needs"].get("reload") or []
+        if reloads:
+            print(f"  the server needs: {', '.join('/reload ' + item for item in reloads)}")
+        print(f"  read it back: camelot project verify --env {env}")
+        return 0
+
+    if args.project_cmd == "verify" and getattr(args, "env", None):
+        from . import pipeline as pipe
+
+        try:
+            report = pipe.verify(project.root, env=args.env)
+        except (pipe.PipelineError, projects.ProjectError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        held = (
+            f"release {int(report['release']):04d}" if report["release"] else "nothing deployed"
+        )
+        print(f"{report['env']}  {report['root']}  {held}")
+        for item in report["server"]["files"]:
+            print(f"  {'ok' if item['ok'] else 'MISSING':<8} {item['what']}")
+        installs = report["client"].get("installs") or []
+        print(f"  client   {report['root']}/client  " + (", ".join(installs) or "no install"))
+        for problem in report["problems"]:
+            print(f"  {problem}")
+        return 0 if report["ok"] else 1
 
     if args.project_cmd == "verify" and getattr(args, "rebuild", None):
         from . import release as release_mod
@@ -1288,11 +1395,30 @@ def main(argv=None) -> int:
     vp.add_argument("--rebuild", type=int, metavar="N",
                     help="rebuild release N from the journal plus the base and compare the "
                          "bytes (pipeline.md §D5: what a CI job runs)")
+    vp.add_argument("--env", help="read that environment back instead of the base")
     rp = pp.add_parser("release", help="cut the next release (the range since the last one)")
     rp.add_argument("--dir", default=".", help="the project's directory (default: .)")
     rp.add_argument("--client", help="the client the build is against (default: this machine's)")
     ls = pp.add_parser("releases", help="the release history, oldest first")
     ls.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    dp = pp.add_parser("deploy", help="dry run, then deploy a release to an environment")
+    dp.add_argument("number", type=int, help="the release to deploy")
+    dp.add_argument("--env", required=True, help="local, staging, production (as declared)")
+    dp.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    dp.add_argument("--dry-run", action="store_true",
+                    help="print the table and write nothing")
+    dp.add_argument("--adopt", action="store_true",
+                    help="make bytes that changed outside the tool the target's own")
+    pp_ = pp.add_parser("promote", help="the same bytes to the next environment")
+    pp_.add_argument("number", type=int, help="the release to promote")
+    pp_.add_argument("--from", dest="frm", required=True,
+                     help="the environment it is deployed to")
+    pp_.add_argument("--to", required=True, help="the environment it should go to")
+    pp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    pp_.add_argument("--adopt", action="store_true",
+                     help="make bytes that changed outside the tool the target's own")
+    ep = pp.add_parser("envs", help="the environments, and what each holds")
+    ep.add_argument("--dir", default=".", help="the project's directory (default: .)")
     p.set_defaults(func=cmd_project)
 
     args = ap.parse_args(argv)

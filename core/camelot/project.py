@@ -169,7 +169,7 @@ MACHINE_EXAMPLE = """\
   "client": "/path/to/your/DAoC client",
   "author": "your-name",
   "environments": {
-    "local": "/path/to/a/scratch/client for the local environment"
+    "local": "/a/folder for this environment: its own client/ and server/"
   }
 }
 """

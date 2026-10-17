@@ -31,7 +31,7 @@ import tarfile
 from dataclasses import dataclass, field
 
 from . import clientpatch, gamedata, mod
-from .mpak import MpakArchive, write_mpak
+from .mpak import MpakArchive, MpakError, write_mpak
 
 __all__ = [
     "ConflictError",
@@ -42,6 +42,8 @@ __all__ = [
     "blocks_install",
     "client_running",
     "install_pack",
+    "original",
+    "original_entry",
     "resolve_existing",
     "running_client_dirs",
     "status",
@@ -179,6 +181,34 @@ def resolve_existing(client_dir: str, rel: str) -> str | None:
 
     path = clientfs.resolve(client_dir, rel)
     return path if path is not None and os.path.isfile(path) else None
+
+
+def original(client_dir: str, rel: str) -> bytes | None:
+    """The store's copy of a destination's original bytes, or None.
+
+    Only the store is consulted. The question this answers is whether the
+    target *records* an original — the author's mode captures one the first
+    time a destination is touched, a player's client has none — and reading
+    the file on disk instead would answer a different one.
+    """
+    path = _pristine_path(client_dir, rel)
+    if not os.path.isfile(path):
+        return None
+    return _read_file(path)
+
+
+def original_entry(client_dir: str, archive: str, entry: str) -> bytes | None:
+    """One entry of an archive destination, as the store's original holds it."""
+    path = _pristine_path(client_dir, archive)
+    if not os.path.isfile(path):
+        return None
+    parsed = MpakArchive(path)
+    try:
+        return parsed.read(entry)
+    except MpakError:
+        return None
+    finally:
+        parsed.close()
 
 
 def _resolve_for_write(client_dir: str, rel: str) -> str:
