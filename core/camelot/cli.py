@@ -480,7 +480,7 @@ def cmd_project(args) -> int:
 
         try:
             record = release_mod.cut(project.root, client=args.client)
-        except (release_mod.ReleaseError, projects.ProjectError, release_mod.ReleaseError) as error:
+        except (release_mod.ReleaseError, projects.ProjectError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
         families = ", ".join(f"{name} {count}" for name, count in record["families"].items())

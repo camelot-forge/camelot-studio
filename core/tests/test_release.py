@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from test_project import base  # noqa: F401  (the synthetic client)
-from test_serve_editor import editing  # noqa: F811  (the client with a csv archive)
+from test_serve_editor import editing  # noqa: F401  (what `served_client` is built on)
 from test_zones import world  # noqa: F401  (what `editing` is built on)
 
 from camelot import project as pj
@@ -25,7 +25,7 @@ from camelot.serve.world import World
 
 
 @pytest.fixture()
-def served_client(editing):  # noqa: F811
+def served_client(editing):  # noqa: F811  (the fixture the import names)
     """`test_zones`' client plus the two files `project.new` insists on (its own
     binary and the tables): a *project* records a base, and the release build
     reads that base — the daemon's root and the project's client are one."""
@@ -42,10 +42,9 @@ def _private_cache(tmp_path, monkeypatch):
 
 
 def _editor(project, client) -> Editor:
-    config = ServeConfig(root=client, project=project.root, cache_dir=project.root / "cache")
-    world = World(config)
-    world.editor = editor = Editor(config)
-    return editor
+    return Editor(
+        ServeConfig(root=client, project=project.root, cache_dir=project.root / "cache")
+    )
 
 
 def _project(tmp_path, client, name="Avalon") -> pj.Project:
@@ -57,7 +56,7 @@ def _move(editor, x=30000, y=31000, row=2):
     editor.record(World(editor.config).zone(0), {"kind": "move", "id": row, "x": x, "y": y})
 
 
-def test_a_release_records_its_range_and_its_payloads(served_client, tmp_path):  # noqa: F811
+def test_a_release_records_its_range_and_its_payloads(served_client, tmp_path):
     """`pipeline.md` §2: the record is decided at the cut — the range it holds,
     the base it was built against, the families, the two artifacts — and the
     deploy log gets one fact. The payloads land under `releases/NNNN/`, which
@@ -94,7 +93,7 @@ def test_a_release_records_its_range_and_its_payloads(served_client, tmp_path): 
     assert "releases/*/server/" in ignore and "releases/*/client/" in ignore
 
 
-def test_a_cut_with_nothing_new_is_refused(served_client, tmp_path):  # noqa: F811
+def test_a_cut_with_nothing_new_is_refused(served_client, tmp_path):
     """§D5: a release whose content equals the previous one is refused with
     "nothing to release" instead of producing a twin — and once the journal
     moves, the next cut holds only the range beyond the previous cut."""
@@ -116,7 +115,7 @@ def test_a_cut_with_nothing_new_is_refused(served_client, tmp_path):  # noqa: F8
     assert second["artifacts"]["server"]["pack"] != first["artifacts"]["server"]["pack"]
 
 
-def test_an_undo_changes_what_the_next_release_holds(served_client, tmp_path):  # noqa: F811
+def test_an_undo_changes_what_the_next_release_holds(served_client, tmp_path):
     """A drop retires an op — the range of the next release holds the drop, and
     the zone's file is shipped again (a target that took release 1 carries the
     row and must be given the file without it)."""
@@ -125,8 +124,7 @@ def test_an_undo_changes_what_the_next_release_holds(served_client, tmp_path):  
     _move(editor)
     rel.cut(project.root)
 
-    world = World(editor.config)
-    editor.undo(world.zone(0).info.zone_id)
+    editor.undo(0)  # the zone the move was in
     record = rel.cut(project.root)
 
     assert record["number"] == 2
@@ -148,7 +146,7 @@ def _have_git() -> bool:
     return subprocess.run(["git", "--version"], capture_output=True, check=False).returncode == 0
 
 
-def test_a_second_clone_rebuilds_release_one_byte_for_byte(served_client, tmp_path):  # noqa: F811
+def test_a_second_clone_rebuilds_release_one_byte_for_byte(served_client, tmp_path):
     """P3's exit criterion (`vision.md` §6): a second clone rebuilds release 1
     and gets the same bytes. The clone carries the record and the journal — the
     payloads are *not* committed, which is the whole reason the rebuild exists
@@ -178,12 +176,12 @@ def test_a_second_clone_rebuilds_release_one_byte_for_byte(served_client, tmp_pa
 
     # and a journal that moved makes the rebuild differ — the CI signal
     other = Editor(ServeConfig(root=served_client, project=clone, cache_dir=clone / "cache"))
-    world = World(other.config)
-    other.record(world.zone(0), {"kind": "move", "id": 2, "x": 20992, "y": 31000})
+    zone = World(other.config).zone(0)
+    other.record(zone, {"kind": "move", "id": 2, "x": 20992, "y": 31000})
     assert rel.rebuild(clone, 1, client=served_client)["same"] is False
 
 
-def test_a_release_needs_a_client_and_a_free_checkout(served_client, tmp_path, monkeypatch):  # noqa: F811
+def test_a_release_needs_a_client_and_a_free_checkout(served_client, tmp_path, monkeypatch):
     """The build is against the base, and the checkout is one writer's
     (`project.md` §D13): a project that names no client, or one another live
     process holds, is refused by name."""
