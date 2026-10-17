@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { HomeHealth } from './api/client';
-import { healthLabel, since } from './home';
+import type { HomeClient, HomeHealth } from './api/client';
+import { clientLabel, healthLabel, leftNotice, publishLabel, since, slug } from './home';
 
 const found = (state: string, detail = ''): HomeHealth => ({
 	path: '/x',
 	name: 'x',
 	state,
 	detail,
-	findings: []
+	findings: [],
+	pending: {}
 });
 
 describe('healthLabel', () => {
@@ -43,5 +44,61 @@ describe('since', () => {
 		expect(ago('2026-08-01T12:00:00Z')).toBe('2026-08-01');
 		expect(ago('')).toBe('');
 		expect(since('not a date', now)).toBe('');
+	});
+});
+
+describe('publishLabel', () => {
+	it('says what a project still owes, or that it owes nothing', () => {
+		expect(publishLabel(0)).toBe('nothing to publish');
+		expect(publishLabel(1)).toBe('1 edit to publish');
+		expect(publishLabel(3)).toBe('3 edits to publish');
+	});
+});
+
+describe('leftNotice', () => {
+	it('says what the project being left keeps, in one line', () => {
+		expect(leftNotice({ path: '/a', name: 'Avalon', pending: 3 })).toBe(
+			'Avalon keeps 3 edits to publish'
+		);
+		expect(leftNotice({ path: '/a', name: 'Avalon', pending: 1 })).toBe(
+			'Avalon keeps 1 edit to publish'
+		);
+	});
+
+	it('says nothing when there is nothing to say', () => {
+		expect(leftNotice(null)).toBe('');
+		expect(leftNotice({ path: '/a', name: 'Avalon', pending: 0 })).toBe('');
+	});
+});
+
+describe('clientLabel', () => {
+	const check = (state: string, detail = ''): HomeClient => ({
+		path: '/x',
+		state,
+		detail,
+		build: '',
+		zones: 0
+	});
+
+	it('checks before anything is written, and says what it found', () => {
+		expect(clientLabel(check('ok', '402 zones'))).toEqual({
+			text: 'client ok \u00b7 402 zones',
+			tone: 'ok'
+		});
+		expect(clientLabel(check('missing'))?.text).toBe('no such folder');
+		expect(clientLabel(check('not-a-client'))?.tone).toBe('warn');
+	});
+
+	it('says nothing before the folder has been checked', () => {
+		expect(clientLabel(undefined)).toBeNull();
+	});
+});
+
+describe('slug', () => {
+	it('turns a name into the folder it would live in', () => {
+		expect(slug('Avalon')).toBe('avalon');
+		expect(slug('Camelot Hills')).toBe('camelot-hills');
+		expect(slug('  Cotswold (test) ')).toBe('cotswold-test');
+		expect(slug('')).toBe('project');
 	});
 });

@@ -25,7 +25,7 @@ describe('activeSection', () => {
 
 describe('APP_NAV', () => {
 	it('orders the destinations and covers each section once', () => {
-		expect(APP_NAV.map((item) => item.id)).toEqual(['home', 'figures', 'builder', 'world']);
+		expect(APP_NAV.map((item) => item.id)).toEqual(['home', 'world', 'figures', 'builder']);
 		expect(new Set(APP_NAV.map((item) => item.id)).size).toBe(APP_NAV.length);
 	});
 

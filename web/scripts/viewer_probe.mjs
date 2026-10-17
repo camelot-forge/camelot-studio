@@ -65,7 +65,7 @@ check(
 );
 check(
 	'the app switch still sits in the middle',
-	(await text('.appbar nav')) === 'FiguresBuilderWorld',
+	(await text('.appbar nav')) === 'HomeWorldFiguresBuilder',
 	JSON.stringify(await text('.appbar nav'))
 );
 check('the library dock is titled', (await text('.dock.left .dock-head .name')) === 'Library');

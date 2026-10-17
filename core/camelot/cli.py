@@ -493,8 +493,6 @@ def cmd_project(args) -> int:
 
 
 def cmd_serve(args) -> int:
-    from pathlib import Path
-
     from .serve.config import (
         DEFAULT_HOST,
         DEFAULT_PORT,
@@ -542,18 +540,18 @@ def cmd_serve(args) -> int:
 
     # The project is one *checkout* and one writer (`project.md` §D13): this
     # daemon claims it, or learns who holds it and runs read-only. The lock is
-    # dropped when the daemon stops.
-    claimed = None
+    # the session's (`home.md` §D3): a switch hands it over, and it is dropped
+    # when the daemon stops.
+    session = app.state.session
     if cfg.project is not None:
         from . import project as projects
 
         try:
-            claim = projects.claim(cfg.project, author=projects.author_name(cfg.project))
+            claim = session.claim()
         except projects.ProjectError as error:
             print(f"error: {error}", file=sys.stderr)
             return 2
         if not claim["held"]:
-            cfg.read_only = True
             held = claim["by"]
             print(
                 f"  project: {cfg.project} is held by {held['author']} "
@@ -561,24 +559,17 @@ def cmd_serve(args) -> int:
                 file=sys.stderr,
             )
         elif claim["holder"] is not None:
-            claimed = str(cfg.project)
             print(f"  project: {cfg.project} (held by {claim['holder']['author']})")
-        # The machine's list of recent projects (`home.md` §D1): a daemon that
-        # serves a project is the only thing that knows one was opened — and
-        # only a *project* belongs in the list, a legacy authoring directory
-        # does not.
-        if (Path(cfg.project) / projects.PROJECT_FILE).is_file():
-            from . import recent
+        if claim.get("recent"):
+            print(f"  (not listed as a recent project: {claim['recent']})", file=sys.stderr)
 
-            try:
-                recent.record(cfg.project, name=projects.load(cfg.project).name,
-                              directory=cfg.config_dir)
-            except (projects.ProjectError, recent.RecentError) as error:
-                print(f"  (not listed as a recent project: {error})", file=sys.stderr)
-
+    # D6: the browser lands on the front door when the daemon was started
+    # without a project, and on the world editor when it was started on one —
+    # the operator's daily flow (a daemon on their project) is unchanged.
+    landing = "world" if cfg.project is not None else "home"
     url = f"http://{'localhost' if cfg.is_loopback else host}:{port}/"
     print(f"camelot serve: root={cfg.root}")
-    print(f"  viewer: {url}")
+    print(f"  viewer: {url}{landing}")
     print(f"  api:    {url}api/v1/health  (docs at {url}api/docs)")
     if not static_dir:
         print("  (no viewer build; the API alone is served)")
@@ -586,17 +577,14 @@ def cmd_serve(args) -> int:
         import threading
         import webbrowser
 
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+        threading.Timer(1.0, lambda: webbrowser.open(f"{url}{landing}")).start()
 
     import uvicorn
 
     try:
         uvicorn.run(app, host=cfg.host, port=cfg.port, log_level=args.log_level)
     finally:
-        if claimed is not None:
-            from . import project as projects
-
-            projects.release(claimed)
+        session.release()
     return 0
 
 

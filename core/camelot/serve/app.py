@@ -16,6 +16,7 @@ from .editor import Editor
 from .home import build_home_router
 from .index import AssetIndex
 from .security import host_allowed, origin_allowed
+from .session import Session
 from .watcher import IndexWatcher
 from .world import World, build_world_router
 
@@ -65,14 +66,16 @@ def create_app(config: ServeConfig) -> FastAPI:
         return response
 
     # One world and one editor for every router: Home reads the same session
-    # the world editor writes (`home.md` §1), and the switch will re-point them
-    # here and nowhere else.
+    # the world editor writes (`home.md` §1), and the switch re-points them
+    # here and nowhere else. The session owns the shared config and the lock.
     world = World(config)
     world.editor = Editor(config)
+    session = Session(config, index, watcher, world)
+    app.state.session = session
 
     app.include_router(build_router(config, index, watcher))
     app.include_router(build_world_router(config, world))
-    app.include_router(build_home_router(config, world))
+    app.include_router(build_home_router(config, world, session))
 
     static_dir = config.static_dir
     if static_dir and Path(static_dir).exists():

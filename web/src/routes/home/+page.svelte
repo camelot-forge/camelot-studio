@@ -1,19 +1,44 @@
 <script lang="ts">
+	/**
+	 * Home (`notes/home.md`, draft 4): what this daemon serves, the three
+	 * ways in (open, create, import — plus clone), and the machine's projects
+	 * with the answer to *can I work here*.
+	 *
+	 * The doors write inside a project's folder and nowhere else. A switch
+	 * warns about what it leaves behind; it never refuses, because the journal
+	 * *is* the save (§D3.1).
+	 */
 	import { onMount } from 'svelte';
-	import { FolderOpen, HardDrive } from '@lucide/svelte';
-	import { api, type HomeHealth, type HomePayload, type HomeRecent } from '$lib/api/client';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { FolderOpen, GitBranch, HardDrive, LoaderCircle, Plus } from '@lucide/svelte';
+	import {
+		api,
+		type HomeDoor,
+		type HomeHealth,
+		type HomePayload,
+		type HomeRecent
+	} from '$lib/api/client';
 	import AppBar from '$lib/components/AppBar.svelte';
+	import ProjectModal from '$lib/components/ProjectModal.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
-	import { healthLabel, since } from '$lib/home';
+	import { healthLabel, leftNotice, publishLabel, since } from '$lib/home';
 
 	let payload = $state<HomePayload | null>(null);
 	let error = $state<string | null>(null);
-	let checkPath = $state('');
-	let checked = $state<HomeHealth | null>(null);
-	let checking = $state(false);
+	/** What a door or a switch answered: one line, dismissed on the next act. */
+	let notice = $state<{ tone: 'info' | 'warn'; text: string } | null>(null);
+	let opener = $state('');
+	/** The door's modal, when one is open. */
+	let door = $state<'new' | 'import' | 'clone' | null>(null);
+	let cloneUrl = $state('');
+	let busy = $state(false);
 	/** Per row, filled one at a time: the page paints first, the health
 	 * follows (`home.md` §D2 — never a `verify` in the first paint). */
 	let health = $state<Record<string, HomeHealth>>({});
+
+	const looksLikeUrl = (value: string) =>
+		/^(https?:\/\/|git@|ssh:\/\/|file:\/\/)/.test(value.trim());
 
 	async function checkRows(rows: HomeRecent[]) {
 		for (const row of rows) {
@@ -35,22 +60,54 @@
 		}
 	}
 
-	async function check() {
-		checking = true;
-		checked = null;
+	/** D3's switch, from the opener or a row: the daemon serves another
+	 * project, and the answer says what the one it left still holds. */
+	async function open(path: string) {
+		busy = true;
+		notice = null;
 		try {
-			checked = await api.homeHealth(checkPath);
+			const answer = await api.homeOpen(path);
+			show(answer);
+			error = null;
 		} catch (problem) {
-			checked = {
-				path: checkPath,
-				name: '',
-				state: 'refused',
-				detail: problem instanceof Error ? problem.message : String(problem),
-				findings: []
-			};
+			error = problem instanceof Error ? problem.message : String(problem);
 		} finally {
-			checking = false;
+			busy = false;
+			await load();
 		}
+	}
+
+	function show(answer: HomeDoor) {
+		const left = leftNotice(answer.left);
+		if (answer.warning) notice = { tone: 'warn', text: answer.warning };
+		else if (left) notice = { tone: 'info', text: `${left}.` };
+	}
+
+	async function fromOpener(event: Event) {
+		event.preventDefault();
+		const value = opener.trim();
+		if (!value) return;
+		if (looksLikeUrl(value)) {
+			cloneUrl = value;
+			door = 'clone';
+			return;
+		}
+		await open(value);
+	}
+
+	/** A door ran (create / import / clone): say what happened, and go to the
+	 * World editor when the modal asked for it and the daemon switched. */
+	async function done(answer: HomeDoor, openIt: boolean) {
+		door = null;
+		cloneUrl = '';
+		if (answer.warning && !answer.opened) {
+			notice = { tone: 'warn', text: answer.warning };
+			await load();
+			return;
+		}
+		show(answer);
+		await load();
+		if (openIt && answer.opened) await goto(resolve('/world'));
 	}
 
 	onMount(load);
@@ -71,65 +128,93 @@
 
 	<main>
 		<h1>Your projects.</h1>
-		<p class="sub">This machine's projects.</p>
+		<p class="sub">Open a project, or create one from a DAoC client.</p>
 
-		<form
-			class="opener"
-			onsubmit={(event) => {
-				event.preventDefault();
-				void check();
-			}}
-		>
+		<form class="opener" onsubmit={fromOpener}>
 			<div class="field">
 				<FolderOpen size={18} />
 				<input
 					class="input"
 					type="text"
-					placeholder="Path to a project folder"
-					bind:value={checkPath}
+					placeholder="Path to a project folder, or a git URL"
+					bind:value={opener}
 				/>
-				<button class="btn btn--primary" type="submit" disabled={!checkPath || checking}>
-					{checking ? 'Checking…' : 'Check'}
+				<button class="btn btn--primary" type="submit" disabled={!opener.trim() || busy}>
+					{#if busy}<span class="spin"><LoaderCircle size={14} /></span>{/if}
+					Open
 				</button>
 			</div>
-			<p class="hint">
-				{#if checked}
-					{checked.name ? `${checked.name}: ` : ''}{checked.detail}
-				{:else}
-					Checks the folder, and the client it recorded.
-				{/if}
-			</p>
+			{#if notice}
+				<p class="notice" class:warn={notice.tone === 'warn'}>{notice.text}</p>
+			{:else if error}
+				<p class="error">{error}</p>
+			{:else}
+				<p class="hint">The project's client is checked when it opens.</p>
+			{/if}
 		</form>
 
-		{#if error}
-			<p class="error">{error}</p>
-		{:else if payload}
+		<div class="doors">
+			<button class="door" type="button" onclick={() => (door = 'new')}>
+				<span class="tile"><Plus size={18} /></span>
+				<span class="what">
+					<span class="name">New project</span>
+					<span class="line">Create a project folder and point it at a DAoC client.</span>
+				</span>
+			</button>
+			<button class="door" type="button" onclick={() => (door = 'import')}>
+				<span class="tile"><FolderOpen size={18} /></span>
+				<span class="what">
+					<span class="name">Import a folder</span>
+					<span class="line">An existing edits folder becomes a project, without moving it.</span>
+				</span>
+			</button>
+			<button class="door" type="button" onclick={() => (door = 'clone')}>
+				<span class="tile"><GitBranch size={18} /></span>
+				<span class="what">
+					<span class="name">Clone a repository</span>
+					<span class="line">Clone a project from a git repository.</span>
+				</span>
+			</button>
+		</div>
+
+		{#if payload}
+			{#if payload.recent_error}
+				<p class="error">{payload.recent_error}</p>
+			{/if}
 			<div class="section-head">
 				<span class="label">RECENT</span>
 				<span class="count">{payload.recents.length} on this machine</span>
 			</div>
-			{#if payload.recent_error}
-				<p class="error">{payload.recent_error}</p>
-			{/if}
 
 			{#if payload.recents.length === 0}
 				<div class="empty">
 					<div class="tile"><FolderOpen size={20} /></div>
 					<div>
 						<h2>No projects on this machine yet</h2>
-						<p>A project shows up here the first time a daemon serves it.</p>
+						<p>Open a folder, or create a project — it will show up here.</p>
 					</div>
 				</div>
 			{:else}
 				<ul class="rows">
 					{#each payload.recents as row (row.path)}
 						{@const found = healthLabel(health[row.path])}
+						{@const pending = health[row.path]
+							? (health[row.path].pending?.fixtures ?? 0) + (health[row.path].pending?.rows ?? 0)
+							: 0}
 						<li class="row" class:missing={!row.exists}>
-							<div class="tile"><FolderOpen size={20} /></div>
-							<div class="who">
-								<span class="name">{row.name}</span>
-								<span class="path" title={row.path}>{row.path}</span>
-							</div>
+							<button
+								class="open-row"
+								type="button"
+								disabled={!row.exists || !row.project || busy}
+								title={row.exists && row.project ? `open ${row.name}` : 'not a project yet'}
+								onclick={() => open(row.path)}
+							>
+								<span class="tile"><FolderOpen size={20} /></span>
+								<span class="who">
+									<span class="name">{row.name}</span>
+									<span class="path" title={row.path}>{row.path}</span>
+								</span>
+							</button>
 							<div class="chips">
 								{#if !row.exists}
 									<span class="chip warn"><span class="dot"></span>folder missing</span>
@@ -139,6 +224,7 @@
 									<span class="chip" class:warn={found.tone === 'warn'}>
 										<span class="dot"></span>{found.text}
 									</span>
+									<span class="chip" class:warn={pending > 0}>{publishLabel(pending)}</span>
 								{/if}
 							</div>
 							<span class="when" title={row.opened}>{since(row.opened)}</span>
@@ -166,6 +252,19 @@
 		{/snippet}
 	</StatusBar>
 </div>
+
+{#if door && payload}
+	<ProjectModal
+		kind={door}
+		defaultClient={payload.daemon.client}
+		defaultUrl={cloneUrl}
+		onclose={() => {
+			door = null;
+			cloneUrl = '';
+		}}
+		ondone={done}
+	/>
+{/if}
 
 <style>
 	.shell {
@@ -217,10 +316,51 @@
 		margin-top: 10px;
 		font-size: var(--fs-small);
 	}
+	.notice {
+		margin-top: 10px;
+		font-size: var(--fs-small);
+		color: var(--text-3);
+	}
+	.notice.warn {
+		color: var(--warn-text);
+	}
 	.error {
 		margin-top: 12px;
 		color: var(--danger-text);
 		font-size: var(--fs-small);
+	}
+	.doors {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 12px;
+		margin-top: 20px;
+	}
+	.door {
+		display: flex;
+		align-items: flex-start;
+		gap: 12px;
+		padding: 16px;
+		border: 1px solid var(--border);
+		border-radius: var(--r-lg);
+		background: var(--surface-dim);
+		text-align: left;
+	}
+	.door:hover {
+		border-color: var(--border-input);
+		background: var(--surface);
+	}
+	.door .what {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+	.door .name {
+		font-weight: 600;
+	}
+	.door .line {
+		font-size: var(--fs-dense);
+		color: var(--text-3);
 	}
 	.section-head {
 		display: flex;
@@ -261,6 +401,21 @@
 	}
 	.row.missing {
 		opacity: 0.7;
+	}
+	.open-row {
+		display: flex;
+		align-items: center;
+		gap: 16px;
+		flex: 1;
+		min-width: 0;
+		height: 100%;
+		border: 0;
+		background: none;
+		text-align: left;
+		color: inherit;
+	}
+	.open-row:disabled {
+		cursor: default;
 	}
 	.tile {
 		display: inline-flex;
@@ -358,5 +513,13 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
+	}
+	.spin {
+		animation: turn 1s linear infinite;
+	}
+	@keyframes turn {
+		to {
+			transform: rotate(360deg);
+		}
 	}
 </style>

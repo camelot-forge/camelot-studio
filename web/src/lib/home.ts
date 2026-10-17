@@ -1,7 +1,8 @@
-/** Small pure pieces of Home (`notes/home.md` §D2): the one line a
- * recents row shows for a project's health, and how long ago it was opened —
- * both are copy the operator reads, so both are tested. */
-import type { HomeHealth } from './api/client';
+/** Small pure pieces of Home (`notes/home.md` §D2/§D4): the one line a
+ * recents row shows for a project's health, how long ago it was opened, what
+ * it still owes a publish, and what a switch leaves behind — all copy the
+ * operator reads, so all tested. */
+import type { HomeClient, HomeHealth, HomeLeft } from './api/client';
 
 export interface HealthLabel {
 	text: string;
@@ -38,4 +39,46 @@ export function since(iso: string, now: number = Date.now()): string {
 	if (hours < 36) return `${hours} h ago`;
 	const days = Math.round(hours / 24);
 	return days < 30 ? `${days} d ago` : iso.slice(0, 10);
+}
+
+/** A row's second chip: what a project still owes a publish — the draft's own
+ * words (`home.md` §D1). */
+export function publishLabel(pending: number): string {
+	if (pending <= 0) return 'nothing to publish';
+	return pending === 1 ? '1 edit to publish' : `${pending} edits to publish`;
+}
+
+/** The line a switch leaves on Home (`home.md` §D3.1): what the project being
+ * left still holds. Empty when there is nothing to say. */
+export function leftNotice(left: HomeLeft | null | undefined): string {
+	if (!left || left.pending <= 0) return '';
+	const edits = left.pending === 1 ? '1 edit' : `${left.pending} edits`;
+	return `${left.name} keeps ${edits} to publish`;
+}
+
+/** The create modal's client line (`home.md` §D4): the daemon's own check,
+ * said in the operator's words — the same shape as a row's health chip. */
+export function clientLabel(found: HomeClient | undefined): HealthLabel | null {
+	if (!found) return null;
+	switch (found.state) {
+		case 'ok':
+			return { text: `client ok \u00b7 ${found.detail}`, tone: 'ok' };
+		case 'missing':
+			return { text: 'no such folder', tone: 'warn' };
+		case 'not-a-client':
+			return { text: 'not a DAoC client', tone: 'warn' };
+		default:
+			return { text: found.detail || found.state, tone: 'warn' };
+	}
+}
+
+/** The folder a new project would live in, from its name — what the modal's
+ * hint shows under NAME ("folder \u00b7 avalon"). */
+export function slug(value: string): string {
+	const cleaned = value
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return cleaned || 'project';
 }

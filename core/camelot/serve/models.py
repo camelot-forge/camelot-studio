@@ -384,6 +384,9 @@ class EditorState(BaseModel):
 
     available: bool
     dir: str | None = None
+    #: The project's own name (`project.json`), else the folder's: what Home's
+    #: row, the app bar's chip and the journal all call it.
+    name: str = ""
     #: Set when this daemon does **not** hold the checkout's lock (`project.md`
     #: §D13): the viewer serves, every write refuses, and `holder` says who to
     #: close or stop.
@@ -485,13 +488,95 @@ class HomePayload(BaseModel):
 
 class HomeHealth(BaseModel):
     """One project's `verify` (`home.md` §D2): `ok`, `changed`, `missing`,
-    `no-client`, or `not-a-project` with the refusal's own words."""
+    `no-client`, or `not-a-project` with the refusal's own words — plus the
+    work waiting, so a row can say both things in one answer."""
 
     path: str
     name: str = ""
     state: str
     detail: str = ""
     findings: list[dict[str, Any]] = []
+    #: `{"fixtures": n, "rows": m}` — the same count the chip shows, read from
+    #: the project (`home.md` §D1). Empty when the project cannot be read.
+    pending: dict[str, int] = {}
+
+
+class HomeClient(BaseModel):
+    """One directory, checked as a DAoC client before anything is written on
+    it (`home.md` §D4's modal). Cheap on purpose: the build, the zone folders
+    — never a `populate`."""
+
+    path: str
+    state: str
+    detail: str = ""
+    build: str = ""
+    zones: int = 0
+
+
+class HomeLeft(BaseModel):
+    """The project a switch leaves behind, and what it still holds (`home.md`
+    §D3.1). The journal *is* the save: this is a line Home shows, never a
+    wall."""
+
+    path: str
+    name: str
+    pending: int = 0
+
+
+class HomeDoor(BaseModel):
+    """What one door did (`home.md` §D4): the project's own facts, and — when
+    the daemon switched to it — the editor state and what was left behind."""
+
+    path: str
+    name: str
+    #: Did the daemon switch to it? False when the modal's "Open it in the
+    #: World editor" was off, or when there was nothing to open.
+    opened: bool = False
+    #: Fingerprints recorded (create and import only).
+    resources: int = 0
+    zones: int = 0
+    state: EditorState | None = None
+    left: HomeLeft | None = None
+    warning: str = ""
+
+
+class HomeOpenBody(BaseModel):
+    """D3's switch: one project's folder."""
+
+    path: str
+
+
+class HomeNewBody(BaseModel):
+    """D4's create: the modal's fields, in the modal's order."""
+
+    name: str
+    #: The folder to create — the modal computes it from the name and lets the
+    #: operator edit it.
+    dir: str
+    #: The DAoC client to record. Empty = the client this daemon serves.
+    client: str = ""
+    git: bool = False
+    staging: bool = False
+    open: bool = True
+
+
+class HomeImportBody(BaseModel):
+    """The import door: an existing edits folder becomes a project, in place."""
+
+    dir: str
+    name: str = ""
+    client: str = ""
+    git: bool = False
+    open: bool = True
+
+
+class HomeCloneBody(BaseModel):
+    """The clone door: `git clone`, run by the daemon (`home.md` §D4)."""
+
+    url: str
+    dir: str
+    client: str = ""
+    open: bool = True
 
 
 class HomeBrowseEntry(BaseModel):

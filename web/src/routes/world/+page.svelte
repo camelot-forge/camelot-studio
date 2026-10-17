@@ -939,7 +939,7 @@
 		{#snippet actions()}
 			{#if editing && edit}
 				<ProjectChip
-					name={edit.dir?.split('/').filter(Boolean).pop() ?? ''}
+					name={edit.name}
 					pending={changes}
 					readOnly={edit.read_only}
 					holder={edit.holder}

@@ -102,6 +102,19 @@ class World:
         self._available: set[int] | None = None
         #: Set by `build_world_router`: the journal that overlays placements.
         self.editor: Editor | None = None
+        #: The server's own rows (snapshot or live MySQL): the viewer's read
+        #: path, and one of the caches a switch drops (`home.md` §D3.4).
+        self.server_rows = ServerRows(config)
+
+    def repoint(self) -> None:
+        """The daemon switched projects or clients (`home.md` §D3.4): drop
+        every cache built per project — the zone index, the shipped-zone set,
+        the server-rows snapshot and its live connection. The exported meshes
+        and textures under `cache/` stay: keyed by path and mtime, they are
+        still the right bytes for whatever client we now read."""
+        self._index = None
+        self._available = None
+        self.server_rows.repoint()
 
     def index(self) -> WorldIndex:
         if self._index is None:
@@ -170,6 +183,14 @@ class ServerRows:
         if self.config.db_config is not None:
             return f"mysql {self.config.db_config}"
         return "none"
+
+    def repoint(self) -> None:
+        """A switch drops the snapshot and the live connection: both were read
+        for the client we no longer serve (`home.md` §D3.4)."""
+        self._snapshot = None
+        self._snapshot_key = None
+        self._connection = None
+        self._live.clear()
 
     def for_zone(self, zone: Zone) -> tuple[dict[str, list[dict]], list[str]]:
         """The zone's rows and any warning that explains what is missing."""
@@ -712,7 +733,7 @@ def build_world_router(config: ServeConfig, world: World | None = None) -> APIRo
     world = world if world is not None else World(config)
     if world.editor is None:
         world.editor = Editor(config)
-    server_rows = ServerRows(config)
+    server_rows = world.server_rows
 
     @router.get("/world/index", response_model=WorldIndexPayload)
     def world_index() -> WorldIndexPayload:

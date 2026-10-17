@@ -115,6 +115,20 @@ class AssetIndex:
         self.scanned_at = 0.0
 
     # -- scan ---------------------------------------------------------------
+    def repoint(self, root: str | os.PathLike) -> int:
+        """Serve another client root, in place (`home.md` §D3.4): the routers
+        hold *this* object, so it is re-pointed rather than rebuilt. The index
+        is rescanned from disk; the exported artefacts under `cache/` are keyed
+        by file path and mtime, so they stay valid and a switch never
+        re-exports what it already has."""
+        self.root = Path(root).expanduser().resolve()
+        self.assets = []
+        self.by_id = {}
+        self.archives = 0
+        self.errors = 0
+        self.scanned_at = 0.0
+        return self.scan(use_cache=False)
+
     def scan(self, *, use_cache: bool = True, save_cache: bool = True) -> int:
         """(Re)build the index. Returns the number of assets."""
         path = self.cache_dir / CACHE_NAME

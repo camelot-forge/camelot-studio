@@ -23,6 +23,9 @@ class IndexWatcher:
         self.config = config
         self._subscribers: set[asyncio.Queue] = set()
         self._stop = threading.Event()
+        #: The stop flag of the watch in progress, so an ending (a shutdown, a
+        #: project switch) can reach it.
+        self._following: threading.Event | None = None
 
     # -- pub/sub ------------------------------------------------------------
     def subscribe(self, queue: asyncio.Queue) -> None:
@@ -41,14 +44,35 @@ class IndexWatcher:
     # -- lifecycle ----------------------------------------------------------
     def request_stop(self) -> None:
         self._stop.set()
+        self._end_watch()
+
+    def follow_new_root(self) -> None:
+        """A switch moved `config.root` (`home.md` §D3.4): end the watch in
+        progress; `run()` reads the new root on its next turn. The index is
+        re-scanned by its own owner (the session), not here."""
+        self._end_watch()
+
+    def _end_watch(self) -> None:
+        following = self._following
+        if following is not None:
+            following.set()
 
     async def run(self) -> None:
         from watchfiles import awatch
 
-        async for _changes in awatch(
-            self.config.root, stop_event=self._stop, recursive=True, debounce=500
-        ):
-            await self.apply_changes()
+        # One watch at a time, and never more than one root: a project switch
+        # ends the current watch and this loop starts the next on the root the
+        # config names *then* (a client directory is chosen per project).
+        while not self._stop.is_set():
+            stop = threading.Event()
+            self._following = stop
+            try:
+                async for _changes in awatch(
+                    self.config.root, stop_event=stop, recursive=True, debounce=500
+                ):
+                    await self.apply_changes()
+            finally:
+                self._following = None
 
     # -- change handling ----------------------------------------------------
     async def apply_changes(self) -> None:

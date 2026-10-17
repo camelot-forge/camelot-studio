@@ -266,11 +266,11 @@ check(
 	`daemon holds ${afterType.count}, head says “${await text('.dock.right .dock-head .sub')}”`
 );
 check(
-	'the app bar carries the session chip and the two actions',
-	(await text('.appbar .chip'))?.endsWith('not saved') === true &&
+	'the app bar carries the project chip and the two actions',
+	/(\d+ edits? to publish|all published)$/.test((await text('.appbar .chip')) ?? '') &&
 		(await page.locator('.appbar button:has-text("save")').count()) === 1 &&
 		(await page.locator('.appbar button:has-text("undo")').count()) === 1,
-	await text('.appbar .session')
+	await text('.appbar .chip')
 );
 
 // The journal tab: the readable history, both sides of the entry.

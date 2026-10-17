@@ -220,6 +220,15 @@ class Editor:
         except project_mod.ProjectError:
             return {}
 
+    def name(self) -> str:
+        """The project's own name — the one Home, the chip and the journal
+        shards all show — or the folder's, for a directory that is not a
+        project yet (a 6.3 authoring folder)."""
+        try:
+            return project_mod.load(self.dir).name
+        except project_mod.ProjectError:
+            return self.dir.name
+
     def _holder(self) -> str:
         """Who holds this checkout, as a phrase a refusal and the panel both
         use (`project.md` §D13)."""
@@ -230,6 +239,20 @@ class Editor:
         if state is None:
             return "another process"
         return f"{state.author} (pid {state.pid} on {state.host})"
+
+    def holder(self) -> str:
+        """Who holds the checkout, when this daemon does not — the phrase the
+        chip, the panel and Home all show (`project.md` §D13). Empty when this
+        daemon is the writer."""
+        return self._holder() if self.config.read_only else ""
+
+    def repoint(self) -> None:
+        """The daemon switched projects (`home.md` §D3.4): drop what was built
+        for the one we left — the journal and the live row connection. The
+        config object is shared with every router and is mutated by the switch,
+        never re-bound here, so nothing else has to be told."""
+        self._journal = None
+        self._connection = None
 
     def _writable(self) -> None:
         """Refuse a write when this daemon does not hold the project's lock
@@ -426,8 +449,9 @@ class Editor:
         return EditorState(
             available=True,
             dir=str(self.dir),
+            name=self.name(),
             read_only=bool(self.config.read_only),
-            holder=self._holder() if self.config.read_only else "",
+            holder=self.holder(),
             mod=mod,
             pending=self.pending_counts(),
             zones=[EditorZone(id=zone, ops=ops) for zone, ops in sorted(zones.items())],

@@ -143,12 +143,44 @@ export interface HomeHealth {
 	state: 'ok' | 'changed' | 'missing' | 'no-client' | string;
 	detail: string;
 	findings: Array<Record<string, unknown>>;
+	/** `{fixtures, rows}` — the work waiting, read from the project (`home.md` §D1). */
+	pending: Record<string, number>;
 }
 
 export interface HomeBrowse {
 	path: string;
 	parent: string | null;
 	dirs: Array<{ name: string; path: string; project: boolean }>;
+}
+
+/** One folder, checked as a DAoC client before anything is written (`home.md`
+ * §D4's modal). */
+export interface HomeClient {
+	path: string;
+	state: 'ok' | 'missing' | 'not-a-client' | string;
+	detail: string;
+	build: string;
+	zones: number;
+}
+
+/** What a switch left behind (`home.md` §D3.1): a line Home shows, not a wall. */
+export interface HomeLeft {
+	path: string;
+	name: string;
+	pending: number;
+}
+
+/** What one door did (`home.md` §D4) — and, when the daemon switched, the
+ * editor state it switched to. */
+export interface HomeDoor {
+	path: string;
+	name: string;
+	opened: boolean;
+	resources: number;
+	zones: number;
+	state: EditorState | null;
+	left: HomeLeft | null;
+	warning: string;
 }
 
 // --- the world (Phase 6.2) ----------------------------------------------------
@@ -426,6 +458,8 @@ export interface EditorClient {
 export interface EditorState {
 	available: boolean;
 	dir: string | null;
+	/** The project's own name (`project.json`), else the folder's. */
+	name: string;
 	mod: Record<string, unknown>;
 	zones: EditorZone[];
 	rows: EditorRowOp[];
@@ -636,12 +670,35 @@ export const api = {
 	},
 	events: () => new EventSource(`${getApiBase()}/api/v1/events`),
 
-	// --- home (P2 slice 2a) ------------------------------------------------
+	// --- home (P2) -----------------------------------------------------------
 	home: (signal?: AbortSignal) => get<HomePayload>('/home', signal),
 	homeHealth: (path: string, signal?: AbortSignal) =>
 		getDetailed<HomeHealth>(`/home/health?path=${encodeURIComponent(path)}`, signal),
 	homeBrowse: (path: string, signal?: AbortSignal) =>
 		getDetailed<HomeBrowse>(`/home/browse?path=${encodeURIComponent(path)}`, signal),
+	/** The create modal's own check, before anything is written. */
+	homeClient: (path: string, signal?: AbortSignal) =>
+		getDetailed<HomeClient>(`/home/client?path=${encodeURIComponent(path)}`, signal),
+	/** D3's switch: another project is served, and the answer says what the one
+	 * being left still holds. It warns; only an unreadable project is refused. */
+	homeOpen: (path: string) => send<HomeDoor>('POST', '/home/open', { path }),
+	homeNew: (body: {
+		name: string;
+		dir: string;
+		client?: string;
+		git?: boolean;
+		staging?: boolean;
+		open?: boolean;
+	}) => send<HomeDoor>('POST', '/home/new', body),
+	homeImport: (body: {
+		dir: string;
+		name?: string;
+		client?: string;
+		git?: boolean;
+		open?: boolean;
+	}) => send<HomeDoor>('POST', '/home/import', body),
+	homeClone: (body: { url: string; dir: string; client?: string; open?: boolean }) =>
+		send<HomeDoor>('POST', '/home/clone', body),
 
 	// --- the world ---------------------------------------------------------
 	worldIndex: (signal?: AbortSignal) => get<WorldIndex>('/world/index', signal),

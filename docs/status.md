@@ -772,6 +772,38 @@ the merged journal reads in the timestamp order, and a line another session
 wrote blind against the same row is **refused by name** when the journal is
 read back. That closes P1's exit criteria: the container, the base, the shards,
 the refusals, and a session that opens as a project.
+
+**Home, the front door (2026-10-16, P2 of the workspace's `notes/`).**
+Two slices. The daemon now serves `/home`: what *it* reads (the client, its
+zone folders, the port, the build), the projects this machine has opened —
+five at most, from `recent.json` in the per-user config directory
+(`~/.config/camelot-studio`; never in a project, never in git) — and one
+`verify` per row when the page asks (0.61 s for 565 resources, so the page
+paints first and the rows fill in). A row carries the work waiting too, counted
+the way the editor's panel counts it (`pending_counts`: distinct fixture ids,
+distinct `table:key`).
+
+The doors followed: **open** switches the running daemon to another project
+without a restart — one `Session` (`core/camelot/serve/session.py`) owns the
+shared config and the checkout's lock, so a switch mutates in place and no
+router is rebuilt: the lock hands over (read-only when another live process
+holds the copy), the client is re-resolved *from the project* (`machine.json`,
+then `$DAOC_CLIENT`, then the current root — and that last fallback says so),
+the per-project caches are dropped (the asset index, the zone index, the
+server-rows snapshot, the editor's journal and its live connection) while the
+exported artefacts stay (they are keyed by path and mtime), the file watch
+follows the new root, and the visit is recorded. Leaving a project with
+unpublished edits is a **warning line, never a wall** — the journal *is* the
+save, so an Alt+F4 costs nothing but the lock. **Create** writes
+`project.new` then records the whole client (`populate` over every zone folder
+plus the tables it ships: `items.csv`, `monsters.csv`, `objects.csv`),
+**import** turns a 6.3 edits folder into a project where it stands, and
+**clone** runs `git clone` inside the daemon (the operator's own credentials;
+no key ever reaches the browser) and writes this machine's untracked
+`machine.json` into the fresh clone. `web/scripts/home_probe.mjs` drives all
+four against a real client — **55 checks, green** (a project created from the
+browser, an edit surviving a switch away and back, a clone that carries its
+journal) — and the four older harnesses still pass. 531 tests.
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.
@@ -814,6 +846,14 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 .venv/bin/camelot project new camelot-hills --client "$DAOC_CLIENT" --git
 .venv/bin/camelot project info --dir camelot-hills
 .venv/bin/camelot project verify --dir camelot-hills
+# Home is the front door (P2 of `notes/`): the daemon serves it at /home.
+# The browser lands there when the daemon was started without a project, and on
+# /world when it was started with one. From the page, Open / New project /
+# Import a folder / Clone a repository switch the *running* daemon to another
+# project — the checkout's lock hands over, the client is re-resolved from the
+# project, and the page says what the project being left still holds. No
+# restart, and no door ever writes into a client.
+.venv/bin/camelot project open camelot-hills        # verify it, then serve it
 # The world editor (6.3): the project's directory (--edits is its older name).
 # The journal's shards, the build outputs and the deploy log live in DIR;
 # `apply` installs through the same path as `camelot client install` (and

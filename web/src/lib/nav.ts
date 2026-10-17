@@ -12,9 +12,9 @@ export interface NavItem {
 
 export const APP_NAV: readonly NavItem[] = [
 	{ id: 'home', label: 'Home', href: '/home' },
+	{ id: 'world', label: 'World', href: '/world' },
 	{ id: 'figures', label: 'Figures', href: '/' },
-	{ id: 'builder', label: 'Builder', href: '/builder' },
-	{ id: 'world', label: 'World', href: '/world' }
+	{ id: 'builder', label: 'Builder', href: '/builder' }
 ];
 
 /** Which destination owns a pathname — the pages stay reachable without

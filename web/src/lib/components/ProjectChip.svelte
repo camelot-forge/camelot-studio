@@ -16,18 +16,18 @@
 	const state = $derived(
 		readOnly
 			? holder
-				? `read-only · ${holder}`
+				? `held by ${holder}`
 				: 'read-only'
 			: pending > 0
-				? `${pending} not saved`
-				: 'saved'
+				? `${pending} ${pending === 1 ? 'edit' : 'edits'} to publish`
+				: 'all published'
 	);
 	const warn = $derived(readOnly || pending > 0);
 	const title = $derived(
 		readOnly
 			? `this project is held by ${holder || 'another process'}: writes are refused`
 			: name
-				? 'the edits this session still holds'
+				? 'the edits this project has not published yet'
 				: 'no project open — go to Home'
 	);
 </script>
