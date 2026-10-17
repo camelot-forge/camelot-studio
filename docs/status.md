@@ -804,6 +804,31 @@ no key ever reaches the browser) and writes this machine's untracked
 four against a real client — **55 checks, green** (a project created from the
 browser, an edit surviving a switch away and back, a clone that carries its
 journal) — and the four older harnesses still pass. 531 tests.
+
+**Releases, first slice (2026-10-17, P3 of the same spec set).**
+`core/camelot/release.py` cuts a release and nothing else — a deploy is the
+next slice. A release **is its range**: the journal lines beyond the previous
+release's cut, an op *and* a drop (`journal.cut()`/`pending()` were written for
+exactly this), and a range that is empty is refused with "nothing to release"
+instead of producing a twin of the release before it (`pipeline.md` §D5).
+`releases/NNNN/release.json` is the record and it is committed: the cut, the
+base it was built against, the families, the ids the range allocated, the two
+artifacts with their `sha256`, the publication **order** (§D6: the client half
+first whenever the release carries one) and the tables a row patch will make
+the server re-read. The payloads are not committed — `.gitignore` already
+excluded `releases/*/server/` and `releases/*/client/` — because the record
+plus the journal plus the base rebuild them: `camelot project verify --rebuild
+N` is what a CI job runs, and the test proves a **second clone** (a real `git
+clone`, payloads absent) rebuilds release 1 byte for byte. The server half is
+the pack `camelot mod build` already produces; the client half is what that
+pack would install on a client, named with its hashes in a `patchlist.json` —
+the material the feed will publish. Measured on the operator's client: one
+edit cut to release 0001 in one call, the rebuild reads the same `sha256`
+back, a second cut says there is nothing to release. 540 tests. Two kernel
+bugs fell out of it, both fixed with their tests: two journal shards opened in
+the same second sorted the *later* one first (a chain of ops replayed out of
+order), and the pack's identity came from the project's **folder** instead of
+its name (a clone in another directory built different bytes).
 2. Keep the delivery chain honest while it grows: the loader's own used-id
    export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
    16-bit wire) are the next measurements.
@@ -846,6 +871,12 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 .venv/bin/camelot project new camelot-hills --client "$DAOC_CLIENT" --git
 .venv/bin/camelot project info --dir camelot-hills
 .venv/bin/camelot project verify --dir camelot-hills
+# Releases (P3): cut the next one, read the history, rebuild one from the
+# journal plus the base and compare the bytes (what a CI job runs). The record
+# is committed; the payloads under releases/NNNN/ are not.
+.venv/bin/camelot project release --dir camelot-hills
+.venv/bin/camelot project releases --dir camelot-hills
+.venv/bin/camelot project verify --dir camelot-hills --rebuild 1
 # Home is the front door (P2 of `notes/`): the daemon serves it at /home.
 # The browser lands there when the daemon was started without a project, and on
 # /world when it was started with one. From the page, Open / New project /
