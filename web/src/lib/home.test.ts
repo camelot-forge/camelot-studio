@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HomeClient, HomeHealth } from './api/client';
-import { clientLabel, healthLabel, leftNotice, publishLabel, since, slug } from './home';
+import { clientLabel, healthLabel, leftNotice, menuState, publishLabel, since, slug } from './home';
 
 const found = (state: string, detail = ''): HomeHealth => ({
 	path: '/x',
@@ -91,6 +91,21 @@ describe('clientLabel', () => {
 
 	it('says nothing before the folder has been checked', () => {
 		expect(clientLabel(undefined)).toBeNull();
+	});
+});
+
+describe('menuState', () => {
+	const now = Date.parse('2026-10-17T12:00:00Z');
+
+	it('says the work waiting when there is some', () => {
+		expect(menuState(1, '2026-10-17T11:59:00Z', now)).toBe('1 edit');
+		expect(menuState(3, '2026-10-17T11:59:00Z', now)).toBe('3 edits');
+	});
+
+	it('and when it was last opened, when there is not', () => {
+		// the same rendering as a row's own "when" (`since`, validated on Home)
+		expect(menuState(0, '2026-10-16T11:00:00Z', now)).toBe('25 h ago');
+		expect(menuState(0, '2026-10-12T08:00:00Z', now)).toBe('5 d ago');
 	});
 });
 

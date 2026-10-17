@@ -7,6 +7,7 @@
 	import DropZone from '$lib/components/DropZone.svelte';
 	import Inspector from '$lib/components/Inspector.svelte';
 	import Library from '$lib/components/Library.svelte';
+	import ProjectChip from '$lib/components/ProjectChip.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import Viewer, { type ViewerHandles } from '$lib/components/Viewer.svelte';
 	import { loadFromFiles, loadFromGlb, type LoadedModel } from '$lib/gltf/load';
@@ -182,6 +183,7 @@
 		contextMeta={meshLabel}
 	>
 		{#snippet actions()}
+			<ProjectChip />
 			{#if model}
 				<button
 					class="btn btn--icon"

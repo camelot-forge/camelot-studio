@@ -34,6 +34,7 @@ from .models import (
     HomeCloneBody,
     HomeDaemon,
     HomeDoor,
+    HomeForgotten,
     HomeHealth,
     HomeImportBody,
     HomeNewBody,
@@ -79,6 +80,10 @@ def pending_of(config: ServeConfig, root: Path) -> dict[str, int]:
         return Editor(dataclasses.replace(config, project=root)).pending_counts()
     except (project_mod.ProjectError, OSError):
         return {}
+
+
+def _total(counts: dict[str, int]) -> int:
+    return int(counts.get("fixtures", 0)) + int(counts.get("rows", 0))
 
 
 def _client_of(config: ServeConfig, wanted: str) -> Path:
@@ -232,6 +237,10 @@ def build_home_router(config: ServeConfig, world, session: Session) -> APIRouter
         )
 
     def recent_rows() -> tuple[list[HomeRecent], str]:
+        """The machine's list, as the disk stands now: `exists` and `project`
+        read from the folders, and the work waiting read from each project
+        (§D1 — the registry carries no copies). Five journals at most, and a
+        journal read is a file read."""
         try:
             found = recent.entries(config.config_dir)
         except recent.RecentError as error:
@@ -239,11 +248,13 @@ def build_home_router(config: ServeConfig, world, session: Session) -> APIRouter
         rows: list[HomeRecent] = []
         for entry in found:
             folder = Path(entry["path"])
+            is_project = (folder / project_mod.PROJECT_FILE).is_file()
             rows.append(
                 HomeRecent(
                     **entry,
                     exists=folder.is_dir(),
-                    project=(folder / project_mod.PROJECT_FILE).is_file(),
+                    project=is_project,
+                    pending=_total(pending_of(config, folder)) if is_project else 0,
                 )
             )
         return rows, ""
@@ -352,6 +363,19 @@ def build_home_router(config: ServeConfig, world, session: Session) -> APIRouter
             parent=str(folder.parent) if folder.parent != folder else None,
             dirs=found[:BROWSE_LIMIT],
         )
+
+    @router.post("/home/forget", response_model=HomeForgotten)
+    def home_forget(body: HomeOpenBody) -> HomeForgotten:
+        """Drop one entry from the machine's list — the folder itself is never
+        touched (`home.md` §D1: a list, not a record). The answer carries the
+        list as it stands, so the page needs one round trip."""
+        try:
+            forgotten = recent.forget(body.path, config.config_dir)
+        except recent.RecentError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        rows, _error = recent_rows()
+        return HomeForgotten(path=str(Path(body.path).expanduser()), forgotten=forgotten,
+                             recents=rows)
 
     @router.post("/home/open", response_model=HomeDoor)
     def home_open(body: HomeOpenBody) -> HomeDoor:

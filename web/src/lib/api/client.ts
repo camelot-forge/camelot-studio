@@ -128,6 +128,9 @@ export interface HomeRecent {
 	opened: string;
 	exists: boolean;
 	project: boolean;
+	/** What a publish would still write, read from the project (`home.md` §D1) —
+	 * what the chip's menu shows beside the name. */
+	pending: number;
 }
 
 export interface HomePayload {
@@ -168,6 +171,14 @@ export interface HomeLeft {
 	path: string;
 	name: string;
 	pending: number;
+}
+
+/** What `POST /home/forget` answers (`home.md` §D1): the entry went (or was
+ * not there), and the list as it stands. */
+export interface HomeForgotten {
+	path: string;
+	forgotten: boolean;
+	recents: HomeRecent[];
 }
 
 /** What one door did (`home.md` §D4) — and, when the daemon switched, the
@@ -699,6 +710,9 @@ export const api = {
 	}) => send<HomeDoor>('POST', '/home/import', body),
 	homeClone: (body: { url: string; dir: string; client?: string; open?: boolean }) =>
 		send<HomeDoor>('POST', '/home/clone', body),
+	/** Drop one entry from the machine's list. The folder itself is never
+	 * touched (`home.md` §D1: a list, not a record). */
+	homeForget: (path: string) => send<HomeForgotten>('POST', '/home/forget', { path }),
 
 	// --- the world ---------------------------------------------------------
 	worldIndex: (signal?: AbortSignal) => get<WorldIndex>('/world/index', signal),

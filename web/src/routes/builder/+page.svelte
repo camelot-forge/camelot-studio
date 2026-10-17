@@ -13,6 +13,7 @@
 	import CharacterCard from '$lib/components/CharacterCard.svelte';
 	import Dock from '$lib/components/Dock.svelte';
 	import EquipmentCard from '$lib/components/EquipmentCard.svelte';
+	import ProjectChip from '$lib/components/ProjectChip.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import Stepper from '$lib/components/Stepper.svelte';
 	import Viewer, { type ViewerHandles } from '$lib/components/Viewer.svelte';
@@ -210,6 +211,7 @@
 		contextMeta={`face ${pick.face}${material ? ` · ${material}` : ''}`}
 	>
 		{#snippet actions()}
+			<ProjectChip />
 			{#if model}
 				<button
 					class="btn btn--icon"

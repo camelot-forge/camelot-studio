@@ -82,3 +82,10 @@ export function slug(value: string): string {
 		.replace(/^-+|-+$/g, '');
 	return cleaned || 'project';
 }
+
+/** One line of the chip's menu (`home.md` §D1/§D5): the work waiting, or when
+ * the project was last opened — never a `verify`, which is a row's own check. */
+export function menuState(pending: number, opened: string, now: number = Date.now()): string {
+	if (pending > 0) return pending === 1 ? '1 edit' : `${pending} edits`;
+	return since(opened, now);
+}

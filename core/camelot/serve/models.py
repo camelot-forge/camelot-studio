@@ -465,13 +465,27 @@ class HomeProject(BaseModel):
 
 class HomeRecent(BaseModel):
     """One row of the machine's list: the entry, plus what the disk says
-    *now* (`home.md` §D1 — the registry carries no copies)."""
+    *now* (`home.md` §D1 — the registry carries no copies), and the work
+    waiting, so the chip's menu can say it without a `verify` per row."""
 
     path: str
     name: str
     opened: str = ""
     exists: bool
     project: bool
+    #: `fixtures + rows` — what a publish would still write (`pending_counts`),
+    #: read from the project's journal. 0 when there is nothing to say.
+    pending: int = 0
+
+
+class HomeForgotten(BaseModel):
+    """`POST /home/forget`'s answer: whether the machine's list carried the
+    entry. The folder itself is never touched (`home.md` §D1)."""
+
+    path: str
+    forgotten: bool
+    #: The list as it stands after the drop, so a page needs one round trip.
+    recents: list[HomeRecent] = []
 
 
 class HomePayload(BaseModel):

@@ -580,6 +580,38 @@ def test_a_rows_health_carries_its_pending_work(served_client, tmp_path, machine
     assert found["pending"] == {"fixtures": 1, "rows": 0}
 
 
+def test_the_machine_list_carries_the_work_waiting(served_client, tmp_path, machine):
+    """`home.md` §D1: the list carries no copies — the work waiting is read
+    from each project when the page asks, so the chip's menu can say it
+    without a `verify` per row."""
+    avalon = pj.new(tmp_path / "avalon", client=served_client, name="Avalon")
+    recent.record(avalon.root, name=avalon.name, directory=machine)
+    client = home_client(served_client, project=avalon.root, config_dir=machine)
+    client.post(
+        "/api/v1/world/zone/0/edits", json={"kind": "move", "id": 2, "x": 30000, "y": 31000}
+    )
+
+    rows = client.get("/api/v1/home").json()["recents"]
+    assert rows[0]["name"] == "Avalon" and rows[0]["pending"] == 1
+
+
+def test_forget_drops_the_row_and_never_the_folder(world, machine, tmp_path):  # noqa: F811
+    """`POST /home/forget` (`home.md` §D1): the entry goes, the folder stays —
+    and the answer carries the list as it stands, so the page needs one round
+    trip."""
+    here = tmp_path / "avalon"
+    here.mkdir(parents=True)
+    recent.record(here, name="Avalon", directory=machine)
+    client = home_client(world, config_dir=machine)
+
+    answer = client.post("/api/v1/home/forget", json={"path": str(here)}).json()
+    assert answer["forgotten"] is True and answer["recents"] == []
+    assert here.is_dir()  # the folder itself is never touched
+
+    again = client.post("/api/v1/home/forget", json={"path": str(here)}).json()
+    assert again["forgotten"] is False and again["recents"] == []
+
+
 def test_health_never_migrates_the_project_it_reads(world, machine, tmp_path):  # noqa: F811
     """A legacy single-file journal is *not* touched by a row's health: the
     migration is a write, and Home is a reader (`home.md` §D2)."""

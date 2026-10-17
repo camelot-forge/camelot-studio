@@ -16,7 +16,7 @@
 // Everything this probe creates lands under the second argument (the projects
 // *and* the git clones). The client itself is only ever read.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { chromium } from 'playwright';
 
 const base = process.argv[2] ?? 'http://127.0.0.1:8763';
@@ -522,6 +522,88 @@ check(
 );
 check('and it says everything is published', (chip ?? '').endsWith('all published') === true, chip);
 await shot('home-04-chip');
+
+// --- the chip's menu: the selector, from any tool (`home.md` §D5) ---------------
+// The list the menu must show, written as a fixture again: the runs above
+// changed it, and a menu is only as good as what it lists.
+seed([
+	entry(project.path, project.name),
+	entry(freshDir, 'Probe Fresh'),
+	entry(editsFolder, 'probe-import'),
+	entry(gonePath, 'gone-project', '2026-10-14T08:00:00Z')
+]);
+await page.goto(`${base}/world`, { waitUntil: 'domcontentloaded' });
+await until(async () => ((await text('.appbar .chip'))?.includes('all published') ? true : null));
+await page.click('.appbar .chip');
+const menu = await until(async () => {
+	const found = await text('.menu');
+	return found?.includes('ON THIS MACHINE') ? found : null;
+});
+check(
+	'the chip opens the machine\u2019s list, and the three doors with it',
+	[
+		'ON THIS MACHINE',
+		'Open a project\u2026',
+		'New project\u2026',
+		'Clone a repository\u2026'
+	].every((line) => (menu ?? '').includes(line)),
+	(menu ?? '').slice(0, 160)
+);
+const menuRows = await until(async () => {
+	const rows = await texts('.menu .pick');
+	return rows.length === 4 ? rows : null; // the menu paints, the list follows
+});
+check(
+	'every row says the work waiting, or when it was opened',
+	menuRows.length === 4 &&
+		menuRows.some((row) => row.includes('Probe Fresh') && row.includes('1 edit')) &&
+		menuRows.some((row) => row.includes('probe-import') && row.includes('ago')),
+	JSON.stringify(menuRows)
+);
+await shot('home-06-chip-menu');
+
+// a row of the menu serves that project — and the page reloads onto it, since
+// everything on it belongs to the project that was served
+await page.click('.menu .pick:has-text("Probe Fresh")');
+const servedByMenu = await until(async () => {
+	const payload = await api('/home');
+	return payload.body?.project?.name === 'Probe Fresh' ? true : null;
+});
+check('a row in the menu serves that project', servedByMenu === true);
+const chipAfterSwitch = await until(async () => {
+	const found = await text('.appbar .chip');
+	return found?.includes('Probe Fresh') ? found : null;
+});
+check(
+	'and the chip says what it serves now',
+	(chipAfterSwitch ?? '').includes('1 edit to publish'),
+	chipAfterSwitch
+);
+const pendingAfter = (await api('/home')).body?.project?.pending;
+check(
+	'with the project\u2019s own work waiting, read from its journal',
+	pendingAfter?.fixtures === 1 && pendingAfter?.rows === 0,
+	JSON.stringify(pendingAfter)
+);
+await shot('home-07-served-from-the-menu');
+
+// forget: the entry goes from the list, the folder stays on disk (`home.md` §D1)
+await page.click('.appbar .chip');
+await until(async () =>
+	(await page.locator('.menu .menu-row:has-text("probe-import")').count()) ? true : null
+);
+await page.click('.menu .menu-row:has-text("probe-import") .forget');
+const afterForget = await until(async () => {
+	const rows = await texts('.menu .pick');
+	return rows.length && rows.every((row) => !row.includes('probe-import')) ? rows : null;
+});
+check('forget drops the row from the list', afterForget !== null, JSON.stringify(afterForget));
+check('and the folder is still on disk', existsSync(editsFolder) === true);
+check(
+	'and the machine no longer lists it',
+	(await api('/home')).body?.recents?.every((row) => row.name !== 'probe-import') === true
+);
+await shot('home-08-forgotten');
 
 // --- the empty state (only when the probe owns the config directory) ----------
 if (registry) {
