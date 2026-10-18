@@ -1,4 +1,10 @@
-"""The feed: the client tree the players should have, and the two files a launcher reads.
+"""The feed's protocol: the two files a launcher reads, and the tree behind them.
+
+This module is the **players' half of the code**, and it depends on nothing else in
+`camelot` — a test asserts it (`test_the_players_half_depends_on_nothing_of_ours`).
+What a player receives must contain no path that writes a server's rows, reads a
+project's journal or reaches a database; what it needs is here and nowhere else:
+the walk, the two files, the plan, the update.
 
 Measured against `OpenDAoC-Launcher`'s own sources (2026-10-18, `master`), not against
 prose — the shapes below are what its code does:
@@ -13,29 +19,18 @@ prose — the shapes below are what its code does:
 - paths are relative, with `/`; the launcher writes them beside itself (its own working
   directory is the client's folder) and creates the directories it needs.
 
-So the patchlist lists the *whole* tree, and the feed hosts only the files that differ
-from the base (`C §2`). One walk serves both ends, which is why they live in one module:
-`build()` writes a feed, `plan()`/`update()` read one.
-
-What never travels: our own store (`.camelot/`, the author's pristine copies) and the
-client's `logs/` — neither is part of what a player needs, and both differ from the base
-by nature.
+Producing a feed is the *other* half, and it is the operator's: `feedbuild.py` composes
+this module with the project, the releases and the author's install.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-
-from . import clientinstall
-from . import journal as journal_mod
-from . import project as project_mod
-from . import release as release_mod
 
 FORMAT = "camelot.feed/1"
 
@@ -61,7 +56,6 @@ __all__ = [
     "RECORD_FILE",
     "VERSION_FILE",
     "FeedError",
-    "build",
     "launcher_of",
     "plan",
     "read",
@@ -168,170 +162,7 @@ def read_patchlist(text: str) -> tuple[str, list[dict]]:
     return base_url, entries
 
 
-# --- the staged tree -----------------------------------------------------------
-
-
-def _link_tree(source, target) -> None:
-    """A copy of *source* in *target* whose files are **hardlinks**.
-
-    Safe here because the author's install replaces files (temp + rename,
-    `clientinstall`), never writes them in place: the base client is left alone, and a
-    5 GB tree costs nothing to stage. Nothing else may write through these links — a
-    plain `write_bytes` on a linked file edits the base's inode.
-    """
-    source, target = Path(source), Path(target)
-    for item in sorted(source.rglob("*")):
-        if item.is_symlink():
-            continue
-        rel = item.relative_to(source)
-        if _skip(str(rel).replace("\\", "/")):
-            continue
-        where = target / rel
-        if item.is_dir():
-            where.mkdir(parents=True, exist_ok=True)
-            continue
-        where.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            where.hardlink_to(item)
-        except OSError:
-            shutil.copy2(item, where)
-
-
-def stage(base, packs, out) -> Path:
-    """The tree the players should have: the base client, with each pack's client half
-    applied **in order** through the author's own machinery (`C §2`, §D1).
-
-    The base is never written: the packs land in *out*.
-    """
-    where = Path(out)
-    if where.exists():
-        shutil.rmtree(where)
-    where.mkdir(parents=True)
-    _link_tree(Path(base), where)
-    for pack in packs:
-        clientinstall.install_pack(str(where), str(pack))
-    return where
-
-
-# --- the producer --------------------------------------------------------------
-
-
-def _client_packs(root) -> list[Path]:
-    """The packs of every release, oldest first — the same file holds both halves, and
-    a release with no client half installs nothing."""
-    found: list[Path] = []
-    for record in release_mod.releases(root):
-        pack = ((record.get("artifacts") or {}).get("server") or {}).get("pack")
-        if not pack:
-            continue
-        path = Path(root) / str(pack)
-        if path.is_file():
-            found.append(path)
-    return found
-
-
-def _version_of(root) -> int:
-    """`C §D6`: the last release whose client half changed — the number the players'
-    launcher compares against."""
-    number = 0
-    for record in release_mod.releases(root):
-        if (record.get("artifacts") or {}).get("client"):
-            number = int(record.get("number") or 0)
-    return number
-
-
-def build(
-    project: project_mod.Project,
-    *,
-    base=None,
-    out=None,
-    base_url: str = "http://127.0.0.1/feed/",
-    server: str = "",
-    scratch=None,
-) -> dict:
-    """Write the players' feed for what the project holds now.
-
-    Refused when the staged tree is **missing** files the base has: the protocol
-    replaces and adds, it never removes (`C §D7`), so a feed that lost a file would
-    leave players holding content the shard no longer ships.
-
-    *server* is where the game is (`host:port`), and it is written beside the protocol's
-    two files (`launcher.json`): a player is told one URL, and the shard's own settings
-    come from it.
-    """
-    root = Path(project.root)
-    where = Path(out) if out is not None else root / FEED
-    client = base or project_mod.client_root(project)
-    if client is None:
-        raise FeedError(
-            f"{project.name}: no client resolved — write {project_mod.MACHINE_FILE}, "
-            "set $DAOC_CLIENT, or pass --client"
-        )
-    packs = _client_packs(root)
-    if not packs:
-        raise FeedError(
-            "no release carries a client half yet — `camelot project release` is what makes one"
-        )
-    space = Path(scratch) if scratch is not None else where / ".staged"
-    if space.exists():
-        shutil.rmtree(space)
-    staged = stage(client, packs, space)
-    try:
-        tree = walk(staged)
-        before = walk(client)
-        removed = sorted(set(before) - set(tree))
-        if removed:
-            raise FeedError(
-                f"{len(removed)} file(s) the base has are not in the staged tree, and the "
-                f"protocol cannot remove a file from a player's client: {removed[0]}"
-            )
-        changed = {rel: facts for rel, facts in tree.items() if before.get(rel) != facts}
-        version = _version_of(root)
-        releases = release_mod.releases(root)
-        where.mkdir(parents=True, exist_ok=True)
-        for rel, facts in sorted(changed.items()):
-            target = where / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(staged / rel, target)
-        write_version(where / VERSION_FILE, version)
-        write_patchlist(where / PATCHLIST_FILE, base_url, tree)
-        shard = {
-            "format": FORMAT,
-            "shard": project.name,
-            "feed": base_url,
-            "server": str(server or ""),
-            "version": version,
-            "built": journal_mod.now(),
-        }
-        (where / LAUNCHER_FILE).write_text(
-            json.dumps(shard, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        record = {
-            "format": FORMAT,
-            "release": int((releases[-1] if releases else {}).get("number") or 0),
-            "version": version,
-            "built": journal_mod.now(),
-            "files": len(tree),
-            "published": len(changed),
-            "bytes": sum(facts["size"] for facts in changed.values()),
-            "base_url": base_url,
-            "changed": sorted(changed),
-        }
-        (where / RECORD_FILE).write_text(
-            json.dumps(record, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-    finally:
-        shutil.rmtree(space, ignore_errors=True)
-    return {
-        **record,
-        "path": str(where),
-        "version": version,
-        "version_file": str(where / VERSION_FILE),
-        "patchlist": str(where / PATCHLIST_FILE),
-    }
-
-
-# --- the consumer --------------------------------------------------------------
+# --- reading a feed back -------------------------------------------------------
 
 
 def _get_text(base: str, name: str) -> str:
@@ -392,13 +223,14 @@ def read(where) -> dict:
     return found
 
 
-def _source_of(base_url: str):
+# --- bringing a client up ------------------------------------------------------
+
+
+def _source_of(base_url: str) -> str:
     """Where a file comes from: a directory, or a URL base."""
     parsed = urllib.parse.urlparse(base_url)
     if parsed.scheme in ("http", "https"):
         return "url"
-    if parsed.scheme == "file":
-        return "dir"
     return "dir"
 
 

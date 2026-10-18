@@ -1,4 +1,4 @@
-"""The feed: the two files a launcher reads, and the tree behind them (`C`, P6).
+"""The feed's protocol — the players' half (`C §3`, P6).
 
 The shapes here are the launcher's own, measured from its sources (2026-10-18):
 `version-new.txt` is one integer, `patchlist-new.txt` is a base URL then one
@@ -6,11 +6,17 @@ The shapes here are the launcher's own, measured from its sources (2026-10-18):
 and the MD5 is lowercase hex. A producer that wrote anything else would be
 producing a feed nobody reads.
 
-Everything runs on the synthetic client, with no daemon and no network.
+`test_the_players_half_depends_on_nothing_of_ours` is the boundary: what a player
+receives must contain no path that writes a server's rows, reads a project's
+journal or reaches a database.
+
+Everything runs on the synthetic client, with no daemon.
 """
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,7 +25,7 @@ from test_release import served_client  # noqa: F401  (what `client` wraps)
 from test_serve_editor import editing  # noqa: F401  (the fixture `served_client` asks for)
 from test_zones import world  # noqa: F401  (the fixture `editing` asks for)
 
-from camelot import feed
+from camelot import feed, feedbuild
 from camelot import release as rel
 
 
@@ -48,12 +54,44 @@ def _spoil(path, data=b"what the player had before") -> None:
 
 
 def _published(tmp_path, client, *, name="Avalon"):
-    """A project with one fixture moved and one release cut — the smallest thing
-    that has a client half."""
+    """A project with one fixture moved and one release cut — the smallest thing that
+    has a client half (and therefore a feed)."""
     project = _project(tmp_path, client, name=name)
     _move(_editor(project, client))
     rel.cut(project.root)
     return project
+
+
+def _feed_of(tmp_path, client, *, base_url="https://shard.example/patch/", **kwargs):
+    """A built feed, read back by whoever asked for it."""
+    project = _published(tmp_path, client)
+    feedbuild.build(project, base=client, base_url=base_url, **kwargs)
+    return project, project.root / feed.FEED
+
+
+# --- the boundary --------------------------------------------------------------
+
+
+def test_the_players_half_depends_on_nothing_of_ours():
+    """`C §D16`: `camelot.feed` is what a launcher ships. It may use the standard
+    library and nothing else — no project, no release, no database, no daemon.
+
+    Run in a subprocess: what a module imports at runtime is the only honest answer,
+    and an import added later must break this test rather than a player's machine.
+    """
+    code = (
+        "import json, sys; import camelot.feed;"
+        "print(json.dumps(sorted(m for m in sys.modules if m == 'camelot' or"
+        " m.startswith('camelot.'))))"
+    )
+    found = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    imported = set(json.loads(found.stdout))
+
+    assert imported == {"camelot", "camelot.feed"}, (
+        "the players' half now imports "
+        f"{sorted(imported - {'camelot', 'camelot.feed'})} — nothing of the admin's may "
+        "travel to a player (C §D16)"
+    )
 
 
 # --- the protocol, as the launcher reads it ------------------------------------
@@ -116,124 +154,45 @@ def test_the_walk_lists_the_tree_and_leaves_our_own_store_out(tmp_path):
     assert found["figures/Boar.NIF"]["md5"] == _md5(tmp_path / "figures" / "Boar.NIF")
 
 
-# --- the producer --------------------------------------------------------------
-
-
-def test_the_feed_publishes_only_what_differs_from_the_base(tmp_path, client):
-    """`C §2`: the patchlist lists the whole tree, and the feed hosts the files that
-    differ. What did not change is verified against the player's own copy."""
-    project = _published(tmp_path, client)
-
-    report = feed.build(project, base=client, base_url="https://shard.example/patch/")
-
-    where = project.root / feed.FEED
-    read_back = feed.read(where)
-    listed = {entry["path"]: entry for entry in read_back["entries"]}
-    base_tree = feed.walk(client)
-    assert read_back["version"] == report["version"] == 1
-    assert read_back["base_url"] == "https://shard.example/patch/"
-    assert set(base_tree) <= set(listed)
-    for name, facts in base_tree.items():
-        if name not in report["changed"]:
-            assert listed[name]["md5"] == facts["md5"]  # unchanged: the player's own
-    # the fixture the editor moved is the one the feed carries, and its listed digest
-    # is the *staged* one — that is what a player downloads
-    assert report["changed"] == ["zones/zone000/csv000.mpk"]
-    for name in report["changed"]:
-        assert (where / name).is_file()
-        assert listed[name]["md5"] == _md5(where / name)
-        assert listed[name]["size"] == (where / name).stat().st_size
-    assert json.loads((where / feed.RECORD_FILE).read_text())["published"] == 1
-
-
-def test_the_feed_refuses_a_tree_that_lost_a_file(tmp_path, client, monkeypatch):
-    """A release can remove a client file (the author's install does, exactly), and the
-    protocol cannot (`C §D7`): a feed built from a tree that lost one would leave
-    players holding content the shard stopped shipping, so it is refused."""
-    project = _published(tmp_path, client)
-    staged = feed.stage
-
-    def staged_then_removed(base, packs, out):
-        where = staged(base, packs, out)
-        (where / "game1127.dll").unlink()
-        return where
-
-    monkeypatch.setattr(feed, "stage", staged_then_removed)
-
-    with pytest.raises(feed.FeedError, match="cannot remove a file"):
-        feed.build(project, base=client, base_url="https://shard.example/patch/")
-
-
-def test_a_project_with_no_client_half_has_no_feed_to_build(tmp_path, client):
-    project = _project(tmp_path, client)
-
-    with pytest.raises(feed.FeedError, match="no release carries a client half"):
-        feed.build(project, base=client, base_url="https://shard.example/patch/")
-
-
 # --- the consumer --------------------------------------------------------------
-
-
-def test_the_feed_carries_the_shard_s_own_settings(tmp_path, client):
-    """A player is told **one URL** — the feed's — and everything else comes from it: the
-    shard's name, where the game is, and the version to compare with. The protocol's two
-    files stay exactly the protocol's; this sits beside them (`launcher.json`)."""
-    project = _published(tmp_path, client)
-
-    report = feed.build(
-        project,
-        base=client,
-        base_url="https://avalon.example/patch/",
-        server="play.avalon.example:10300",
-    )
-
-    where = project.root / feed.FEED
-    shard = feed.launcher_of(where)
-    assert shard["shard"] == report.get("shard", "Avalon")
-    assert shard["feed"] == "https://avalon.example/patch/"
-    assert shard["server"] == "play.avalon.example:10300"
-    assert shard["version"] == report["version"] == 1
-    # and a feed that names no game is still a feed: the launcher has to be told
-    assert feed.read(where)["launcher"]["server"] == "play.avalon.example:10300"
-    assert feed.launcher_of(tmp_path / "nowhere") == {}
 
 
 def test_an_update_writes_what_differs_and_reads_it_back(tmp_path, client):
     """`C §D11`: every written file is hashed again. The client here is a copy whose
     files were put back to something else — what a player's client is."""
-    project = _published(tmp_path, client)
-    report = feed.build(project, base=client, base_url="https://shard.example/patch/")
+    project, where = _feed_of(tmp_path, client)
+    report = feedbuild.build(project, base=client, base_url="https://shard.example/patch/")
     player = tmp_path / "player"
-    feed._link_tree(client, player)
+    feedbuild._link_tree(client, player)
     for name in report["changed"]:
         _spoil(player / name)
 
-    plan = feed.plan(project.root / feed.FEED, player)
+    plan = feed.plan(where, player)
 
     assert plan["files"] == report["files"]
     assert [row["path"] for row in plan["wanted"]] == report["changed"]
     assert all(row["state"] == "differs" for row in plan["wanted"])
 
-    done = feed.update(project.root / feed.FEED, player)
+    done = feed.update(where, player)
 
     assert [row["path"] for row in done["written"]] == report["changed"]
     for name in report["changed"]:
-        assert _md5(player / name) == _md5(project.root / feed.FEED / name)
+        assert _md5(player / name) == _md5(where / name)
     # and the second run has nothing to do
-    again = feed.update(project.root / feed.FEED, player)
+    again = feed.update(where, player)
     assert again["wanted"] == [] and again["written"] == []
 
 
 def test_a_missing_file_is_downloaded_not_refused(tmp_path, client):
     """A player who never had the file gets it: `File.Exists` false is a download, not
     an error."""
-    project = _published(tmp_path, client)
-    report = feed.build(project, base=client, base_url="https://shard.example/patch/")
+    project, where = _feed_of(tmp_path, client)
+    report = feedbuild.build(project, base=client, base_url="https://shard.example/patch/")
     player = tmp_path / "player"
-    feed._link_tree(client, player)
+    feedbuild._link_tree(client, player)
     (player / report["changed"][0]).unlink()
 
-    done = feed.update(project.root / feed.FEED, player)
+    done = feed.update(where, player)
 
     assert [row["state"] for row in done["wanted"]] == ["missing"]
     assert (player / report["changed"][0]).is_file()
@@ -244,11 +203,11 @@ def test_a_file_the_feed_does_not_publish_is_refused_by_name(tmp_path, client):
     the folder here, so nothing tries the network.)"""
     project = _published(tmp_path, client)
     where = project.root / feed.FEED
-    report = feed.build(project, base=client, base_url=f"{where}/")
+    report = feedbuild.build(project, base=client, base_url=f"{where}/")
     for name in report["changed"]:
         (where / name).unlink()
     player = tmp_path / "player"
-    feed._link_tree(client, player)
+    feedbuild._link_tree(client, player)
     _spoil(player / report["changed"][0], b"stale")
 
     with pytest.raises(feed.FeedError, match="does not publish it"):
@@ -264,13 +223,14 @@ def test_a_feed_served_over_http_reads_the_same(tmp_path, client):
 
     project = _published(tmp_path, client)
     where = project.root / feed.FEED
-    report = feed.build(project, base=client, base_url=str(where).replace("\\", "/") + "/")
+    report = feedbuild.build(project, base=client, base_url=str(where).replace("\\", "/") + "/")
     player = tmp_path / "player"
-    feed._link_tree(client, player)
+    feedbuild._link_tree(client, player)
     _spoil(player / report["changed"][0], b"stale")
 
     server = http.server.ThreadingHTTPServer(
-        ("127.0.0.1", 0), lambda *a: http.server.SimpleHTTPRequestHandler(*a, directory=str(where))
+        ("127.0.0.1", 0),
+        lambda *a: http.server.SimpleHTTPRequestHandler(*a, directory=str(where)),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -289,14 +249,14 @@ def test_a_feed_served_over_http_reads_the_same(tmp_path, client):
 
 
 def test_a_dry_run_says_what_it_would_write_and_writes_nothing(tmp_path, client):
-    project = _published(tmp_path, client)
-    report = feed.build(project, base=client, base_url="https://shard.example/patch/")
+    project, where = _feed_of(tmp_path, client)
+    report = feedbuild.build(project, base=client, base_url="https://shard.example/patch/")
     player = tmp_path / "player"
-    feed._link_tree(client, player)
+    feedbuild._link_tree(client, player)
     _spoil(player / report["changed"][0], b"stale")
     before = _md5(player / report["changed"][0])
 
-    said = feed.update(project.root / feed.FEED, player, dry_run=True)
+    said = feed.update(where, player, dry_run=True)
 
     assert said["dry_run"] is True and said["written"] == []
     assert [row["state"] for row in said["wanted"]] == ["differs"]

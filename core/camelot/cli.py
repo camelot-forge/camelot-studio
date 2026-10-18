@@ -714,7 +714,7 @@ def cmd_project(args) -> int:
         return 0
 
     if args.project_cmd == "feed":
-        from . import clientinstall
+        from . import clientinstall, feedbuild
         from . import feed as feed_mod
         from . import pipeline as pipe
 
@@ -730,7 +730,7 @@ def cmd_project(args) -> int:
             return 0
         base_url = args.base_url or shown.get("base_url") or "http://127.0.0.1/feed/"
         try:
-            report = feed_mod.build(
+            report = feedbuild.build(
                 project,
                 base=args.client,
                 out=args.out,
@@ -738,7 +738,7 @@ def cmd_project(args) -> int:
                 server=args.server,
                 scratch=args.scratch,
             )
-        except (feed_mod.FeedError, clientinstall.InstallError) as error:
+        except (feedbuild.FeedError, feed_mod.FeedError, clientinstall.InstallError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
         print(f"feed {report['version']}  {report['path']}")
