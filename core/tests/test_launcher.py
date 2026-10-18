@@ -66,7 +66,7 @@ def _ready(tmp_path, client, *, server="play.example:10300", feed_url=None):  # 
 # --- the boundary --------------------------------------------------------------
 
 
-def test_players_half_is_not_the_admins():
+def test_the_players_half_is_not_the_admins():
     """`C §D16`: the two modules a player's machine runs import the standard library and
     nothing else of ours. Run in a subprocess — what a module imports at runtime is the
     only honest answer, and an import added later must break this test rather than a
@@ -178,6 +178,29 @@ def test_a_broken_shard_file_is_an_error_not_a_default(tmp_path):
 
     with pytest.raises(launcher.LauncherError, match="shard.json"):
         launcher.read_shard(path)
+
+
+def test_a_package_finds_its_page_beside_the_executable(tmp_path, monkeypatch):
+    """The player build has no checkout: the page rides beside the binary (or in
+    PyInstaller's `_MEIPASS`)."""
+    page = tmp_path / "page"
+    page.mkdir()
+    (page / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    executable = tmp_path / "camelot-launcher"
+    executable.write_text("", encoding="utf-8")
+    monkeypatch.delattr(launcher.sys, "_MEIPASS", raising=False)
+    monkeypatch.setattr(launcher.sys, "argv", [str(executable)])
+
+    assert launcher.packaged_page() == str(page)
+
+
+def test_the_shard_file_is_looked_up_beside_the_executable(tmp_path, monkeypatch):
+    executable = tmp_path / "camelot-launcher"
+    executable.write_text("", encoding="utf-8")
+    monkeypatch.delenv("CAMELOT_SHARD", raising=False)
+    monkeypatch.setattr(launcher.sys, "argv", [str(executable)])
+
+    assert launcher.shard_config_path() == tmp_path / "shard.json"
 
 
 # --- what it can say without walking a client ----------------------------------

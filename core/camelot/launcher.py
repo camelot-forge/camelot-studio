@@ -32,6 +32,7 @@ __all__ = [
     "LauncherError",
     "command",
     "configure",
+    "packaged_page",
     "play",
     "read_settings",
     "read_shard",
@@ -539,6 +540,21 @@ def serve(settings: dict, *, page, host: str = "127.0.0.1", port: int = 8710, op
     finally:
         server.server_close()
     return 0
+
+
+def packaged_page() -> str:
+    """The page a player package carries: PyInstaller's `_MEIPASS/page`, then
+    `page/` beside the executable, then the source checkout's build. A packaged
+    launcher must never depend on the repository being present."""
+    bundled = getattr(sys, "_MEIPASS", None)
+    if bundled:
+        candidate = Path(bundled) / "page"
+        if (candidate / "index.html").is_file():
+            return str(candidate)
+    beside = Path(sys.argv[0]).resolve().parent / "page"
+    if (beside / "index.html").is_file():
+        return str(beside)
+    return _default_page()
 
 
 def _default_page() -> str:

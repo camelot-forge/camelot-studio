@@ -108,6 +108,9 @@ serves, and `cd web/launcher && pnpm install && pnpm build` rebuilds it. On
 Linux the game runs under Wine (`wine` and `wineprefix` in the launcher's
 settings); on Windows, directly.
 
+The player package (`camelot-launcher`, PyInstaller) is built by
+`packaging/launcher/`; see its README for the output and `shard.json`.
+
 Set `DAOC_CLIENT` to your client directory to validate against the real
 corpus (`camelot batch` rewrites `DAOC CLIENT/...` manifest paths from it).
 
