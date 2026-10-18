@@ -169,7 +169,11 @@ MACHINE_EXAMPLE = """\
   "client": "/path/to/your/DAoC client",
   "author": "your-name",
   "environments": {
-    "local": "/a/folder for this environment: its own client/ and server/"
+    "local": "/a/folder for this environment: its own client/ and server/",
+    "production": {
+      "root": "/srv/forge/env",
+      "client": false
+    }
   }
 }
 """

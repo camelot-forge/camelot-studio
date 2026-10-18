@@ -23,8 +23,8 @@ private-server community.
 > unchanged through environments (`local`, optional `staging`, `production`)
 > and published as a feed the players' launcher reads. The project, releases,
 > environments, the local test server and the players' launcher are built
-> (P1–P6); the Console (P7) and the re-base (P8) are next. The design lives in
-> the private workspace's `notes/`.
+> (P1–P6); the Console's read-only phase (P7a) is built; the re-base (P8) is
+> next. The design lives in the private workspace's `notes/`.
 
 **Principle: engine fidelity.** The project aims to reproduce the client's
 own behaviour — same tables, order and values — and to make every approximation
@@ -50,6 +50,8 @@ camelot-studio/
 ├── core/            # Python 3.11+: camelot CLI (NIF/KFA, glTF, roundtrip, batch…)
 ├── web/             # (M1) Svelte + three.js viewer: figures & animations
 │   └── launcher/    # (P6) the players' page: one feed, Update, Play
+├── deploy/          # (F, P7) the feed and Console containers
+├── packaging/       # (P6) the players' launcher package
 ├── addon/           # (M2) Blender addon: UI shell around core/
 ├── server-bridge/   # (M2) artifacts/integration with the OpenDAoC emulator (C#)
 └── docs/            # DAoC format specs & journals (contract between layers)
@@ -112,6 +114,55 @@ settings); on Windows, directly.
 
 The player package (`camelot-launcher`, PyInstaller) is built by
 `packaging/launcher/`; see its README for the output and `shard.json`.
+
+### The Console
+
+`camelot console` is the read-only face of a **running** server (P7a). It
+reads the Installer's `server/camelot/state.json` and applied evidence, the
+feed's version, the game port and, when given, OpenDAoC's read API on `:5000`
+(`atlas_api`). It writes nothing.
+
+```sh
+.venv/bin/camelot console --root /path/to/env --env production \
+  --project /path/to/project --feed /path/to/project/feed \
+  --game-server 127.0.0.1:10300
+```
+
+The page is on `http://127.0.0.1:8770/`; `/api/live` is the same document as
+JSON. Beyond loopback a password is required (`--password` or
+`CAMELOT_CONSOLE_PASSWORD`). The container is `deploy/console/`; M-3's verdict
+(what the server can actually be told) is in `notes/console.md` §D5.
+Measured 2026-10-18: OpenDAoC exposes a read API and `/utils/shutdown`;
+`/reload` and the messages remain in-game GM commands.
+
+### The remote channel (first pieces)
+
+`camelot project publish N` builds the feed (the one step that needs a client)
+and commits the release's payloads and that feed to a **`camelot-deploy`**
+branch of the project's repository — the transport a server this machine does
+not reach will pull (`D §D2`). The commit is built with git's plumbing, so the
+working branch and its index are never touched; the branch carries
+`publish.json` (release, feed version, bytes, author) and one `publish` line
+lands in the deploy log.
+
+An environment declared `"client": false` in `machine.json` is **server-only**:
+the dry run names the release's client half as the feed's and writes only the
+server half, and `verify` does not look for a client. That is what unblocks a
+VPS deploy.
+
+The server side of the same flow is in: `camelot project pull` (and the
+Console's **Pull** action, phase 7d) fetches that branch, recomputes the
+release's hashes and refuses a mismatch, copies the server half into
+`<env>/server/camelot/releases/NNNN/`, writes `wanted.json` for the Installer
+and mirrors the feed into the served directory. It never applies rows; the
+page shows the wanted release as `pending` until the state file records it.
+
+The one action (7b) is **Restart**, off unless `--allow-restart` is passed;
+it needs the server's API (`--api-url`, `--api-password`) and a writable audit
+log (`--audit`, default `<root>/server/camelot/console/audit.jsonl`). It sends
+`GET /utils/shutdown`, so a supervisor (systemd `Restart=always`, a Docker
+restart policy) must start the server again; without one the action is a stop.
+Each attempt — refused or not — writes one audit line, and the page shows them.
 
 Set `DAOC_CLIENT` to your client directory to validate against the real
 corpus (`camelot batch` rewrites `DAOC CLIENT/...` manifest paths from it).

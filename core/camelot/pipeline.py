@@ -57,6 +57,7 @@ __all__ = [
     "PipelineError",
     "client_of",
     "deploy",
+    "environment",
     "feed",
     "folder",
     "installer_of",
@@ -64,6 +65,7 @@ __all__ = [
     "names",
     "plan",
     "promote",
+    "server_only",
     "verify",
 ]
 
@@ -81,23 +83,48 @@ def names(project: project_mod.Project) -> list[str]:
     return list(project.environments)
 
 
-def folder(project: project_mod.Project, env: str) -> Path:
-    """Where an environment lives on this machine. Refused by name when the
-    project does not declare it, or when this machine has no folder for it.
+def environment(project: project_mod.Project, env: str) -> dict:
+    """This machine's answers for one environment, normalised to a mapping.
 
     `machine.json` gives either the folder alone (the first shape the format
     had) or an object with one: the object carries this machine's other answers
     too — the environment's database, its baseline, its connection — and `root`
     is the folder among them (`server-install.md` §D6).
+
+    One flag is read here: `"client": false` declares the environment
+    **server-only** (`remote.md` §D3) — its client half belongs to the feed,
+    and `plan`, `deploy` and `verify` never look for a client there.
     """
+    mapped = (project_mod.machine(project.root).get("environments") or {}).get(str(env))
+    if mapped is None:
+        return {}
+    if isinstance(mapped, str):
+        return {"root": mapped}
+    if not isinstance(mapped, dict):
+        raise PipelineError(
+            f"{project_mod.MACHINE_FILE}: environments.{env} wants a folder, or an "
+            "object with one"
+        )
+    return mapped
+
+
+def server_only(project: project_mod.Project, env: str) -> bool:
+    """Whether this environment has no client half (`remote.md` §D3): declared
+    as `"client": false` in `machine.json`. A missing flag means a client, which
+    is what every environment had before server-only existed."""
+    return environment(project, env).get("client") is False
+
+
+def folder(project: project_mod.Project, env: str) -> Path:
+    """Where an environment lives on this machine. Refused by name when the
+    project does not declare it, or when this machine has no folder for it."""
     declared = names(project)
     if str(env) not in declared:
         raise PipelineError(
             f"{project.name}: {env!r} is not one of its environments "
             f"({', '.join(declared) if declared else 'none declared'})"
         )
-    mapped = (project_mod.machine(project.root).get("environments") or {}).get(str(env))
-    root = mapped.get("root") if isinstance(mapped, dict) else mapped
+    root = environment(project, env).get("root")
     if not root:
         raise PipelineError(
             f"{project.name}: {env!r} has no folder on this machine — add "
@@ -364,14 +391,24 @@ def plan(root, number, *, env, adopt=False) -> dict:
     record = release_mod.load(root, number)
     env_root = folder(project, env)
     env_client = client_of(env_root)
+    only_server = server_only(project, env)
 
-    items = _client_items(record, root, env_client, adopt=adopt)
-    if items:
-        items.append(_record_item(record, root, env_client))
+    notes: list[str] = []
+    items: list[dict] = []
+    if only_server:
+        if (record.get("artifacts") or {}).get("client"):
+            notes.append(
+                "this environment is server-only: the release's client half belongs to "
+                "the feed"
+            )
+    else:
+        items = _client_items(record, root, env_client, adopt=adopt)
+        if items:
+            items.append(_record_item(record, root, env_client))
     items += _server_items(record, root, env_root, adopt=adopt)
 
     refusals: list[str] = []
-    if (record.get("artifacts") or {}).get("client"):
+    if not only_server and (record.get("artifacts") or {}).get("client"):
         reason = _client_refusal(record, env_client)
         if reason:
             refusals.append(reason)
@@ -396,12 +433,14 @@ def plan(root, number, *, env, adopt=False) -> dict:
         "release": int(number),
         "env": str(env),
         "root": str(env_root),
+        "server_only": only_server,
         "order": record.get("order") or "server-only",
         "items": items,
         "counts": counts,
         "needs": record.get("needs") or {},
         "ids": {"checked": checked, "collisions": id_refusals},
         "evidence": {"path": str(applied), "present": applied.is_file()},
+        "notes": notes,
         "refusals": refusals,
     }
 
@@ -575,6 +614,7 @@ def verify(root, *, env) -> dict:
     project = project_mod.load(root)
     env_root = folder(project, env)
     env_client = client_of(env_root)
+    only_server = server_only(project, env)
     problems: list[str] = []
     server: dict = {"release": None, "files": []}
     deployed = live(root, env=str(env)).get(str(env))
@@ -598,9 +638,12 @@ def verify(root, *, env) -> dict:
                     f"{_relative(env_root, target)}: "
                     + ("is not there" if found is None else "does not match the release")
                 )
-    client = {"ok": None, "problems": [], "installs": []}
-    if env_client.is_dir():
+    client = {"ok": None, "problems": [], "installs": [], "applicable": True}
+    if only_server:
+        client = {"ok": None, "problems": [], "installs": [], "applicable": False}
+    elif env_client.is_dir():
         client = clientinstall.verify(str(env_client))
+        client["applicable"] = True
         problems += [f"{CLIENT}: {problem}" for problem in client.get("problems") or ()]
     else:
         client = {"ok": False, "problems": [f"there is no client at {env_client}"], "installs": []}
@@ -608,6 +651,7 @@ def verify(root, *, env) -> dict:
     return {
         "env": str(env),
         "root": str(env_root),
+        "server_only": only_server,
         "release": server["release"],
         "server": server,
         "client": client,

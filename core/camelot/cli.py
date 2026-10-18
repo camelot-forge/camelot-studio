@@ -751,6 +751,73 @@ def cmd_project(args) -> int:
         if len(report.get("changed") or ()) > 10:
             print(f"    … and {len(report['changed']) - 10} more")
         return 0
+    if args.project_cmd == "publish":
+        from . import publish as publish_mod
+
+        try:
+            report = publish_mod.publish(
+                project.root,
+                args.number,
+                build=not args.no_build,
+                feed_url=args.feed_url,
+                server=args.server,
+                remote=args.remote,
+            )
+        except publish_mod.PublishError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(
+            f"published release {report['release']:04d} to {report['branch']}  "
+            f"{report['commit'][:12]}"
+        )
+        feed_report = report["feed"]
+        print(
+            f"  feed   version {feed_report['version']} · "
+            f"{feed_report['published']} published file(s) · "
+            f"{feed_report['bytes']:,} bytes (the patchlist lists "
+            f"{feed_report['listed']:,})"
+        )
+        if report["pushed"]:
+            print(f"  pushed {report['pushed']}")
+        else:
+            print(f"  push   git push <remote> {report['branch']} (when you are ready)")
+        return 0
+    if args.project_cmd == "pull":
+        from . import remote as remote_mod
+
+        try:
+            report = remote_mod.pull(
+                project.root,
+                args.env,
+                remote=args.remote,
+                feed=args.feed,
+            )
+        except (remote_mod.PullError, projects.ProjectError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(
+            f"pulled release {report['release']:04d} to {report['env']}  "
+            f"{report['head'][:12]}"
+        )
+        print(f"  env     {report['root']}")
+        for path in report["wrote"]:
+            print(f"  wrote   {path}")
+        for path in report["unchanged"]:
+            print(f"  same    {path}")
+        if report["feed"]:
+            feed_report = report["feed"]
+            print(
+                f"  feed    {feed_report['path']} · version {feed_report['version']} · "
+                f"{feed_report['files']} file(s) copied"
+            )
+        if report["applied"]:
+            print(f"  applied release {report['release']:04d} is already recorded")
+        else:
+            print(
+                f"  wanted  {report['wanted']} — the Installer applies it "
+                f"(`camelot env apply {report['env']}`)"
+            )
+        return 0
     if args.project_cmd == "envs":
         from . import pipeline as pipe
 
@@ -1273,6 +1340,45 @@ def cmd_mod(args) -> int:
     return 0
 
 
+def cmd_console(args) -> int:
+    """What is live on one environment, read from the Installer's own state."""
+    from . import console as console_mod
+
+    root = args.root or os.environ.get("CAMELOT_CONSOLE_ROOT")
+    if not root:
+        print(
+            "error: --root is required (the environment folder: client/ + server/)",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        allow_restart = args.allow_restart or str(
+            os.environ.get("CAMELOT_CONSOLE_ALLOW_RESTART") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        return console_mod.run(
+            root,
+            env=args.env or os.environ.get("CAMELOT_CONSOLE_ENV"),
+            project=args.project or os.environ.get("CAMELOT_CONSOLE_PROJECT"),
+            feed=args.feed or os.environ.get("CAMELOT_CONSOLE_FEED"),
+            game_server=args.game_server or os.environ.get("CAMELOT_CONSOLE_GAME_SERVER"),
+            api_url=args.api_url or os.environ.get("CAMELOT_CONSOLE_API_URL"),
+            api_password=args.api_password or os.environ.get("CAMELOT_CONSOLE_API_PASSWORD"),
+            allow_restart=allow_restart,
+            audit=args.audit or os.environ.get("CAMELOT_CONSOLE_AUDIT"),
+            deploy=args.deploy or os.environ.get("CAMELOT_CONSOLE_DEPLOY"),
+            deploy_remote=args.deploy_remote
+            or os.environ.get("CAMELOT_CONSOLE_DEPLOY_REMOTE"),
+            feed_out=args.feed_out or os.environ.get("CAMELOT_CONSOLE_FEED_OUT"),
+            host=args.host,
+            port=args.port,
+            user=args.user or os.environ.get("CAMELOT_CONSOLE_USER"),
+            password=args.password or os.environ.get("CAMELOT_CONSOLE_PASSWORD"),
+        )
+    except console_mod.ConsoleError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+
 def cmd_launcher(args) -> int:
     """The players' launcher: a page on the loopback interface, and the game behind it."""
     from . import launcher as launcher_mod
@@ -1754,6 +1860,50 @@ def main(argv=None) -> int:
     p.add_argument("--no-open", action="store_true", help="do not open a browser")
     p.set_defaults(func=cmd_launcher)
 
+    p = sub.add_parser(
+        "console", help="what is live on a running server (read-only, phase 7a)"
+    )
+    p.add_argument("--root", help="the environment folder (client/ + server/)")
+    p.add_argument("--env", help="the environment name, to read the project's deploy log")
+    p.add_argument("--project", help="the project folder (its deploy/log.jsonl)")
+    p.add_argument("--feed", help="the players' feed folder")
+    p.add_argument(
+        "--game-server",
+        help="host:port of the game (default: the feed's launcher.json)",
+    )
+    p.add_argument(
+        "--api-url", help="OpenDAoC's read API base (for example http://127.0.0.1:5000)"
+    )
+    p.add_argument(
+        "--api-password", help="the server's api_password, for /utils/query_clients"
+    )
+    p.add_argument(
+        "--allow-restart",
+        action="store_true",
+        help="enable the Restart action (shutdown; the supervisor starts it again)",
+    )
+    p.add_argument(
+        "--audit",
+        help="the audit log (default: <root>/server/camelot/console/audit.jsonl)",
+    )
+    p.add_argument(
+        "--deploy",
+        help="the checkout of the deploy branch (enables the Pull action, D §D4)",
+    )
+    p.add_argument(
+        "--deploy-remote",
+        help="the git remote the Pull action fetches from (default: none)",
+    )
+    p.add_argument(
+        "--feed-out",
+        help="the directory the feed service serves; the Pull mirrors the feed into it",
+    )
+    p.add_argument("--host", default="127.0.0.1", help="the interface (default: 127.0.0.1)")
+    p.add_argument("--port", type=int, default=8770, help="the port (default: 8770)")
+    p.add_argument("--user", help="the operator name for Basic auth (default: operator)")
+    p.add_argument("--password", help="the operator password; required beyond loopback")
+    p.set_defaults(func=cmd_console)
+
     p = sub.add_parser("project", help="the project: the whole content of one server")
     pp = p.add_subparsers(dest="project_cmd", required=True)
     np = pp.add_parser("new", help="create a project (and its git scaffolding)")
@@ -1870,6 +2020,32 @@ def main(argv=None) -> int:
         "--scratch", default=None, help="where to stage the tree (default: <out>/.staged)"
     )
     fp2.add_argument("--read", action="store_true", help="only read the feed back")
+    pub = pp.add_parser(
+        "publish", help="commit a release and its feed to the deploy branch (D §D5)"
+    )
+    pub.add_argument("number", nargs="?", type=int, help="the release (default: the newest)")
+    pub.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    pub.add_argument(
+        "--no-build",
+        action="store_true",
+        help="use the feed/ as it stands instead of rebuilding it",
+    )
+    pub.add_argument(
+        "--feed-url",
+        help="the feed's public base URL (default: CAMELOT_FEED_URL, or the feed's own)",
+    )
+    pub.add_argument(
+        "--server",
+        help="the game's host:port (default: CAMELOT_GAME_SERVER, or the feed's own)",
+    )
+    pub.add_argument("--remote", help="push the branch to this remote after committing")
+    pl = pp.add_parser(
+        "pull", help="fetch the deploy branch, verify it, hand it over (D §D4)"
+    )
+    pl.add_argument("--dir", default=".", help="the deploy checkout (default: .)")
+    pl.add_argument("--env", help="the environment to hand over to (default: the only one)")
+    pl.add_argument("--remote", help="fetch and fast-forward from this remote first")
+    pl.add_argument("--feed", help="mirror the pulled feed into this directory")
     p.set_defaults(func=cmd_project)
 
     args = ap.parse_args(argv)

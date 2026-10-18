@@ -1,0 +1,45 @@
+services:
+  console:
+    build:
+      context: ../..
+      dockerfile: deploy/console/Dockerfile
+    # Host networking is what lets the Console reach OpenDAoC's API on
+    # 127.0.0.1:5000 and the game port. On Docker Desktop, run the Console from
+    # the checkout instead, or bind the API wider (it is loopback by default).
+    network_mode: host
+    environment:
+      CAMELOT_CONSOLE_ROOT: /env
+      CAMELOT_CONSOLE_HOST: ${CAMELOT_CONSOLE_HOST:-127.0.0.1}
+      CAMELOT_CONSOLE_PORT: ${CAMELOT_CONSOLE_PORT:-8770}
+      CAMELOT_CONSOLE_ENV: ${CAMELOT_CONSOLE_ENV:-production}
+      CAMELOT_CONSOLE_PASSWORD: ${CAMELOT_CONSOLE_PASSWORD:?set CAMELOT_CONSOLE_PASSWORD}
+      CAMELOT_CONSOLE_GAME_SERVER: ${CAMELOT_GAME_SERVER:-}
+      CAMELOT_CONSOLE_API_URL: ${CAMELOT_CONSOLE_API_URL:-}
+      CAMELOT_CONSOLE_API_PASSWORD: ${CAMELOT_API_PASSWORD:-}
+      # Actions are off until this is 1: the Restart action stops the server,
+      # and a supervisor (systemd, docker restart policy) starts it again.
+      CAMELOT_CONSOLE_ALLOW_RESTART: ${CAMELOT_CONSOLE_ALLOW_RESTART:-0}
+      CAMELOT_CONSOLE_AUDIT: /audit/audit.jsonl
+      # The pull (D §D4): the checkout of the deploy branch, the remote it
+      # fetches, and the directory the feed service serves.
+      CAMELOT_CONSOLE_DEPLOY: /deploy
+      CAMELOT_CONSOLE_DEPLOY_REMOTE: ${CAMELOT_CONSOLE_DEPLOY_REMOTE:-origin}
+      CAMELOT_CONSOLE_FEED_OUT: /feed-out
+      # Optional, when the project's deploy log is mounted below:
+      CAMELOT_CONSOLE_PROJECT: ${CAMELOT_CONSOLE_PROJECT:-}
+    volumes:
+      - ${CAMELOT_SERVER_ENV:?set CAMELOT_SERVER_ENV}:/env:ro
+      # The one place the Console writes inside the environment: the handover
+      # and the wanted marker (`remote.md` §D4). Everything else stays read-only.
+      - ${CAMELOT_SERVER_ENV:?set CAMELOT_SERVER_ENV}/server/camelot:/env/server/camelot
+      # The checkout of the deploy branch: a clone, on the host.
+      - ${CAMELOT_DEPLOY_CHECKOUT:-./deploy-checkout}:/deploy
+      # The directory the feed service serves — the same host path as the feed
+      # container's CAMELOT_FEED_SOURCE; the pull mirrors the feed into it.
+      - ${CAMELOT_FEED_SOURCE:-./feed-out}:/feed-out
+      # The audit is the Console's own record; it is never inside the
+      # environment folder.
+      - ${CAMELOT_CONSOLE_AUDIT_SOURCE:-./audit}:/audit
+      # Add this when the operator has the project on this host (the deploy log):
+      # - ${CAMELOT_CONSOLE_PROJECT_SOURCE:?}:/project:ro
+    restart: unless-stopped

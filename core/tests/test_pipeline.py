@@ -74,7 +74,14 @@ def _environment(tmp_path, client, name="env-local") -> Path:
 
 def _machine(project, **envs) -> None:
     (project.root / pj.MACHINE_FILE).write_text(
-        json.dumps({"environments": {name: str(path) for name, path in envs.items()}}),
+        json.dumps(
+            {
+                "environments": {
+                    name: value if isinstance(value, dict) else str(value)
+                    for name, value in envs.items()
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -418,3 +425,33 @@ def test_an_environment_without_a_client_is_refused(client, tmp_path):
     assert table["refusals"] == [f"there is no client at {env / 'client'}"]
     with pytest.raises(pipe.PipelineError, match="there is no client"):
         pipe.deploy(project.root, 1, env="local")
+
+
+def test_a_server_only_environment_skips_the_client_half(client, tmp_path):
+    """`remote.md` §D3: `"client": false` says the client half belongs to the
+    feed. The plan names it and writes only the server half; verify does not
+    look for a client; nothing else changes."""
+    project = _project(tmp_path, client)
+    _move(_editor(project, client))
+    record = rel.cut(project.root)
+    env = tmp_path / "env-production"
+    (env / "server").mkdir(parents=True)
+    _machine(project, production={"root": str(env), "client": False})
+
+    table = pipe.plan(project.root, 1, env="production")
+    assert table["server_only"] is True
+    assert [item["family"] for item in table["items"]] == ["server"]
+    assert table["refusals"] == []
+    assert any("server-only" in note for note in table["notes"])
+
+    report = pipe.deploy(project.root, 1, env="production")
+    assert report["outcome"] == "ok"
+    assert not (env / "client").exists()
+    assert (
+        env / "server" / "camelot" / "releases" / "0001" / _pack_name(record)
+    ).is_file()
+
+    read_back = pipe.verify(project.root, env="production")
+    assert read_back["server_only"] is True
+    assert read_back["client"]["applicable"] is False
+    assert read_back["ok"] is True

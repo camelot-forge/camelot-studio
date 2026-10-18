@@ -472,6 +472,7 @@ def describe(project: project_mod.Project, env: str) -> dict:
         "env": str(env),
         "root": str(env_root),
         "exists": env_root.is_dir(),
+        "server_only": _mapped(project, env).get("client") is False,
         "database": recorded.get("database") or database_for(project, env),
         "record": recorded,
         "installer": {
