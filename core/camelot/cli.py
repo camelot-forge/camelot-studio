@@ -1740,7 +1740,7 @@ def main(argv=None) -> int:
     p.add_argument("--feed", help="the shard's feed URL (a player types this once)")
     p.add_argument("--client", help="the game client's folder")
     p.add_argument("--account", help="the account to fill in (never a password)")
-    p.add_argument("--server", help="where the game is, when the feed does not say")
+    p.add_argument("--server", help="the game's address, overriding the feed's")
     p.add_argument("--settings", help="this launcher's own settings file")
     p.add_argument("--page", help="the built page (default: web/launcher/dist)")
     p.add_argument("--host", default="127.0.0.1", help="the interface (default: 127.0.0.1)")

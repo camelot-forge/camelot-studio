@@ -126,7 +126,7 @@ def shard_of(base_url: str, *, settings: dict | None = None) -> dict:
         "feed": base_url,
         "version": announced["version"],
         "shard": str(carried.get("shard") or ""),
-        "server": str(carried.get("server") or settings.get("server") or ""),
+        "server": str(settings.get("server") or carried.get("server") or ""),
         "built": carried.get("built"),
     }
 

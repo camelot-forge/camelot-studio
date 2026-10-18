@@ -162,6 +162,19 @@ def test_a_feed_that_does_not_say_where_the_game_is_is_a_problem(tmp_path, clien
         launcher.command(settings, account="forge", password="pw", system="linux")
 
 
+def test_a_local_server_override_is_what_the_page_and_the_command_use(tmp_path, client):  # noqa: F811  (the fixture the import names)
+    """`--server` is for a machine pointing at another address than the feed's: the
+    page must show the address Play will use, not the one it overrides."""
+    settings, _player, _where, _report = _ready(tmp_path, client)
+    settings["server"] = "127.0.0.1:10300"
+
+    found = launcher.state(settings)
+
+    assert found["shard"]["server"] == "127.0.0.1:10300"
+    argv = launcher.command(settings, account="forge", password="pw", system="linux")
+    assert argv[-3] == "127.0.0.1:10300"
+
+
 # --- what it does --------------------------------------------------------------
 
 
