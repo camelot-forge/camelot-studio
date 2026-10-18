@@ -352,7 +352,7 @@ def read_rows_by_key(connect_: Callable[[], Any], table: str, keys) -> dict[str,
         database.close()
 
 
-def apply_patches(connect_: Callable[[], Any], patches, *, deletions=()) -> int:
+def apply_patches(connect_: Callable[[], Any], patches, *, deletions=(), insertions=()) -> int:
     """Write patches to existing rows, in one transaction; returns the count.
 
     Every patch is validated first (known table, known columns, never the
@@ -361,7 +361,10 @@ def apply_patches(connect_: Callable[[], Any], patches, *, deletions=()) -> int:
     together or not at all. *deletions* are rows to remove in the same
     transaction (a release's removal): `{"table": …, "key": …}`, and a row
     that is gone is not an error — a removal that already happened is the
-    state the caller asked for.
+    state the caller asked for. *insertions* are whole rows to put back (a
+    reversal's re-insertion): `{"table": …, "values": {…}}`, every column of
+    the table's own list, the key included, and a row that is **there** is an
+    error — the caller believes it is gone.
     """
     prepared: list[tuple[str, str, dict[str, str]]] = []
     for patch in patches:
@@ -380,7 +383,30 @@ def apply_patches(connect_: Callable[[], Any], patches, *, deletions=()) -> int:
         if not key:
             raise ServerRowsError(f"{table}: a removal needs the row's key")
         doomed.append((table, key))
-    if not prepared and not doomed:
+    restored: list[tuple[str, dict[str, str | None]]] = []
+    for item in insertions:
+        table = str(item.get("table") or "")
+        if table not in KEY_COLUMNS:
+            raise ServerRowsError(
+                f"{table!r} is not a patchable table ({', '.join(sorted(KEY_COLUMNS))})"
+            )
+        given = item.get("values") or {}
+        values = {
+            column: (None if given[column] is None else str(given[column]))
+            for column in COLUMNS[table]
+            if column in given
+        }
+        holes = [column for column in COLUMNS[table] if column not in values]
+        if holes:
+            # A re-insertion is a *whole* row, from the record of a removal. A
+            # hole is not something to guess at: it is a malformed record.
+            raise ServerRowsError(
+                f"{table}: the recorded row does not carry {', '.join(holes)}"
+            )
+        if not values[KEY_COLUMNS[table]]:
+            raise ServerRowsError(f"{table}: a re-inserted row needs its key")
+        restored.append((table, values))
+    if not prepared and not doomed and not restored:
         return 0
 
     database = connect_()
@@ -390,6 +416,15 @@ def apply_patches(connect_: Callable[[], Any], patches, *, deletions=()) -> int:
                 cursor.execute(f"{_select(table)} WHERE {KEY_COLUMNS[table]} = %s", (key,))
                 if cursor.fetchone() is None:
                     raise ServerRowsError(f"{table}: no row with {KEY_COLUMNS[table]} {key!r}")
+        for table, values in restored:
+            key = values[KEY_COLUMNS[table]]
+            with database.cursor() as cursor:
+                cursor.execute(f"{_select(table)} WHERE {KEY_COLUMNS[table]} = %s", (key,))
+                if cursor.fetchone() is not None:
+                    raise ServerRowsError(
+                        f"{table}: a row with {KEY_COLUMNS[table]} {key!r} is there — "
+                        "nothing was removed to put back"
+                    )
         database.begin()
         try:
             with database.cursor() as cursor:
@@ -401,13 +436,20 @@ def apply_patches(connect_: Callable[[], Any], patches, *, deletions=()) -> int:
                     )
                 for table, key in doomed:
                     cursor.execute(f"DELETE FROM `{table}` WHERE {KEY_COLUMNS[table]} = %s", (key,))
+                for table, values in restored:
+                    columns = ", ".join(f"`{column}`" for column in COLUMNS[table])
+                    holes = ", ".join(["%s"] * len(COLUMNS[table]))
+                    cursor.execute(
+                        f"INSERT INTO `{table}` ({columns}) VALUES ({holes})",
+                        tuple(values[column] for column in COLUMNS[table]),
+                    )
             database.commit()
         except Exception:
             database.rollback()
             raise
     finally:
         database.close()
-    return len(prepared) + len(doomed)
+    return len(prepared) + len(doomed) + len(restored)
 
 
 def delete_rows(connect_: Callable[[], Any], table: str, keys) -> int:

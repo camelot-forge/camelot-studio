@@ -164,6 +164,28 @@ log (`--audit`, default `<root>/server/camelot/console/audit.jsonl`). It sends
 restart policy) must start the server again; without one the action is a stop.
 Each attempt — refused or not — writes one audit line, and the page shows them.
 
+### The server, as containers
+
+`deploy/` is the server side: `deploy/compose.yaml` includes three parts —
+`server/` (MariaDB 10.6, OpenDAoC **pinned by digest**, and the `camelot-core`
+job that applies a release), `feed/` (`feedserve`) and `console/`. Each part
+also runs alone, with its own `.env.example` and README. One `.env` drives the
+whole stack, and the same files run on a desk and on a VPS: what changes is the
+public feed URL, the game's address and the secrets.
+
+```sh
+cp deploy/.env.example deploy/.env && $EDITOR deploy/.env
+docker compose up -d db
+deploy/server/camelot.sh provision     # the baseline, then the releases it carries
+docker compose up -d                   # db, core, feed, console
+```
+
+The job runs the same `camelot` CLI the desk runs, and importing it pulls
+neither `pyffi` nor `fastapi`: a server writes rows, and has no client to parse
+and no page to serve. `docs/admin.md` is the operator's runbook — the desk, the
+server, the daily flow from an edit to a player's update, backups, refusals;
+`deploy/README.md` maps the containers.
+
 Set `DAOC_CLIENT` to your client directory to validate against the real
 corpus (`camelot batch` rewrites `DAOC CLIENT/...` manifest paths from it).
 
@@ -190,6 +212,9 @@ your usual tool (Syncthing, NAS, external drive).
 
 ## Documentation
 
+- `docs/admin.md` — **running a shard**: the desk, the server, the daily flow
+  from an edit to a player's update, a new VPS, backups, refusals. Start here
+  if you are the operator, not a contributor.
 - `docs/formats.md` — DAoC client format reference (tables, NIF versions,
   KFA architecture, MPAK, legacy 4.x block layout, remaining cases).
 - `docs/status.md` — project state, limits and evidence boundaries.

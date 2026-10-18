@@ -1,0 +1,123 @@
+# Deploy
+
+The server side of Camelot Forge, as containers. Five services, one entry point
+(`compose.yaml`) and one environment file (`.env`). The same stack runs on a desk
+and on a VPS; what changes is three values, not a file.
+
+```mermaid
+flowchart LR
+    subgraph server["the machine"]
+        DB["db<br/>MariaDB 10.6"]
+        CORE["core<br/>OpenDAoC, pinned"]
+        JOB["camelot-core<br/>the Installer's step"]
+        FEED["feed<br/>feedserve"]
+        CONSOLE["console<br/>the running server's face"]
+    end
+    GIT["git<br/>camelot-deploy"] --> CONSOLE
+    CONSOLE -->|"pull: handover + wanted.json"| JOB
+    JOB -->|"rows + state.json"| DB
+    CORE --> DB
+    CONSOLE -->|"mirror"| FEED
+    CONSOLE -->|"/stats, /utils/shutdown"| CORE
+    FEED --> PLAYERS["players' launchers"]
+    CORE --> PLAYERS
+```
+
+| Service | Its own README | What it writes |
+|---|---|---|
+| `db` | — | its own volume, on loopback only |
+| `core` | — | the database, and `/app/logs` |
+| `camelot-core` | `server/README.md` | `<env>/server/camelot/` (state, releases, applied) |
+| `feed` | `feed/README.md` | nothing: it serves a directory read-only |
+| `console` | `console/README.md` | `<env>/server/camelot/`, the audit, the feed mirror |
+
+The Console is the only one of ours that faces the network; the database is the
+only one that does not face the machine's own network. `notes/remote.md`
+§D10 is the rule, and `docs/admin.md` is the runbook around it.
+
+## Local
+
+A desk that wants the whole thing in containers, including its own test server:
+
+```sh
+cp .env.example .env
+$EDITOR .env
+```
+
+For a local run the four paths point at the desk's own folders, and the two
+public values are loopback:
+
+```dotenv
+CAMELOT_SERVER_ENV=/home/you/daoc/forge-env-local
+CAMELOT_DEPLOY_CHECKOUT=/home/you/daoc/forge-project
+CAMELOT_BASELINE_SOURCE=/home/you/daoc/OpenDAoC-Database/opendaoc-db-core
+CAMELOT_FEED_SOURCE=/home/you/daoc/forge-project/feed
+CAMELOT_FEED_URL=http://127.0.0.1:8080/
+CAMELOT_GAME_SERVER=127.0.0.1:10300
+```
+
+Then the first run, in this order:
+
+```sh
+docker compose up -d db
+server/camelot.sh provision        # the baseline, then every handed-over release
+docker compose up -d               # db, core, feed, console
+server/camelot.sh api '<password>'  # atlas_api + api_password
+server/camelot.sh restart          # the API host starts at boot
+curl http://127.0.0.1:8080/healthz
+```
+
+The Console is on `http://127.0.0.1:8770/`, authenticated as `operator`.
+
+## Online
+
+The same commands with the real values — a public feed URL behind TLS, the game's
+public address, and real secrets. Nothing else in the stack changes:
+
+```dotenv
+CAMELOT_FEED_URL=https://patch.example/
+CAMELOT_GAME_SERVER=play.example:10300
+CAMELOT_CONSOLE_PASSWORD=<a real secret>
+CAMELOT_API_PASSWORD=<the server's api_password>
+```
+
+`CAMELOT_FEED_URL` and `CAMELOT_GAME_SERVER` are what the feed service writes into
+`patchlist-new.txt` and `launcher.json` on every request: the feed published from
+the desk keeps its local URL and works online unchanged (`F §D3`).
+
+Ports to expose: the game's TCP and UDP (`10300`, `10400`) and the feed behind a
+TLS reverse proxy. The Console and the database stay on loopback.
+
+## An update
+
+```text
+desk     project release N → project feed → project publish N --remote origin
+console  Pull          (fetch, verify sha256, hand over, mark wanted, mirror the feed)
+server   camelot.sh apply   (the Installer's step: rows + state.json)
+console  Restart, or /reload in game when the release only needs a reload
+players  their launchers read the feed and update themselves
+```
+
+The pull never applies anything, and the apply is never the Console's: the
+Console asks (`wanted.json`), the Installer writes (`S §D1`).
+
+A bad apply is repaired on the server with `server/camelot.sh reverse`: the rows
+the release changed go back, and the release leaves the folder and the state.
+It is a repair, not a rollback — the feed never goes back, so anything the
+players have already seen is undone by a **new** release (`S §D17`).
+
+## When something is off
+
+```sh
+docker compose ps                       # what is up, and what is unhealthy
+docker compose logs -f core             # the game server's own output
+docker compose logs -f console          # the Console's
+curl -s http://127.0.0.1:8080/healthz   # the feed's version and where the game is
+server/camelot.sh status                # what the environment holds
+server/camelot.sh verify                # the database and the folder, read back
+server/camelot.sh reverse               # put back the newest applied release (a repair)
+```
+
+The Console's page says what it could not read rather than guessing: a game port
+that does not answer, an API that is off, a reload the server has no record of.
+`docs/admin.md` §10 lists the refusals and what each one means.

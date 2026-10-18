@@ -1,0 +1,18 @@
+# One entry point for a whole server: the database, OpenDAoC, the Installer's
+# job, the feed service and the Console (`notes/remote.md` §D5, §D10).
+#
+#   cp .env.example .env && $EDITOR .env
+#   docker compose up -d db
+#   deploy/server/camelot.sh provision
+#   docker compose up -d
+#
+# Each part also runs alone — `server/`, `feed/` and `console/` each carry their
+# own compose file, `.env.example` and README. `include` gives every one of them
+# its own directory to resolve paths against, and this file's `.env` overrides
+# theirs; `README.md` is the map.
+name: camelot
+
+include:
+  - server/compose.yaml
+  - feed/compose.yaml
+  - console/compose.yaml

@@ -36,12 +36,20 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import journal as journal_mod
 from . import project as project_mod
 from .serve.config import ServeConfig, default_cache_dir
-from .serve.editor import Editor
-from .serve.world import World
+
+# `serve.world` and `serve.editor` are the daemon's, and they drag `fastapi` with
+# them. Cutting a release builds that daemon (`_engine`), but *reading* one — what a
+# server does with `env apply` — must not need it (`deploy/server/Dockerfile`);
+# `serve.config` is a dataclass and stays, because the tests redirect the cache
+# through `release.default_cache_dir`.
+if TYPE_CHECKING:  # the annotations are strings, so this costs a reader nothing
+    from .serve.editor import Editor
+    from .serve.world import World
 
 FORMAT = "camelot.release/1"
 DIR = "releases"
@@ -174,6 +182,9 @@ def _families(lines: list[journal_mod.Line]) -> dict[str, int]:
 def _engine(project: project_mod.Project, client=None) -> tuple[World, Editor]:
     """A `World` and an `Editor` over one project — what the daemon builds
     with, without a daemon. The pack reads the client, so a cut needs one."""
+    from .serve.editor import Editor
+    from .serve.world import World
+
     where = project_mod.client_root(project, client)
     if where is None:
         raise ReleaseError(

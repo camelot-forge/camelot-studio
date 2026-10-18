@@ -11,8 +11,14 @@ core/tests/output/
 *.bin
 work/
 
-# Deployment's local values (the example is committed)
+# Deployment's local values (the examples are committed)
+deploy/.env
 deploy/feed/.env
+deploy/console/.env
+deploy/server/.env
+
+# Deployment's scratch layout (a standalone stack's volumes and logs)
+deploy/*/data/
 
 # The packaged player launcher's outputs
 packaging/build/

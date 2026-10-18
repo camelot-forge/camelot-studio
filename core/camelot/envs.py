@@ -54,6 +54,7 @@ __all__ = [
     "provision",
     "record_path",
     "reload",
+    "reverse",
     "verify",
 ]
 
@@ -637,6 +638,70 @@ def apply(project: project_mod.Project, env: str, *, release=None, connect=None)
         "skipped": sum(entry["skipped"] for entry in done),
         "unchanged": all(entry["unchanged"] for entry in done),
         "pending": numbers,
+    }
+
+
+def reverse(project: project_mod.Project, env: str, *, release=None, connect=None) -> dict:
+    """Put back what one release replaced (`server-install.md` §D17).
+
+    The Installer's other direction, run from here for an environment this
+    machine reaches. The newest applied release is the default; the ask
+    (`wanted.json`) loses it, so the Console stops waiting for it.
+
+    This is a **repair**, not a rollback: the feed does not go back, and the
+    players' consequences stay (§D17). A step back for the players is a new
+    release.
+    """
+    from . import remote as remote_mod
+
+    env_root = folder(project, env)
+    state = installer.read_state(env_root, project.name)
+    applied = sorted(int(name) for name in (state.get("releases") or {}))
+    if not applied:
+        raise EnvError(
+            f"{env_root}: nothing is applied to {env} — there is nothing to reverse"
+        )
+    number = int(release) if release is not None else applied[-1]
+    connection = connection_for(project, env)
+    write = connect or serverrows.connect
+    report = installer.reverse(
+        env_root, connect=lambda: write(connection), project=project.name, number=number
+    )
+    fact = project_mod.record_deploy(
+        project.root,
+        {
+            "kind": "reverse",
+            "env": str(env),
+            "release": number,
+            "outcome": "ok",
+            "rows": {
+                "restored": int(report["restored"]),
+                "reinserted": int(report["reinserted"]),
+                "skipped": int(report["skipped"]),
+            },
+            "needs": [str(name) for name in report["needs"]],
+        },
+    )
+    asked = [int(name) for name in (remote_mod.read_wanted(env_root).get("releases") or ())]
+    withdrawn = None
+    if number in asked:
+        withdrawn = str(
+            remote_mod.write_wanted(
+                env_root, [name for name in asked if name != number], by="reverse"
+            )
+        )
+    return {
+        "env": str(env),
+        "folder": str(env_root),
+        "release": number,
+        "restored": int(report["restored"]),
+        "reinserted": int(report["reinserted"]),
+        "skipped": int(report["skipped"]),
+        "needs": [str(name) for name in report["needs"]],
+        "withdrew": bool(report["withdrew"]),
+        "wanted": withdrawn,
+        "evidence": str(installer.reversed_path(env_root, number)),
+        "fact": fact,
     }
 
 

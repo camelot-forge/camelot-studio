@@ -44,8 +44,11 @@ import sys
 import tempfile
 import time
 
-from .kfa import kfa_summary
-from .nifutil import block_types, load, store
+# The client-format readers (`kfa`, `nifutil` and their `pyffi` backbone) are
+# imported by the commands that read a client, never here: a server runs this
+# module for `env apply` and must not need a NIF parser to write rows
+# (`deploy/server/Dockerfile`, S §D10).
+# `test_the_server_needs_no_client_reader_and_no_daemon` holds that line.
 
 SHAPE_TYPES = ("NiTriShape", "NiTriStrips")
 
@@ -61,7 +64,7 @@ def resolve_path(p: str) -> str:
 
 
 def cmd_info(args) -> int:
-    from .nifutil import version_bits
+    from .nifutil import block_types, load, version_bits
 
     data = load(args.path)
     ver, nb = version_bits(data)
@@ -89,6 +92,8 @@ def cmd_info(args) -> int:
 
 
 def cmd_kfa(args) -> int:
+    from .kfa import kfa_summary
+
     s = kfa_summary(args.path)
     print(f"file: {s['path']}")
     print(f"version: {s['version']} — blocks: {s['blocks']} — roots: {s['roots']}")
@@ -152,6 +157,7 @@ def cmd_roundtrip(args) -> int:
     from collections import Counter
 
     from .legacy import is_legacy
+    from .nifutil import block_types, load, store
 
     t0 = time.time()
     data = load(args.path)
@@ -183,6 +189,7 @@ def cmd_batch(args) -> int:
     from collections import Counter
 
     from .legacy import is_legacy
+    from .nifutil import block_types, load, store
 
     paths = []
     with open(args.manifest, "r", encoding="utf-8") as fh:
@@ -448,6 +455,25 @@ def cmd_env(args) -> int:
             print_applied(report["applied"])
             print(f"  evidence   {installer.applied_path(report['folder'], report['release'])}")
             print(f"  state      {installer.state_path(report['folder'])}")
+            return 0
+        if args.env_cmd == "reverse":
+            report = envs.reverse(project, args.env, release=args.release)
+            print(f"reversed release {report['release']:04d} on {args.env}")
+            print(
+                f"  rows       {report['restored']} restored · "
+                f"{report['reinserted']} re-inserted · {report['skipped']} already what it was"
+            )
+            if report["needs"]:
+                print(f"  needs      {' '.join('/reload ' + name for name in report['needs'])}")
+            if report["withdrew"]:
+                print("  withdrawn  the release left the environment's folder")
+            if report["wanted"]:
+                print(f"  ask        {report['wanted']} no longer names it")
+            print(f"  evidence   {report['evidence']}")
+            print(
+                "  note       a repair, not a rollback: the players' clients keep what "
+                "they downloaded — a step back for them is a new release (§D17)"
+            )
             return 0
         if args.env_cmd == "reload":
             fact = envs.reload(project, args.env)
@@ -1843,6 +1869,18 @@ def main(argv=None) -> int:
         help="the release to apply (default: the newest one it holds that is not applied)",
     )
     rp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    rv_ = envp.add_parser(
+        "reverse",
+        help="put back what one release replaced — a repair, not a rollback (S §D17)",
+    )
+    rv_.add_argument("env", nargs="?", default="local")
+    rv_.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    rv_.add_argument(
+        "--release",
+        type=int,
+        default=None,
+        help="the release to reverse (default: the newest one applied)",
+    )
     p.set_defaults(func=cmd_env)
 
     p = sub.add_parser("launcher", help="the players' launcher: a page, and the game")

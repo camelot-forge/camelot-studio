@@ -1,5 +1,8 @@
 """Unit tests for the CLI helpers (path/env resolution)."""
 
+import subprocess
+import sys
+
 from camelot.cli import resolve_path
 
 
@@ -65,3 +68,28 @@ def test_cli_mpak_repack_recomputes_the_header(tmp_path):
         assert after.read("b.csv") == b"B"
     finally:
         after.close()
+
+
+def test_the_server_needs_no_client_reader_and_no_daemon():
+    """`deploy/server/Dockerfile` runs this module for `env apply` (S §D10), so the
+    server's verbs must import neither the client's format code (`pyffi` and the
+    readers built on it) nor the daemon's (`fastapi`, and the `serve.*` modules
+    behind it): a server writes rows — it has no client to parse and no page to
+    serve.
+
+    In a subprocess, because what a module imports at runtime is the only honest
+    answer, and because every other test in this process may have read a client or
+    built a daemon already.
+    """
+    code = (
+        "import sys; import camelot.cli, camelot.envs;"
+        "heavy = ('pyffi', 'fastapi', 'uvicorn', 'watchfiles');"
+        "print(','.join(sorted(m for m in sys.modules if m.split('.')[0] in heavy)))"
+    )
+    found = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert found.stdout.strip() == "", (
+        f"the server's verbs now import {found.stdout.strip()} — the job container "
+        "would need a client reader or the daemon to apply a release"
+    )

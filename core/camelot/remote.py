@@ -200,6 +200,10 @@ def pull(
         _git(deploy, "reset", "--hard", "FETCH_HEAD")
         fetched = True
 
+    # Read before anything is written: a checkout without git cannot name its head,
+    # and a pull that cannot finish must fail before it hands anything over.
+    head = _git(deploy, "rev-parse", "HEAD").strip()
+
     marker_path = deploy / publish_mod.MARKER
     if not marker_path.is_file():
         raise PullError(
@@ -238,7 +242,7 @@ def pull(
         "root": str(env_root),
         "release": number,
         "branch": branch,
-        "head": _git(deploy, "rev-parse", "HEAD").strip(),
+        "head": head,
         "fetched": fetched,
         "wrote": written,
         "unchanged": unchanged,

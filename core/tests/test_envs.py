@@ -18,25 +18,51 @@ from test_release import served_client  # noqa: F401  (what `client` wraps)
 from test_serve_editor import editing  # noqa: F401  (the fixture `served_client` asks for)
 from test_zones import world  # noqa: F401  (the fixture `editing` asks for)
 
-from camelot import envs, installer
+from camelot import envs, installer, remote
 from camelot import pipeline as pipe
 from camelot import project as pj
 from camelot import release as rel
 from camelot.serve.config import ServeConfig
 from camelot.serve.editor import Editor
 from camelot.serve.world import World
+from camelot.serverrows import COLUMNS, KEY_COLUMNS
+
+
+def _table_of(sql: str) -> str:
+    """Which table a statement names: `SELECT … FROM door WHERE …` carries no
+    backticks, the writes do (`serverrows._select`)."""
+    if "`" in sql:
+        return sql.split("`")[1]
+    return sql.split(" FROM ")[1].split(" ")[0].strip()
 
 
 class FakeServer:
     """One MariaDB, as far as these verbs can tell: which databases exist, one
-    database's tables, one row to read, and every statement that ran."""
+    database's tables, one row to read, and every statement that ran.
+
+    Two ways to describe the rows: `row` is the one row *every* SELECT answers,
+    which is all the provisioning tests need; `rows` is keyed per table and key
+    and is **written through** (UPDATE, DELETE, INSERT), so a test can walk a
+    release and then its reversal and read the table back.
+    """
 
     def __init__(
-        self, *, databases=(), tables=("ability", "door", "mob", "path", "worldobject"), row=None
+        self,
+        *,
+        databases=(),
+        tables=("ability", "door", "mob", "path", "worldobject"),
+        row=None,
+        rows=None,
     ):
         self.databases = list(databases)
         self.tables = list(tables)
         self.row = row
+        #: Keyed mode is a *choice*, not "the dict happens to hold something": a
+        #: reversal empties the table before it puts a row back into it.
+        self.keyed = rows is not None
+        self.rows: dict[tuple[str, str], dict] = {
+            (table, str(key)): dict(values) for (table, key), values in (rows or {}).items()
+        }
         self.statements: list[str] = []
         self.transactions: list[str] = []
 
@@ -45,6 +71,41 @@ class FakeServer:
         # wants no argument at all is what `serverrows.apply_patches` asks for
         found = connection if isinstance(connection, dict) else kwargs
         return _Handle(self, found.get("database"))
+
+    # --- the keyed table, when a test gave one -------------------------------
+
+    def select(self, sql: str, params) -> list[dict]:
+        if not self.keyed:
+            return [self.row] if self.row else []
+        found = self.rows.get((_table_of(sql), str(params[0]) if params else ""))
+        return [dict(found)] if found is not None else []
+
+    def update(self, sql: str, params) -> None:
+        """`UPDATE `t` SET `a` = %s, `b` = %s WHERE `k` = %s`."""
+        if not self.keyed:
+            return
+        names = [
+            part.split("=")[0].strip().strip("`")
+            for part in sql.split(" SET ")[1].split(" WHERE ")[0].split(", ")
+        ]
+        row = self.rows.get((_table_of(sql), str(params[-1])))
+        if row is None:
+            return
+        for name, value in zip(names, params[:-1]):
+            row[name] = value
+
+    def delete(self, sql: str, params) -> None:
+        if not self.keyed:
+            return
+        self.rows.pop((_table_of(sql), str(params[0])), None)
+
+    def insert(self, sql: str, params) -> None:
+        if not self.keyed:
+            return
+        table = _table_of(sql)
+        names = [name.strip().strip("`") for name in sql.split("(")[1].split(")")[0].split(",")]
+        values = dict(zip(names, params))
+        self.rows[(table, str(values[KEY_COLUMNS[table]]))] = values
 
 
 class _Handle:
@@ -98,9 +159,16 @@ class _Cursor:
         elif lowered.startswith("create database"):
             self.handle.server.databases.append(text.split("`")[1])
         elif lowered.startswith("select "):
-            self._rows = [self.handle.server.row] if self.handle.server.row else []
+            self._rows = self.handle.server.select(text, params)
         elif lowered.startswith("update"):
             self._rows = []
+            self.handle.server.update(text, params)
+        elif lowered.startswith("delete from"):
+            self._rows = []
+            self.handle.server.delete(text, params)
+        elif lowered.startswith("insert into"):
+            self._rows = []
+            self.handle.server.insert(text, params)
         else:
             self._rows = []
 
@@ -156,7 +224,7 @@ def _db_config(tmp_path) -> Path:
     return path
 
 
-def _ready(tmp_path, client, *, database="avalon_local", row=None, extra=None, server=None):
+def _ready(tmp_path, client, *, database="avalon_local", row=None, rows=None, extra=None, server=None):
     """A project with one environment whose server side this machine names."""
     project = _project(tmp_path, client)
     env_root = _environment(tmp_path, client, name="env-local")
@@ -177,7 +245,7 @@ def _ready(tmp_path, client, *, database="avalon_local", row=None, extra=None, s
     (project.root / pj.MACHINE_FILE).write_text(
         json.dumps(document, indent=1) + "\n", encoding="utf-8"
     )
-    return project, env_root, baseline, server or FakeServer(row=row)
+    return project, env_root, baseline, server or FakeServer(row=row, rows=rows)
 
 
 def test_provision_refuses_without_the_word_that_says_drop_it(tmp_path, client):
@@ -662,3 +730,193 @@ def test_the_id_space_check_names_the_row_that_holds_the_id(tmp_path):
         "id 1234 (zone 0, 2026-10-17T09-00-00-michael.jsonl:1) is already held by mob Patrol_Boar"
     ]
     assert installer.id_collisions(allocated, {"mob": {9999: "somebody_else"}}) == []
+
+
+# --- the other direction: the reversal (§D17) ----------------------------------
+
+
+def _door_row(**values) -> dict:
+    """A whole `door` row, the way `SELECT *` answers one: a removal's record is
+    what a re-insertion sends back, so it needs every column of the table's own
+    list."""
+    row = {column: "0" for column in COLUMNS["door"]}
+    row.update({"Door_ID": "d1", "X": "32768", "Y": "32768"})
+    row.update(values)
+    return row
+
+
+def _applied(tmp_path, client, *, rows, patch, number=7, needs=None):
+    """One release applied to a keyed fake table — ready to be reversed."""
+    server = FakeServer(rows=rows)
+    project, env_root, _baseline_dir, _ = _ready(tmp_path, client, server=server)
+    _handed(env_root, number, rows={"0": patch})
+    installer.apply(
+        env_root,
+        installer.releases_folder(env_root, number),
+        connect=server.connect,
+        project=project.name,
+        number=number,
+        needs=needs or [],
+    )
+    return project, env_root, server
+
+
+def test_a_reversal_puts_back_what_the_release_wrote(tmp_path, client):
+    """§D17: the recorded originals go back — the repair an operator reaches for
+    after a bad apply."""
+    project, env_root, server = _applied(
+        tmp_path,
+        client,
+        rows={("door", "d1"): {"Door_ID": "d1", "X": "32768", "Y": "32768"}},
+        patch=[{"table": "door", "key": "d1", "values": {"X": "30000"}}],
+        needs=["doors"],
+    )
+    assert server.rows[("door", "d1")]["X"] == "30000"
+
+    report = installer.reverse(env_root, connect=server.connect, project=project.name, number=7)
+
+    assert report["restored"] == 1 and report["reinserted"] == 0
+    assert server.rows[("door", "d1")]["X"] == "32768"
+    # the ritual the release named is the ritual the reversal needs
+    assert report["needs"] == ["doors"]
+    assert installer.read_reversed(env_root, 7)["rows"][0]["action"] == "restore"
+
+
+def test_a_reversal_puts_a_removed_row_back_whole(tmp_path, client):
+    """A removal kept every column, so putting it back is inserting it."""
+    project, env_root, server = _applied(
+        tmp_path,
+        client,
+        rows={("door", "d1"): _door_row(Heading="1024")},
+        patch=[{"table": "door", "key": "d1", "values": {}, "deleted": True}],
+    )
+    assert ("door", "d1") not in server.rows
+
+    report = installer.reverse(env_root, connect=server.connect, project=project.name, number=7)
+
+    assert report["reinserted"] == 1 and report["restored"] == 0
+    assert server.rows[("door", "d1")]["X"] == "32768"
+    assert server.rows[("door", "d1")]["Heading"] == "1024"
+    assert installer.read_reversed(env_root, 7)["rows"][0]["why"] == "the release removed it"
+
+
+def test_a_reversal_withdraws_the_release_from_the_state_and_the_folder(tmp_path, client):
+    """The folder is the ask: withdrawing it is what keeps the next boot from
+    applying the release again. A pull puts it back, which is how it is undone."""
+    project, env_root, server = _applied(
+        tmp_path,
+        client,
+        rows={("door", "d1"): {"Door_ID": "d1", "X": "32768", "Y": "32768"}},
+        patch=[{"table": "door", "key": "d1", "values": {"X": "30000"}}],
+    )
+
+    report = installer.reverse(env_root, connect=server.connect, project=project.name, number=7)
+
+    assert report["withdrew"] is True
+    assert installer.read_state(env_root, project.name)["releases"] == {}
+    assert not installer.releases_folder(env_root, 7).exists()
+    assert installer.handed_over(env_root) == []
+    assert installer.reversed_releases(env_root) == [7]
+
+
+def test_a_reversal_is_refused_while_a_later_release_is_applied(tmp_path, client):
+    """Reversing N under N+1 would write over values N+1 set: the newest is named,
+    and nothing is touched."""
+    server = FakeServer(rows={("door", "d1"): {"Door_ID": "d1", "X": "32768", "Y": "32768"}})
+    project, env_root, _baseline_dir, _ = _ready(tmp_path, client, server=server)
+    for number, value in ((6, "30000"), (7, "31000")):
+        _handed(env_root, number, rows={"0": [{"table": "door", "key": "d1", "values": {"X": value}}]})
+        installer.apply(
+            env_root,
+            installer.releases_folder(env_root, number),
+            connect=server.connect,
+            project=project.name,
+            number=number,
+        )
+    before = dict(server.rows[("door", "d1")])
+
+    with pytest.raises(installer.InstallerError, match="0007 is applied"):
+        installer.reverse(env_root, connect=server.connect, project=project.name, number=6)
+
+    assert server.rows[("door", "d1")] == before
+    assert list(installer.read_state(env_root, project.name)["releases"]) == ["0006", "0007"]
+
+
+def test_reversing_a_release_that_is_not_applied_is_refused(tmp_path, client):
+    project, env_root, _baseline_dir, server = _ready(
+        tmp_path, client, rows={("door", "d1"): {"Door_ID": "d1", "X": "1"}}
+    )
+
+    with pytest.raises(installer.InstallerError, match="nothing to reverse"):
+        installer.reverse(env_root, connect=server.connect, project=project.name, number=7)
+
+
+def test_a_reversal_updates_the_ask_and_leaves_one_log_line(tmp_path, client):
+    """`envs.reverse` is the whole verb: the rows, the fact in the deploy log, and
+    `wanted.json` loses the release so the Console stops waiting for it."""
+    project, env_root, server = _applied(
+        tmp_path,
+        client,
+        rows={("door", "d1"): {"Door_ID": "d1", "X": "32768", "Y": "32768"}},
+        patch=[{"table": "door", "key": "d1", "values": {"X": "30000"}}],
+    )
+    remote.write_wanted(env_root, [7], by="pull")
+
+    report = envs.reverse(project, "local", connect=server.connect)
+
+    assert report["release"] == 7 and report["restored"] == 1
+    assert report["wanted"] is not None
+    assert remote.read_wanted(env_root)["releases"] == []
+    assert remote.read_wanted(env_root)["by"] == "reverse"
+    facts = [line for line in pj.deploy_log(project.root) if line["kind"] == "reverse"]
+    assert facts == [
+        {
+            "kind": "reverse",
+            "env": "local",
+            "release": 7,
+            "outcome": "ok",
+            "rows": {"restored": 1, "reinserted": 0, "skipped": 0},
+            "needs": [],
+            "at": facts[0]["at"],
+        }
+    ]
+
+
+def test_reversing_an_environment_that_applied_nothing_is_refused(tmp_path, client):
+    project, _env_root, _baseline_dir, server = _ready(
+        tmp_path, client, rows={("door", "d1"): {"Door_ID": "d1", "X": "1"}}
+    )
+
+    with pytest.raises(envs.EnvError, match="nothing is applied"):
+        envs.reverse(project, "local", connect=server.connect)
+
+    assert pj.deploy_log(project.root) == []
+
+
+def test_a_removals_record_carries_a_timestamp_as_text(tmp_path, client):
+    """The record is JSON, and the driver hands back `datetime` for the server's own
+    timestamp columns: a removal's original is the whole row, so it is the path that
+    meets them. Found against real MariaDB (2026-10-18) — the first release that
+    removed a row crashed the apply on
+    `Object of type datetime is not JSON serializable`."""
+    # Naive on purpose: MySQL's DATETIME has no zone, and pymysql hands back a
+    # naive `datetime` for it. That is the value the record has to survive.
+    from datetime import datetime
+
+    stamp = datetime(2026, 10, 18, 16, 15, 53)  # noqa: DTZ001
+    project, env_root, server = _applied(
+        tmp_path,
+        client,
+        rows={("door", "d1"): _door_row(LastTimeRowUpdated=stamp)},
+        patch=[{"table": "door", "key": "d1", "values": {}, "deleted": True}],
+    )
+    recorded = installer.read_state(env_root, project.name)["releases"]["0007"]["originals"]
+
+    report = installer.reverse(env_root, connect=server.connect, project=project.name, number=7)
+
+    assert recorded["door"]["d1"]["LastTimeRowUpdated"] == "2026-10-18 16:15:53"
+    assert report["reinserted"] == 1
+    # What goes back is the table's own column list — the server's own bookkeeping
+    # column keeps the schema's default.
+    assert server.rows[("door", "d1")]["Door_ID"] == "d1"
+    assert server.rows[("door", "d1")]["X"] == "32768"

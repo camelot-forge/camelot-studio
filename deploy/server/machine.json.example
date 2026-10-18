@@ -1,0 +1,11 @@
+{
+  "author": "the server",
+  "environments": {
+    "production": {
+      "root": "/env",
+      "client": false,
+      "database": "forge_project_production",
+      "baseline": "/baseline"
+    }
+  }
+}

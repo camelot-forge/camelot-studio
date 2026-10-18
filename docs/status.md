@@ -23,9 +23,19 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot server export --out F [--config C\|--dsn D]` | export the server's world rows (`mob`/`worldobject`/`door`/`path`) to a snapshot the viewer reads; needs `pymysql` (extra `mysql`) |
 | `camelot server tables` | the server tables this project owns — the map the Installer validates a release against |
 | `camelot project new\|open\|info\|verify\|import\|populate\|release\|releases\|deploy\|promote\|publish\|envs` | the project: one server's whole content in one folder (release, dry run, deploy to an environment); `publish` commits a release's payloads and its feed to the `camelot-deploy` branch — the transport a server this machine does not reach pulls (D §D2/§D5) |
-| `camelot env provision\|status\|verify\|apply\|reload [ENV]` | an environment's server half: its own database built from OpenDAoC's baseline, what it holds, the Installer's step, the reload ritual, the read-back; an environment declared `"client": false` in `machine.json` is **server-only** — the client half belongs to the feed (D §D3) |
+| `camelot env provision\|status\|verify\|apply\|reverse\|reload [ENV]` | an environment's server half: its own database built from OpenDAoC's baseline, what it holds, the Installer's step, the read-back; an environment declared `"client": false` in `machine.json` is **server-only** — the client half belongs to the feed (D §D3); `reverse` puts back what one release replaced, in one transaction, and withdraws it from the folder and the ask — a **repair**, not a rollback (S §D17) |
 | `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--db-write] [--edits D] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only; `--edits` turns on the **world editor** (6.3: select, move/rotate/scale with snap, catalog add, remove, the undo journal, `build`/`apply`/`revert`/`restore`); `--db-write` lets it also patch the server's **existing** world rows (B2: a keep's own doors move with the keep) |
 | `camelot console --root DIR [--env NAME] [--project DIR] [--feed DIR] [--game-server H:P] [--api-url U] [--api-password P] [--allow-restart] [--deploy DIR] [--deploy-remote NAME] [--feed-out DIR] [--audit F] [--host H] [--port N]` | the running server's Console (P7): the applied release and rows, the reload recorded in the project's log, the feed's version, the game port and the read API; `--allow-restart` enables the one server action (shutdown + supervisor); `--deploy` enables **Pull** — fetch the `camelot-deploy` branch, verify the release's hashes, hand the server half over, write the wanted marker, mirror the feed (D §D4); one audit line per attempt; a password is required beyond loopback |
+
+The server side also ships as containers: `deploy/compose.yaml` is one entry
+point that `include`s the three parts, and each part runs alone — `server/`
+(MariaDB 10.6, OpenDAoC **pinned by digest**, and the `camelot-core` job that is
+the Installer's step), `feed/` (`feedserve`), `console/`. The job runs the same
+`camelot` CLI the desk runs, so importing `camelot.cli` pulls neither `pyffi`
+nor `fastapi` (a server writes rows: it has no client to parse and no page to
+serve — `test_the_server_needs_no_client_reader_and_no_daemon`).
+`deploy/README.md` maps the containers; `docs/admin.md` is the operator's
+runbook.
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
 client NIFs parsed (the two remaining are 10.1.0.0 housing files failing
@@ -896,6 +906,13 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 .venv/bin/camelot env apply local --dir camelot-hills
 .venv/bin/camelot env reload local --dir camelot-hills
 .venv/bin/camelot env verify local --dir camelot-hills
+# A bad apply is repaired on the server, and it is a repair, not a rollback: the
+# originals the release recorded go back in one transaction (a column to the
+# value it had, a removed row re-inserted whole), the release leaves the folder
+# and the state — a pull is what puts it back — and `wanted.json` loses it. The
+# feed does not go back: a step back for the players is a new release (S §D17).
+.venv/bin/camelot env reverse local --dir camelot-hills
+.venv/bin/camelot env reverse local --release 6 --dir camelot-hills   # or name one
 .venv/bin/camelot server tables                      # the tables this project owns
 # Home is the front door (P2 of `notes/`): the daemon serves it at /home.
 # The browser lands there when the daemon was started without a project, and on
@@ -924,3 +941,16 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 # written rows and the journal back together; `client uninstall MOD` does the
 # client's half alone.
 ```
+# The server, as containers (`deploy/`): the database, OpenDAoC (pinned by
+# digest) and the `camelot-core` job — the Installer's step — plus the feed
+# service and the Console. One `.env` for the whole stack; the three values that
+# differ between a desk and a VPS are the public feed URL, the game's address
+# and the secrets. `docs/admin.md` is the runbook.
+cp deploy/.env.example deploy/.env && $EDITOR deploy/.env
+docker compose up -d db
+deploy/server/camelot.sh provision     # the baseline, then the releases the
+                                       # checkout already carries
+docker compose up -d                   # db, core, feed, console
+deploy/server/camelot.sh api '<the api password>'   # atlas_api + api_password
+deploy/server/camelot.sh restart       # the API host starts at boot only
+docker compose logs -f core            # the game server's own output

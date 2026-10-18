@@ -32,18 +32,22 @@ from .targets.opendaoc import OWNED_TABLES, owned  # noqa: F401  (the map, re-ex
 
 STATE_FORMAT = "camelot.installer.state/1"
 APPLIED_FORMAT = "camelot.installer.applied/1"
+REVERSED_FORMAT = "camelot.installer.reversed/1"
 
 SERVER = "server"
 INSTALLER = "camelot"
 STATE = "state.json"
 RELEASES = "releases"
 APPLIED = "applied"
+REVERSED = "reversed"
 
 __all__ = [
     "APPLIED",
     "APPLIED_FORMAT",
     "INSTALLER",
     "RELEASES",
+    "REVERSED",
+    "REVERSED_FORMAT",
     "SERVER",
     "STATE",
     "STATE_FORMAT",
@@ -57,13 +61,18 @@ __all__ = [
     "id_collisions",
     "owned",
     "read_applied",
+    "read_reversed",
     "read_state",
     "refused_tables",
     "released",
     "releases_folder",
     "reset",
+    "reverse",
+    "reversed_path",
+    "reversed_releases",
     "state_path",
     "write_applied",
+    "write_reversed",
     "written_state",
 ]
 
@@ -88,6 +97,11 @@ def releases_folder(env_root, number=None) -> Path:
 
 def applied_path(env_root, number) -> Path:
     return folder(env_root) / APPLIED / f"{int(number):04d}" / "applied.json"
+
+
+def reversed_path(env_root, number) -> Path:
+    """Where a reversal leaves its evidence (§D17), beside the apply's own."""
+    return folder(env_root) / REVERSED / f"{int(number):04d}" / "reversed.json"
 
 
 def _read(path: Path) -> dict:
@@ -167,6 +181,24 @@ def write_applied(env_root, number, document: dict) -> Path:
     return path
 
 
+def read_reversed(env_root, number) -> dict:
+    """What reversing one release did to this environment, row by row (§D17)."""
+    document = _read(reversed_path(env_root, number))
+    if document and document.get("format") != REVERSED_FORMAT:
+        raise InstallerError(
+            f"{reversed_path(env_root, number)}: format {document.get('format')} is not "
+            f"one this build reads (it reads {REVERSED_FORMAT})"
+        )
+    return document
+
+
+def write_reversed(env_root, number, document: dict) -> Path:
+    path = reversed_path(env_root, number)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
 def id_collisions(allocated: dict, held: dict) -> list[str]:
     """§D9's check, as data: an id a release allocates that the server's own
     tables already hold is a collision, and it is named with the row that holds
@@ -222,6 +254,14 @@ def applied_releases(env_root) -> list[int]:
     return sorted(int(path.parent.name) for path in root.glob("*/applied.json"))
 
 
+def reversed_releases(env_root) -> list[int]:
+    """The releases this environment carries a reversal for, in order."""
+    root = folder(env_root) / REVERSED
+    if not root.is_dir():
+        return []
+    return sorted(int(path.parent.name) for path in root.glob("*/reversed.json"))
+
+
 def reset(env_root, *, project: str, baseline=None) -> dict:
     """Start the environment's own record over, because its database was
     replaced (`server-install.md` §D6, `camelot env provision`).
@@ -236,6 +276,9 @@ def reset(env_root, *, project: str, baseline=None) -> dict:
     if (where / APPLIED).is_dir():
         dropped = [f"{number:04d}" for number in applied_releases(env_root)]
         shutil.rmtree(where / APPLIED)
+    # The reversals describe the same database as the applies: they go with it.
+    if (where / REVERSED).is_dir():
+        shutil.rmtree(where / REVERSED)
     state = empty_state(project)
     state["baseline"] = dict(baseline or {})
     written_state(env_root, state)
@@ -277,6 +320,21 @@ def _current(connection, table: str, key: str) -> dict | None:
     with connection.cursor() as cursor:
         cursor.execute(f"SELECT * FROM `{table}` WHERE `{column}` = %s", (key,))
         return cursor.fetchone()
+
+
+def _recorded(value):
+    """A value as it goes into the record (`state.json`): JSON has no `datetime`,
+    and the driver hands back Python objects for the server's own timestamp
+    columns (`SELECT *` answers `datetime`, `timedelta`, `Decimal`). What is stored
+    is text — which is also what a re-insertion sends back.
+
+    Found against real MariaDB, 2026-10-18: the first release that patched a row
+    crashed the apply on `Object of type datetime is not JSON serializable`, and
+    every release of the workshop's project until then had written zero rows.
+    """
+    if value is None:
+        return None
+    return value if isinstance(value, (str, int, float, bool)) else str(value)
 
 
 def apply(
@@ -355,7 +413,7 @@ def apply(
                 # A removal keeps the whole row as its original: putting a
                 # release back is putting the row back (`§D14`).
                 originals.setdefault(table, {})[key] = {
-                    str(name): current.get(name) for name in sorted(current)
+                    str(name): _recorded(current.get(name)) for name in sorted(current)
                 }
                 removals.append({"table": table, "key": key})
                 lines.append(
@@ -372,7 +430,9 @@ def apply(
                 name: value for name, value in wanted.items() if str(current.get(name)) != value
             }
             if changed:
-                originals.setdefault(table, {})[key] = {name: current.get(name) for name in changed}
+                originals.setdefault(table, {})[key] = {
+                    name: _recorded(current.get(name)) for name in changed
+                }
                 to_write.append({"table": table, "key": key, "values": changed})
                 lines.append(
                     {
@@ -421,3 +481,108 @@ def apply(
     }
     written_state(env_root, state)
     return applied
+
+
+def reverse(env_root, *, connect, project: str, number: int, at=None) -> dict:
+    """Put back what one release replaced (`server-install.md` §D17).
+
+    The recorded originals go back in **one** transaction: a column the release
+    wrote returns to the value it had, and a row the release removed is
+    re-inserted whole. Then the release leaves the state — it is no longer
+    applied — and leaves the environment's folder: the folder is the ask, and
+    the ask is withdrawn, which is also why a pull puts it back.
+
+    Refused when a **later** release is applied: reversing N under N+1 would
+    write over values N+1 set. The newest is named; it is reversed first.
+    """
+    number = int(number)
+    state = read_state(env_root, project)
+    recorded = released(state, number)
+    if recorded is None:
+        raise InstallerError(
+            f"release {number:04d} is not applied to this environment — there is nothing "
+            "to reverse"
+        )
+    later = sorted(
+        found
+        for found in (int(name) for name in (state.get("releases") or {}))
+        if found > number
+    )
+    if later:
+        raise InstallerError(
+            f"release {number:04d} cannot be reversed while release {later[-1]:04d} is "
+            "applied — its values would be written over: reverse the newest first"
+        )
+
+    patches: list[dict] = []
+    insertions: list[dict] = []
+    lines: list[dict] = []
+    handle = connect()
+    try:
+        for table, rows in sorted((recorded.get("originals") or {}).items()):
+            for key, values in sorted((rows or {}).items()):
+                current = _current(handle, table, str(key))
+                if current is None:
+                    # A removal kept the whole row: putting it back is inserting it.
+                    insertions.append({"table": table, "values": values or {}})
+                    lines.append(
+                        {
+                            "table": table,
+                            "key": str(key),
+                            "action": "reinsert",
+                            "why": "the release removed it",
+                        }
+                    )
+                    continue
+                wanted = {name: str(value) for name, value in (values or {}).items()}
+                changed = {
+                    name: value
+                    for name, value in wanted.items()
+                    if str(current.get(name)) != value
+                }
+                if changed:
+                    patches.append({"table": table, "key": str(key), "values": changed})
+                    lines.append(
+                        {
+                            "table": table,
+                            "key": str(key),
+                            "action": "restore",
+                            "why": f"{len(changed)} value(s): {', '.join(sorted(changed))}",
+                        }
+                    )
+                else:
+                    lines.append(
+                        {
+                            "table": table,
+                            "key": str(key),
+                            "action": "skip",
+                            "why": "already what it was",
+                        }
+                    )
+    finally:
+        handle.close()
+
+    if patches or insertions:
+        serverrows.apply_patches(connect, patches, insertions=insertions)
+
+    document = {
+        "format": REVERSED_FORMAT,
+        "release": number,
+        "at": journal_mod.now(at),
+        "rows": lines,
+        "restored": sum(1 for line in lines if line["action"] == "restore"),
+        "reinserted": sum(1 for line in lines if line["action"] == "reinsert"),
+        "skipped": sum(1 for line in lines if line["action"] == "skip"),
+        # The reversal changes the same rows the release did: the ritual it named
+        # is the ritual this one needs.
+        "needs": [str(name) for name in (recorded.get("needs") or ())],
+    }
+    write_reversed(env_root, number, document)
+    state = read_state(env_root, project)
+    state["releases"].pop(f"{number:04d}", None)
+    written_state(env_root, state)
+    where = releases_folder(env_root, number)
+    withdrew = where.is_dir()
+    if withdrew:
+        shutil.rmtree(where)
+    return {**document, "folder": str(where), "withdrew": withdrew}

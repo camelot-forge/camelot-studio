@@ -309,6 +309,64 @@ def test_a_patch_on_a_missing_row_is_refused_before_the_transaction():
     assert connection.closed
 
 
+def test_a_re_inserted_row_goes_back_in_the_same_transaction():
+    """§D17: a reversal puts a removed row back — every column of the table's own
+    list, the key included — and it commits with the patches beside it."""
+    connection = FakeConnection([
+        [ROWS["door"][0]],  # the patch's existence check
+        [],                 # the re-insertion's check: the row is gone
+        [],                 # the UPDATE
+        [],                 # the INSERT
+    ])
+    whole = {column: "0" for column in serverrows.COLUMNS["door"]}
+    whole["Door_ID"] = "d-gone"
+    whole["X"] = "533100"
+    count = serverrows.apply_patches(
+        lambda: connection,
+        [{"table": "door", "key": "d-in", "values": {"X": "576000"}}],
+        insertions=[{"table": "door", "values": whole}],
+    )
+
+    assert count == 2
+    sql, params = connection.statements[2]
+    assert sql.startswith("UPDATE `door` SET `X` = %s")
+    sql, params = connection.statements[3]
+    assert sql.startswith("INSERT INTO `door` (`Door_ID`, `Name`")
+    written = dict(zip(serverrows.COLUMNS["door"], params))
+    assert written["Door_ID"] == "d-gone" and written["X"] == "533100"
+    assert written["Name"] == "0"
+    assert connection.transactions == ["begin", "commit"]
+
+
+def test_a_re_insertion_that_is_not_a_whole_row_is_refused():
+    """A re-insertion comes from the record of a removal, which kept every column:
+    a hole is a malformed record, not something to guess a default for."""
+    connection = FakeConnection([])
+
+    with pytest.raises(ServerRowsError, match="does not carry Name"):
+        serverrows.apply_patches(
+            lambda: connection, [], insertions=[{"table": "door", "values": {"Door_ID": "d1"}}]
+        )
+
+    assert connection.transactions == []
+
+
+def test_a_re_insertion_of_a_row_that_is_there_is_refused():
+    """The caller believes the row is gone; a row that is back is a fact worth
+    naming, not a duplicate-key error from the driver."""
+    connection = FakeConnection([[ROWS["door"][0]]])
+    whole = {column: "0" for column in serverrows.COLUMNS["door"]}
+    whole["Door_ID"] = "d-in"
+
+    with pytest.raises(ServerRowsError, match="is there"):
+        serverrows.apply_patches(
+            lambda: connection, [], insertions=[{"table": "door", "values": whole}]
+        )
+
+    assert connection.transactions == []
+    assert connection.closed
+
+
 def test_the_read_by_key_gives_the_originals():
     connection = FakeConnection([[ROWS["mob"][0]]])
     originals = serverrows.read_rows_by_key(lambda: connection, "mob", ["m-in", "m-out"])

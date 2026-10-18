@@ -1,0 +1,123 @@
+# The server stack (`remote.md` §D5, §D10): the database, OpenDAoC, and the
+# `camelot-core` job that is the Installer's step until the C# Installer exists
+# (S §D10). The feed and the Console are their own files; `deploy/compose.yaml`
+# includes all four, and this file runs alone for a server that wants only these.
+#
+# Networking: every service but the database joins the host's network. OpenDAoC's
+# API binds `127.0.0.1:5000` and the Console reads it there, so the two must share
+# a loopback — a bridge puts them on two sides of a NAT, and a published port
+# cannot carry a loopback binding. The database is the exception: it publishes on
+# loopback only and is never reachable from outside the machine.
+#
+# Paths default to a scratch layout beside this file. A real server sets its own
+# in `.env` — one file for the whole stack; `.env.example` names every value.
+
+services:
+  db:
+    image: mariadb:10.6
+    # The flags the workshop's own server runs with (measured 2026-10-18 on
+    # MariaDB 10.6.28): the emulator's schema and queries assume a
+    # case-insensitive utf8mb3 server. OpenDAoC's own compose also passes
+    # `--innodb_large_prefix` and `--innodb_file_format`, which MariaDB 10.6 does
+    # not have — they are dropped here rather than mirrored.
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --lower_case_table_names=1
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
+    environment:
+      MARIADB_ROOT_PASSWORD: ${CAMELOT_DB_PASSWORD:?set CAMELOT_DB_PASSWORD}
+      # The environment's database is created by `env provision`, never here:
+      # `provision` refuses to drop a database this project did not create.
+      CAMELOT_DB_NAME: ${CAMELOT_DB_NAME:?set CAMELOT_DB_NAME}
+    volumes:
+      - db-data:/var/lib/mysql
+    ports:
+      - "127.0.0.1:${CAMELOT_DB_PORT:-3307}:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  core:
+    # Pinned by digest: `latest` moves, and a game server that changes under you
+    # is not a deployment. `README.md` says how to move it.
+    image: ${CAMELOT_CORE_IMAGE:-ghcr.io/opendaoc/opendaoc-core@sha256:89da37855ab3629273884652b646f3bc2a84398193926646d6721341a58d0d3e}
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # `entrypoint.sh` writes `config/serverconfig.xml` from these at every
+      # start: this is the server's configuration, not a file on the host.
+      UID: ${CAMELOT_CORE_UID:-1000}
+      GID: ${CAMELOT_CORE_GID:-1000}
+      SERVER_IP: 0.0.0.0
+      SERVER_PORT: ${CAMELOT_GAME_PORT:-10300}
+      REGION_IP: 0.0.0.0
+      REGION_PORT: ${CAMELOT_REGION_PORT:-10400}
+      UDP_IP: 0.0.0.0
+      UDP_PORT: ${CAMELOT_REGION_PORT:-10400}
+      ENABLE_UPNP: "False"
+      DETECT_REGION_IP: "True"
+      SERVER_NAME: ${CAMELOT_SHARD_NAME:?set CAMELOT_SHARD_NAME}
+      SERVER_NAME_SHORT: ${CAMELOT_SHARD_SHORT:-CAMELOT}
+      GAME_TYPE: Normal
+      AUTO_ACCOUNT_CREATION: "True"
+      ENABLE_COMPILATION: "True"
+      CHEAT_LOGGER_NAME: cheats
+      GM_ACTION_LOGGER_NAME: gmactions
+      INVALID_NAMES_FILE: ./config/invalidnames.txt
+      LOG_CONFIG_FILE: ./config/logconfig.xml
+      SCRIPT_ASSEMBLIES: ""
+      SCRIPT_COMPILATION_TARGET: ./lib/GameServerScripts.dll
+      DB_TYPE: MYSQL
+      DB_CONNECTION_STRING: "Server=127.0.0.1;Port=${CAMELOT_DB_PORT:-3307};Database=${CAMELOT_DB_NAME:?set CAMELOT_DB_NAME};UserId=root;Password=${CAMELOT_DB_PASSWORD:?set CAMELOT_DB_PASSWORD};TreatTinyAsBoolean=false;Pooling=true;MinimumPoolSize=30;MaximumPoolSize=120;ConnectionReset=false"
+      DB_AUTOSAVE: "True"
+      DB_AUTOSAVE_INTERVAL: "10"
+      CPU_USE: ${CAMELOT_CORE_CPU:-4}
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "False"
+    volumes:
+      # The server's own logs (`./logs` in `logconfig.xml`): the cheat and GM
+      # action logs are records an operator keeps.
+      - ${CAMELOT_CORE_LOG_DIR:-./data/logs}:/app/logs
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  # The Installer's step (`remote.md` §D5): `env provision`, `env apply`,
+  # `env status`, `env verify`. A job, not a daemon — `camelot.sh` wraps it.
+  camelot-core:
+    build:
+      context: ../..
+      dockerfile: deploy/server/Dockerfile
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # The connection comes from here, never from the checkout's `machine.json`:
+      # that file carries no `db` block on a server (`machine.json.example`).
+      CAMELOT_DB_HOST: 127.0.0.1
+      CAMELOT_DB_PORT: ${CAMELOT_DB_PORT:-3307}
+      CAMELOT_DB_USER: root
+      CAMELOT_DB_PASSWORD: ${CAMELOT_DB_PASSWORD:?set CAMELOT_DB_PASSWORD}
+    volumes:
+      # The checkout of the deploy branch: the project this job reads.
+      - ${CAMELOT_DEPLOY_CHECKOUT:?set CAMELOT_DEPLOY_CHECKOUT}:/deploy
+      # The environment folder — the one place anything of ours writes.
+      - ${CAMELOT_SERVER_ENV:?set CAMELOT_SERVER_ENV}:/env
+      # OpenDAoC's database checkout, for `env provision` alone.
+      - ${CAMELOT_BASELINE_SOURCE:?set CAMELOT_BASELINE_SOURCE}:/baseline:ro
+    command:
+      - env
+      - status
+      - ${CAMELOT_ENVIRONMENT:-production}
+      - --dir
+      - /deploy
+
+volumes:
+  db-data:

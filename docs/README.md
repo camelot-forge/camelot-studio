@@ -8,6 +8,10 @@
   decisions, known limits, environment gotchas, next steps, cheat sheet.
 - **`next-steps.md`** — documentation/code truth audit and roadmap toward a
   reproducible DAoC server content pack.
+- **`admin.md`** — the operator's runbook: the desk, the server, the daily flow
+  from an edit to a player's update, a new VPS, backups, and what each refusal
+  means. Different audience from the three above: it describes what to *run*,
+  not how the tool is built.
 
 The root `README.md` is the front page (what/why/quick start); `AGENTS.md`
 holds repo rules for humans and agents (language, testing, comments,
