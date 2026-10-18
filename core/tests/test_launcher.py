@@ -306,6 +306,8 @@ def test_the_update_route_refuses_a_second_run_at_the_same_time(tmp_path, client
         first = _call(server, "/api/update", method="POST", body={})
         assert first["progress"]["running"] is True
         assert started.wait(5)
+        # the page reads the polling route through the same `progress` key
+        assert _call(server, "/api/progress")["progress"]["running"] is True
         with pytest.raises(urllib.error.HTTPError) as busy:
             _call(server, "/api/update", method="POST", body={})
         assert busy.value.code == 409

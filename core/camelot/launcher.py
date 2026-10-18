@@ -360,7 +360,7 @@ def handler_for(settings: dict, page):
                     {"state": state(settings), "progress": dict(PROGRESS), "settings": settings}
                 )
             if path == "/api/progress":
-                return self._json(dict(PROGRESS))
+                return self._json({"progress": dict(PROGRESS)})
             if path.startswith("/api/"):
                 return self._json({"error": f"no such route: {path}"}, status=404)
             return super().do_GET()
