@@ -368,6 +368,7 @@ def provision(
     baseline=None,
     connect=None,
     yes: bool = False,
+    clean: bool = False,
     on_file=None,
 ) -> dict:
     """Build the environment's own database from OpenDAoC's baseline.
@@ -375,6 +376,11 @@ def provision(
     Refused unless *yes* is set — the verb drops a database — and refused by
     name when the database it would drop is not the one this project created for
     that environment, or is the one the authoring server edits.
+
+    The environment ends **at the content this project holds**: once the baseline
+    is in and the Installer's record has been started over, every release the
+    folder holds is applied, oldest first (§D6). *clean* stops after the import,
+    for an environment that should be the baseline and nothing else.
     """
     if not yes:
         raise EnvError(
@@ -440,7 +446,17 @@ def provision(
     }
     reset = installer.reset(env_root, project=project.name, baseline=identity)
     write_record(env_root, record)
-    return {**record, "installer": reset}
+    done: list[dict] = []
+    if not clean and installer.handed_over(env_root):
+        try:
+            done = apply(project, env, connect=connect)["applied"]
+        except (EnvError, installer.InstallerError) as error:
+            # The database is provisioned: say what is missing, keep it, and let
+            # the operator fix the release or apply it once the rows are there.
+            raise EnvError(
+                f"{env}: the database is provisioned, but its releases did not apply — {error}"
+            ) from error
+    return {**record, "installer": reset, "applied": done}
 
 
 # --- reading an environment back -----------------------------------------------
@@ -514,50 +530,24 @@ def verify(project: project_mod.Project, env: str, *, connect=None) -> dict:
     }
 
 
-def apply(project: project_mod.Project, env: str, *, release=None, connect=None) -> dict:
-    """Run the Installer's step for a release this environment holds (`§2`).
-
-    It reads `<env>/server/camelot/releases/NNNN/` — what Deploy handed over,
-    never the project — writes those rows into the environment's database, and
-    records what it wrote. On a server the Installer does this itself (§D1); an
-    environment this project provisioned is a test server, and the step can run
-    from here.
-
-    Without *release*, the newest one the environment holds that is not applied
-    yet; an environment that holds nothing is refused by name, because deploying
-    is what puts a release there. One whose releases are all applied gets the
-    newest back as a no-op that says so (§D14).
-    """
-    env_root = folder(project, env)
-    state = installer.read_state(env_root, project.name)
-    handed = installer.handed_over(env_root)
-    if release is None:
-        if not handed:
-            raise EnvError(
-                f"{env_root}: no release is handed over to {env} — "
-                f"`camelot project deploy N --env {env}` puts one there"
-            )
-        pending = [number for number in handed if not installer.released(state, number)]
-        number = pending[-1] if pending else handed[-1]
-    else:
-        number = int(release)
-        if number not in handed:
-            raise EnvError(
-                f"{env_root}: release {number:04d} is not there — "
-                f"`camelot project deploy {number} --env {env}` hands it over"
-            )
+def _reloads(project: project_mod.Project, number: int) -> tuple:
+    """The reload ritual a release names (`§D2`). A release this machine does not
+    hold names none — the ritual is not ours to invent."""
     try:
-        needs: tuple = tuple(
-            (release_mod.load(project.root, number).get("needs") or {}).get("reload") or ()
-        )
+        record = release_mod.load(project.root, number)
     except release_mod.ReleaseError:
-        needs = ()  # a release this machine does not hold: the ritual is not ours to name
-    connection = connection_for(project, env)
-    write = connect or serverrows.connect
+        return ()
+    return tuple((record.get("needs") or {}).get("reload") or ())
+
+
+def _one(project: project_mod.Project, env: str, env_root, number: int, write) -> dict:
+    """One release through the Installer's step, plus the fact it leaves in the
+    project's deploy log."""
+    needs = _reloads(project, number)
     applied = installer.apply(
         env_root,
         installer.releases_folder(env_root, number),
-        connect=lambda: write(connection),
+        connect=write,
         project=project.name,
         number=number,
         needs=needs,
@@ -571,12 +561,73 @@ def apply(project: project_mod.Project, env: str, *, release=None, connect=None)
             "outcome": "unchanged" if applied.get("unchanged") else "ok",
             "rows": {
                 "written": int(applied.get("written") or 0),
+                "removed": int(applied.get("removed") or 0),
                 "skipped": int(applied.get("skipped") or 0),
             },
             "needs": [str(name) for name in needs],
         },
     )
-    return {**applied, "env": str(env), "folder": str(env_root), "fact": fact}
+    return {
+        "release": int(applied["release"]),
+        "written": int(applied.get("written") or 0),
+        "removed": int(applied.get("removed") or 0),
+        "skipped": int(applied.get("skipped") or 0),
+        "unchanged": bool(applied.get("unchanged")),
+        "needs": [str(name) for name in needs],
+        "at": applied.get("at"),
+        "fact": fact,
+    }
+
+
+def apply(project: project_mod.Project, env: str, *, release=None, connect=None) -> dict:
+    """Bring the environment to what its folder holds (`server-install.md` §2).
+
+    The Installer's step, run from here: every release Deploy handed over that the
+    environment's own state does not record, **oldest first**. The order is not a
+    preference — a release carries the rows of the zones its range touches, so a
+    later one does not cover an earlier one's zones, and only the order
+    reconstructs the content a fresh database needs (§D6).
+
+    On a server the Installer does this itself (§D1); an environment this project
+    provisioned is a test server, and the step can run from here. An environment
+    that holds nothing is refused by name, because deploying is what puts a
+    release there; one that already holds everything gets its newest release back
+    as a no-op that says so (§D14).
+    """
+    env_root = folder(project, env)
+    state = installer.read_state(env_root, project.name)
+    handed = installer.handed_over(env_root)
+    if release is not None:
+        number = int(release)
+        if number not in handed:
+            raise EnvError(
+                f"{env_root}: release {number:04d} is not there — "
+                f"`camelot project deploy {number} --env {env}` hands it over"
+            )
+        numbers = [number]
+    else:
+        if not handed:
+            raise EnvError(
+                f"{env_root}: no release is handed over to {env} — "
+                f"`camelot project deploy N --env {env}` puts one there"
+            )
+        pending = [number for number in handed if not installer.released(state, number)]
+        numbers = pending or [handed[-1]]
+    connection = connection_for(project, env)
+    write = connect or serverrows.connect
+    done = [_one(project, env, env_root, number, lambda: write(connection)) for number in numbers]
+    return {
+        "env": str(env),
+        "folder": str(env_root),
+        "database": connection["database"],
+        "applied": done,
+        "release": done[-1]["release"],
+        "written": sum(entry["written"] for entry in done),
+        "removed": sum(entry["removed"] for entry in done),
+        "skipped": sum(entry["skipped"] for entry in done),
+        "unchanged": all(entry["unchanged"] for entry in done),
+        "pending": numbers,
+    }
 
 
 def reload(project: project_mod.Project, env: str) -> dict:

@@ -29,6 +29,7 @@ the hard way (an operator saw mobs in the air, 2026-10-12):
   the global `BT_*` travel routes (measured: 0 rows) — drawing those put
   lines at z 7,879 across the whole map.
 """
+
 from __future__ import annotations
 
 import json
@@ -67,30 +68,81 @@ SCHEMA = "camelot.server-rows/1"
 #: The selected columns per table, in the schema's own spelling.
 COLUMNS: dict[str, tuple[str, ...]] = {
     "mob": (
-        "Mob_ID", "ClassType", "Name", "Suffix", "Guild", "X", "Y", "Z",
-        "Heading", "Region", "Model", "Size", "Level", "Realm", "Flags",
-        "AggroLevel", "AggroRange", "Gender", "PathID", "NPCTemplateID",
+        "Mob_ID",
+        "ClassType",
+        "Name",
+        "Suffix",
+        "Guild",
+        "X",
+        "Y",
+        "Z",
+        "Heading",
+        "Region",
+        "Model",
+        "Size",
+        "Level",
+        "Realm",
+        "Flags",
+        "AggroLevel",
+        "AggroRange",
+        "Gender",
+        "PathID",
+        "NPCTemplateID",
     ),
     "worldobject": (
-        "WorldObject_ID", "ClassType", "Name", "X", "Y", "Z", "Heading",
-        "Region", "Model", "Emblem", "Realm",
+        "WorldObject_ID",
+        "ClassType",
+        "Name",
+        "X",
+        "Y",
+        "Z",
+        "Heading",
+        "Region",
+        "Model",
+        "Emblem",
+        "Realm",
     ),
     "door": (
-        "Door_ID", "Name", "Type", "X", "Y", "Z", "Heading", "InternalID",
-        "Guild", "Level", "Realm", "Flags", "IsPostern", "Locked", "State",
+        "Door_ID",
+        "Name",
+        "Type",
+        "X",
+        "Y",
+        "Z",
+        "Heading",
+        "InternalID",
+        "Guild",
+        "Level",
+        "Realm",
+        "Flags",
+        "IsPostern",
+        "Locked",
+        "State",
     ),
     "path": ("Path_ID", "PathID", "PathType"),
     "pathpoints": (
-        "PathPoints_ID", "PathID", "Step", "X", "Y", "Z", "MaxSpeed",
-        "WaitTime", "TriggerName",
+        "PathPoints_ID",
+        "PathID",
+        "Step",
+        "X",
+        "Y",
+        "Z",
+        "MaxSpeed",
+        "WaitTime",
+        "TriggerName",
     ),
 }
 
 TABLE_NAMES: tuple[str, ...] = tuple(COLUMNS)
 
 #: The id column each table is ordered by, so two reads agree.
-_ORDER = {"mob": "Mob_ID", "worldobject": "WorldObject_ID", "door": "Door_ID",
-          "path": "PathID", "pathpoints": "PathID, Step"}
+_ORDER = {
+    "mob": "Mob_ID",
+    "worldobject": "WorldObject_ID",
+    "door": "Door_ID",
+    "path": "PathID",
+    "pathpoints": "PathID, Step",
+}
 
 
 class ServerRowsError(ValueError):
@@ -98,6 +150,7 @@ class ServerRowsError(ValueError):
 
 
 # --- the connection strings ---------------------------------------------------
+
 
 def parse_server_config(path: str) -> dict[str, Any]:
     """`host/port/user/password/database` from an OpenDAoC `serverconfig.xml`.
@@ -132,8 +185,7 @@ def parse_dsn(dsn: str) -> dict[str, Any]:
     url = urlsplit(dsn)
     database = url.path.strip("/")
     if url.scheme not in ("mysql", "mariadb") or not url.hostname or not database:
-        raise ServerRowsError(
-            f"expected mysql://user:password@host:port/database, got {dsn!r}")
+        raise ServerRowsError(f"expected mysql://user:password@host:port/database, got {dsn!r}")
     return {
         "host": url.hostname,
         "port": url.port or 3306,
@@ -149,10 +201,9 @@ def connect(connection: dict[str, Any]):
         import pymysql
     except ImportError as error:  # pragma: no cover - exercised by the absence
         raise ServerRowsError(
-            "reading the live database needs pymysql "
-            "(pip install 'camelot-studio[mysql]')") from error
-    return pymysql.connect(cursorclass=pymysql.cursors.DictCursor,
-                           autocommit=True, **connection)
+            "reading the live database needs pymysql (pip install 'camelot-studio[mysql]')"
+        ) from error
+    return pymysql.connect(cursorclass=pymysql.cursors.DictCursor, autocommit=True, **connection)
 
 
 def mysql_errors() -> tuple[type[BaseException], ...]:
@@ -169,6 +220,7 @@ def mysql_errors() -> tuple[type[BaseException], ...]:
 
 # --- the live readers ---------------------------------------------------------
 
+
 def _select(table: str) -> str:
     return f"SELECT {', '.join(COLUMNS[table])} FROM {table}"
 
@@ -177,8 +229,9 @@ def _rect_clause() -> str:
     return "X >= %s AND X < %s AND Y >= %s AND Y < %s"
 
 
-def read_rows(connect_: Callable[[], Any], *,
-              tables: Sequence[str] = TABLE_NAMES) -> dict[str, list[dict]]:
+def read_rows(
+    connect_: Callable[[], Any], *, tables: Sequence[str] = TABLE_NAMES
+) -> dict[str, list[dict]]:
     """Every row of the tables, with the selected columns. Read-only."""
     out: dict[str, list[dict]] = {}
     database = connect_()
@@ -192,9 +245,16 @@ def read_rows(connect_: Callable[[], Any], *,
     return out
 
 
-def read_rows_in_rect(connect_: Callable[[], Any], *, region: int, zone_id: int,
-                      x: float, y: float, width: float,
-                      height: float) -> dict[str, list[dict]]:
+def read_rows_in_rect(
+    connect_: Callable[[], Any],
+    *,
+    region: int,
+    zone_id: int,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+) -> dict[str, list[dict]]:
     """The rows a zone holds: the same rule as `rows_in_rect`, in SQL.
 
     `connect_` is injected: the caller opens the connection, these readers
@@ -208,18 +268,23 @@ def read_rows_in_rect(connect_: Callable[[], Any], *, region: int, zone_id: int,
             for table in ("mob", "worldobject"):
                 cursor.execute(
                     f"{_select(table)} WHERE {_rect_clause()} AND Region = %s "
-                    f"ORDER BY {_ORDER[table]}", (*rect, region))
+                    f"ORDER BY {_ORDER[table]}",
+                    (*rect, region),
+                )
                 out[table] = list(cursor.fetchall())
 
             # A door carries its zone in `InternalID` (DoorMgr.LoadDoor).
             cursor.execute(
-                f"{_select('door')} WHERE InternalID DIV 1000000 = %s "
-                f"ORDER BY {_ORDER['door']}", (zone_id,))
+                f"{_select('door')} WHERE InternalID DIV 1000000 = %s ORDER BY {_ORDER['door']}",
+                (zone_id,),
+            )
             out["door"] = list(cursor.fetchall())
 
             cursor.execute(
                 f"SELECT PathID FROM mob WHERE {_rect_clause()} "
-                "AND Region = %s AND PathID IS NOT NULL", (*rect, region))
+                "AND Region = %s AND PathID IS NOT NULL",
+                (*rect, region),
+            )
             path_ids = {row["PathID"] for row in cursor.fetchall() if row["PathID"]}
 
             ids = sorted(path_ids)
@@ -227,13 +292,14 @@ def read_rows_in_rect(connect_: Callable[[], Any], *, region: int, zone_id: int,
             if ids:
                 cursor.execute(
                     f"{_select('pathpoints')} WHERE PathID IN ({holes}) "
-                    f"ORDER BY {_ORDER['pathpoints']}", ids)
+                    f"ORDER BY {_ORDER['pathpoints']}",
+                    ids,
+                )
                 out["pathpoints"] = list(cursor.fetchall())
                 cursor.execute(
-                    f"{_select('path')} WHERE PathID IN ({holes}) "
-                    f"ORDER BY {_ORDER['path']}", ids)
-                out["path"] = [row for row in cursor.fetchall()
-                               if row["PathID"] in path_ids]
+                    f"{_select('path')} WHERE PathID IN ({holes}) ORDER BY {_ORDER['path']}", ids
+                )
+                out["path"] = [row for row in cursor.fetchall() if row["PathID"] in path_ids]
             else:
                 out["pathpoints"] = []
                 out["path"] = []
@@ -255,7 +321,8 @@ def _check_patch(table: str, values: dict) -> dict[str, str]:
     """A patch writes the table's own columns — never SQL, never its key."""
     if table not in KEY_COLUMNS:
         raise ServerRowsError(
-            f"{table!r} is not a patchable table ({', '.join(sorted(KEY_COLUMNS))})")
+            f"{table!r} is not a patchable table ({', '.join(sorted(KEY_COLUMNS))})"
+        )
     if not values:
         raise ServerRowsError(f"{table}: a patch needs at least one value")
     cleaned: dict[str, str] = {}
@@ -268,8 +335,7 @@ def _check_patch(table: str, values: dict) -> dict[str, str]:
     return cleaned
 
 
-def read_rows_by_key(connect_: Callable[[], Any], table: str,
-                     keys) -> dict[str, dict]:
+def read_rows_by_key(connect_: Callable[[], Any], table: str, keys) -> dict[str, dict]:
     """The rows those keys name, by key — the originals a patch records."""
     if table not in KEY_COLUMNS:
         raise ServerRowsError(f"{table!r} is not a patchable table")
@@ -280,20 +346,22 @@ def read_rows_by_key(connect_: Callable[[], Any], table: str,
     database = connect_()
     try:
         with database.cursor() as cursor:
-            cursor.execute(
-                f"{_select(table)} WHERE {KEY_COLUMNS[table]} IN ({holes})", wanted)
+            cursor.execute(f"{_select(table)} WHERE {KEY_COLUMNS[table]} IN ({holes})", wanted)
             return {str(row[KEY_COLUMNS[table]]): row for row in cursor.fetchall()}
     finally:
         database.close()
 
 
-def apply_patches(connect_: Callable[[], Any], patches) -> int:
+def apply_patches(connect_: Callable[[], Any], patches, *, deletions=()) -> int:
     """Write patches to existing rows, in one transaction; returns the count.
 
     Every patch is validated first (known table, known columns, never the
     key), the row is looked up before it is touched — a patch that matches
     nothing is an error, not a silent no-op — and the whole set commits
-    together or not at all.
+    together or not at all. *deletions* are rows to remove in the same
+    transaction (a release's removal): `{"table": …, "key": …}`, and a row
+    that is gone is not an error — a removal that already happened is the
+    state the caller asked for.
     """
     prepared: list[tuple[str, str, dict[str, str]]] = []
     for patch in patches:
@@ -302,34 +370,44 @@ def apply_patches(connect_: Callable[[], Any], patches) -> int:
         if not patch.get("key"):
             raise ServerRowsError(f"{table}: a patch needs the row's key")
         prepared.append((table, str(patch["key"]), cleaned))
-    if not prepared:
+    doomed: list[tuple[str, str]] = []
+    for item in deletions:
+        table, key = str(item.get("table") or ""), str(item.get("key") or "")
+        if table not in KEY_COLUMNS:
+            raise ServerRowsError(
+                f"{table!r} is not a patchable table ({', '.join(sorted(KEY_COLUMNS))})"
+            )
+        if not key:
+            raise ServerRowsError(f"{table}: a removal needs the row's key")
+        doomed.append((table, key))
+    if not prepared and not doomed:
         return 0
 
     database = connect_()
     try:
         for table, key, values in prepared:
             with database.cursor() as cursor:
-                cursor.execute(
-                    f"{_select(table)} WHERE {KEY_COLUMNS[table]} = %s", (key,))
+                cursor.execute(f"{_select(table)} WHERE {KEY_COLUMNS[table]} = %s", (key,))
                 if cursor.fetchone() is None:
-                    raise ServerRowsError(
-                        f"{table}: no row with {KEY_COLUMNS[table]} {key!r}")
+                    raise ServerRowsError(f"{table}: no row with {KEY_COLUMNS[table]} {key!r}")
         database.begin()
         try:
             with database.cursor() as cursor:
                 for table, key, values in prepared:
                     columns = ", ".join(f"`{column}` = %s" for column in values)
                     cursor.execute(
-                        f"UPDATE `{table}` SET {columns} "
-                        f"WHERE {KEY_COLUMNS[table]} = %s",
-                        (*values.values(), key))
+                        f"UPDATE `{table}` SET {columns} WHERE {KEY_COLUMNS[table]} = %s",
+                        (*values.values(), key),
+                    )
+                for table, key in doomed:
+                    cursor.execute(f"DELETE FROM `{table}` WHERE {KEY_COLUMNS[table]} = %s", (key,))
             database.commit()
         except Exception:
             database.rollback()
             raise
     finally:
         database.close()
-    return len(prepared)
+    return len(prepared) + len(doomed)
 
 
 def delete_rows(connect_: Callable[[], Any], table: str, keys) -> int:
@@ -343,17 +421,14 @@ def delete_rows(connect_: Callable[[], Any], table: str, keys) -> int:
     try:
         for key in wanted:
             with database.cursor() as cursor:
-                cursor.execute(
-                    f"{_select(table)} WHERE {KEY_COLUMNS[table]} = %s", (key,))
+                cursor.execute(f"{_select(table)} WHERE {KEY_COLUMNS[table]} = %s", (key,))
                 if cursor.fetchone() is None:
-                    raise ServerRowsError(
-                        f"{table}: no row with {KEY_COLUMNS[table]} {key!r}")
+                    raise ServerRowsError(f"{table}: no row with {KEY_COLUMNS[table]} {key!r}")
         database.begin()
         try:
             with database.cursor() as cursor:
                 for key in wanted:
-                    cursor.execute(
-                        f"DELETE FROM `{table}` WHERE {KEY_COLUMNS[table]} = %s", (key,))
+                    cursor.execute(f"DELETE FROM `{table}` WHERE {KEY_COLUMNS[table]} = %s", (key,))
             database.commit()
         except Exception:
             database.rollback()
@@ -386,7 +461,8 @@ def insert_rows(connect_: Callable[[], Any], table: str, rows) -> int:
                 for values in prepared:
                     cursor.execute(
                         f"INSERT INTO `{table}` ({columns}) VALUES ({holes})",
-                        tuple(values[column] for column in COLUMNS[table]))
+                        tuple(values[column] for column in COLUMNS[table]),
+                    )
             database.commit()
         except Exception:
             database.rollback()
@@ -398,9 +474,17 @@ def insert_rows(connect_: Callable[[], Any], table: str, rows) -> int:
 
 # --- the snapshot -------------------------------------------------------------
 
-def rows_in_rect(rows: dict[str, list[dict]], *, region: int, zone_id: int,
-                 x: float, y: float, width: float,
-                 height: float) -> dict[str, list[dict]]:
+
+def rows_in_rect(
+    rows: dict[str, list[dict]],
+    *,
+    region: int,
+    zone_id: int,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+) -> dict[str, list[dict]]:
     """The rows a zone holds — its region's, inside its rectangle; patrols
     are the ones its mobs walk (see the module docstring for the why)."""
 
@@ -412,17 +496,22 @@ def rows_in_rect(rows: dict[str, list[dict]], *, region: int, zone_id: int,
 
     mobs = [row for row in rows.get("mob", []) if mine(row)]
     objects = [row for row in rows.get("worldobject", []) if mine(row)]
-    doors = [row for row in rows.get("door", [])
-             if int(row.get("InternalID", 0) or 0) // 1_000_000 == zone_id]
+    doors = [
+        row
+        for row in rows.get("door", [])
+        if int(row.get("InternalID", 0) or 0) // 1_000_000 == zone_id
+    ]
 
     path_ids = {mob["PathID"] for mob in mobs if mob.get("PathID")}
-    kept = sorted((point for point in rows.get("pathpoints", [])
-                   if point["PathID"] in path_ids),
-                  key=lambda point: (point["PathID"], point["Step"]))
-    paths = sorted((row for row in rows.get("path", []) if row["PathID"] in path_ids),
-                   key=lambda row: row["PathID"])
-    return {"mob": mobs, "worldobject": objects, "door": doors,
-            "path": paths, "pathpoints": kept}
+    kept = sorted(
+        (point for point in rows.get("pathpoints", []) if point["PathID"] in path_ids),
+        key=lambda point: (point["PathID"], point["Step"]),
+    )
+    paths = sorted(
+        (row for row in rows.get("path", []) if row["PathID"] in path_ids),
+        key=lambda row: row["PathID"],
+    )
+    return {"mob": mobs, "worldobject": objects, "door": doors, "path": paths, "pathpoints": kept}
 
 
 class Snapshot:
@@ -433,8 +522,7 @@ class Snapshot:
     from (`host`, `database`) and deliberately never the credentials.
     """
 
-    def __init__(self, rows: dict[str, list[dict]],
-                 source: dict[str, Any] | None = None):
+    def __init__(self, rows: dict[str, list[dict]], source: dict[str, Any] | None = None):
         self.rows = {table: list(rows.get(table, [])) for table in TABLE_NAMES}
         self.source = source
 
@@ -449,34 +537,47 @@ class Snapshot:
         if not isinstance(document, dict) or document.get("schema") != SCHEMA:
             raise ServerRowsError(
                 f"{path}: this snapshot is {document.get('schema')!r}; "
-                f"this build understands {SCHEMA}")
+                f"this build understands {SCHEMA}"
+            )
         if not isinstance(document.get("rows"), dict):
             raise ServerRowsError(f"{path}: the snapshot has no `rows`")
         return cls(document["rows"], source=document.get("source"))
 
     def save(self, path: str | Path) -> None:
-        Path(path).write_text(json.dumps({
-            "schema": SCHEMA,
-            "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "source": self.source,
-            "counts": self.counts(),
-            "rows": self.rows,
-        }, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+        Path(path).write_text(
+            json.dumps(
+                {
+                    "schema": SCHEMA,
+                    "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                    "source": self.source,
+                    "counts": self.counts(),
+                    "rows": self.rows,
+                },
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
 
     def counts(self) -> dict[str, int]:
         return {table: len(self.rows.get(table, [])) for table in TABLE_NAMES}
 
-    def in_rect(self, *, region: int, zone_id: int, x: float, y: float,
-                width: float, height: float) -> dict[str, list[dict]]:
-        return rows_in_rect(self.rows, region=region, zone_id=zone_id,
-                            x=x, y=y, width=width, height=height)
+    def in_rect(
+        self, *, region: int, zone_id: int, x: float, y: float, width: float, height: float
+    ) -> dict[str, list[dict]]:
+        return rows_in_rect(
+            self.rows, region=region, zone_id=zone_id, x=x, y=y, width=width, height=height
+        )
 
 
-def export_snapshot(connection: dict[str, Any], out: str | Path, *,
-                    connect_: Callable[[dict], Any] = connect) -> Snapshot:
+def export_snapshot(
+    connection: dict[str, Any], out: str | Path, *, connect_: Callable[[dict], Any] = connect
+) -> Snapshot:
     """Read every table once and write the snapshot; no credential lands in it."""
     rows = read_rows(lambda: connect_(connection))
-    snapshot = Snapshot(rows, source={"kind": "mysql", "host": connection["host"],
-                                      "database": connection["database"]})
+    snapshot = Snapshot(
+        rows,
+        source={"kind": "mysql", "host": connection["host"], "database": connection["database"]},
+    )
     snapshot.save(out)
     return snapshot

@@ -350,6 +350,7 @@ def cmd_env(args) -> int:
                 args.env,
                 baseline=args.baseline,
                 yes=args.yes,
+                clean=args.clean,
                 on_file=step,
             )
             baseline = record["baseline"]
@@ -363,11 +364,14 @@ def cmd_env(args) -> int:
                     f"{len(cleared['dropped'])} applied release(s) described the database "
                     "that is gone"
                 )
-            if cleared.get("kept"):
-                print(
-                    f"  handed     release {', '.join(cleared['kept'])} — "
-                    f"`camelot env apply {args.env}` puts its rows back"
-                )
+            done = record.get("applied") or []
+            if args.clean:
+                print("  clean      the baseline alone: nothing this project holds was applied")
+            elif done:
+                print(f"  applied    {len(done)} release(s), oldest first")
+                print_applied(done)
+            else:
+                print("  content    none handed over yet — `camelot project deploy` is what puts one here")
             print(f"  record   {envs.record_path(envs.folder(project, args.env))}")
             return 0
         if args.env_cmd == "status":
@@ -397,23 +401,17 @@ def cmd_env(args) -> int:
                 print(f"  {problem}")
             return 0 if report["ok"] else 1
         if args.env_cmd == "apply":
-            applied = envs.apply(project, args.env, release=args.release)
-            if applied.get("unchanged"):
+            report = envs.apply(project, args.env, release=args.release)
+            if report["unchanged"]:
                 print(
-                    f"{args.env} holds release {applied['release']:04d} already: "
+                    f"{args.env} holds release {report['release']:04d} already: "
                     "nothing was written"
                 )
                 return 0
-            print(f"applied release {applied['release']:04d} to {args.env}")
-            print(
-                f"  {applied['written']} row(s) written · {applied['skipped']} skipped "
-                f"(already what the release says)"
-            )
-            needs = applied["fact"].get("needs") or []
-            if needs:
-                print(f"  reload     {', '.join('/reload ' + name for name in needs)}")
-            print(f"  evidence   {installer.applied_path(applied['folder'], applied['release'])}")
-            print(f"  state      {installer.state_path(applied['folder'])}")
+            print(f"applied {len(report['applied'])} release(s) to {args.env}, oldest first")
+            print_applied(report["applied"])
+            print(f"  evidence   {installer.applied_path(report['folder'], report['release'])}")
+            print(f"  state      {installer.state_path(report['folder'])}")
             return 0
         if args.env_cmd == "reload":
             fact = envs.reload(project, args.env)
@@ -431,6 +429,20 @@ def cmd_env(args) -> int:
         return 1
     print(f"error: unknown env command {args.env_cmd!r}", file=sys.stderr)
     return 2
+
+
+def print_applied(entries) -> None:
+    """What the Installer's step did, one line per release: the counts the
+    operator reads, and the ritual the release names (`server-install.md` §D2)."""
+    for entry in entries:
+        told = [f"{entry['written']} row(s) written"]
+        if entry["removed"]:
+            told.append(f"{entry['removed']} removed")
+        if entry["skipped"]:
+            told.append(f"{entry['skipped']} skipped")
+        if entry["needs"]:
+            told.append(" ".join("/reload " + name for name in entry["needs"]))
+        print(f"  {entry['release']:04d}  {' · '.join(told)}")
 
 
 def print_plan(table: dict) -> None:
@@ -1476,6 +1488,8 @@ def main(argv=None) -> int:
     pp_.add_argument("--baseline", help="OpenDAoC's database checkout (default: machine.json)")
     pp_.add_argument("--yes", action="store_true",
                      help="provisioning deletes the environment's database: say so")
+    pp_.add_argument("--clean", action="store_true",
+                     help="leave the environment at the baseline alone (no release is applied)")
     sp_ = envp.add_parser("status", help="what an environment holds")
     sp_.add_argument("env", nargs="?", default="local")
     sp_.add_argument("--dir", default=".", help="the project's directory (default: .)")

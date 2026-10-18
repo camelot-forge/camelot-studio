@@ -291,9 +291,14 @@ def apply(
 ) -> dict:
     """Apply one release's rows through the connection factory *connect*.
 
-    All or nothing (§D11): a row that is not there refuses the whole release,
-    nothing is written, and `state.json` is not touched. What the environment
-    already holds is `skipped`, not rewritten (§D14).
+    A row the release carries a patch for is written, a row it carries a
+    removal for is **deleted** — with the whole row kept as its original, so a
+    reversal puts it back — and one it says nothing about is left alone.
+
+    All or nothing (§D11): a row that is not there refuses the whole release
+    (unless the release removes it, and it is gone already), nothing is written,
+    and `state.json` is not touched. What the environment already holds is
+    `skipped`, not rewritten (§D14).
     """
     rows = rows_of(release_dir)
     refused = refused_tables([str(row.get("table") or "") for row in rows])
@@ -311,6 +316,7 @@ def apply(
             "at": (released(state, number) or {}).get("at"),
             "rows": [],
             "written": 0,
+            "removed": 0,
             "skipped": len(rows),
             "refused": 0,
             "unchanged": True,
@@ -320,6 +326,7 @@ def apply(
     lines: list[dict] = []
     originals: dict[str, dict[str, dict]] = {}
     to_write: list[dict] = []
+    removals: list[dict] = []
     try:
         for row in rows:
             table, key = str(row.get("table") or ""), str(row.get("key") or "")
@@ -327,12 +334,39 @@ def apply(
                 raise InstallerError(
                     f"release {int(number):04d}: a row patch needs its table and its key"
                 )
+            removed = bool(row.get("deleted"))
             current = _current(handle, table, key)
             if current is None:
+                if removed:
+                    lines.append(
+                        {
+                            "table": table,
+                            "key": key,
+                            "action": "skip",
+                            "why": "the row is not there any more",
+                        }
+                    )
+                    continue
                 raise InstallerError(
                     f"{table}: no row with {targets.owned_key(table)} {key!r} — the release "
                     "cannot write it, and nothing was written"
                 )
+            if removed:
+                # A removal keeps the whole row as its original: putting a
+                # release back is putting the row back (`§D14`).
+                originals.setdefault(table, {})[key] = {
+                    str(name): current.get(name) for name in sorted(current)
+                }
+                removals.append({"table": table, "key": key})
+                lines.append(
+                    {
+                        "table": table,
+                        "key": key,
+                        "action": "remove",
+                        "why": "the release removes it",
+                    }
+                )
+                continue
             wanted = {name: str(value) for name, value in (row.get("values") or {}).items()}
             changed = {
                 name: value for name, value in wanted.items() if str(current.get(name)) != value
@@ -360,8 +394,8 @@ def apply(
     finally:
         handle.close()
 
-    if to_write:
-        serverrows.apply_patches(connect, to_write)
+    if to_write or removals:
+        serverrows.apply_patches(connect, to_write, deletions=removals)
 
     applied = {
         "format": APPLIED_FORMAT,
@@ -369,14 +403,15 @@ def apply(
         "at": journal_mod.now(at),
         "rows": lines,
         "written": sum(1 for line in lines if line["action"] == "write"),
+        "removed": sum(1 for line in lines if line["action"] == "remove"),
         "skipped": sum(1 for line in lines if line["action"] == "skip"),
         "refused": sum(1 for line in lines if line["action"] == "refused"),
     }
     write_applied(env_root, number, applied)
     per_table: dict[str, dict[str, int]] = {}
     for line in lines:
-        counted = per_table.setdefault(line["table"], {"written": 0, "skipped": 0})
-        counted["written" if line["action"] == "write" else "skipped"] += 1
+        counted = per_table.setdefault(line["table"], {"written": 0, "removed": 0, "skipped": 0})
+        counted[{"write": "written", "remove": "removed"}.get(line["action"], "skipped")] += 1
     state = read_state(env_root, project)
     state["releases"][f"{int(number):04d}"] = {
         "at": applied["at"],

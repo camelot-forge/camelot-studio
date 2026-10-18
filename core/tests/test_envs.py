@@ -257,26 +257,68 @@ def test_a_database_this_machine_names_wins_over_the_record(tmp_path, client):
 
 
 def test_provision_starts_the_installers_record_over(tmp_path, client):
-    """§D6: the state and the applied releases describe the database that was
-    just replaced, so they go with it. The packages Deploy handed over stay —
-    the next apply is what puts their rows back."""
+    """§D6: the state and the applied releases describe the database that was just
+    replaced, so they go with it. Because what Deploy handed over stays, the
+    releases are applied again — against the fresh baseline — and because
+    `--clean` says the baseline alone, they are not."""
     project, env_root, _baseline_dir, server = _ready(
         tmp_path, client, row={"Door_ID": "d1", "X": "32768", "Y": "32768"}
     )
     envs.provision(project, "local", yes=True, connect=server.connect)
     _handed(env_root, 7, rows={"0": [{"table": "door", "key": "d1", "values": {"X": "30000"}}]})
     envs.apply(project, "local", connect=server.connect)
+    written = [s for s in server.statements if s.lower().startswith("update")]
     assert installer.read_state(env_root, project.name)["releases"]
 
     record = envs.provision(project, "local", yes=True, connect=server.connect)
 
     assert record["installer"]["dropped"] == ["0007"]
     assert record["installer"]["kept"] == ["0007"]
-    assert installer.read_state(env_root, project.name)["releases"] == {}
-    assert installer.applied_releases(env_root) == []
-    assert installer.handed_over(env_root) == [7]
+    assert [entry["release"] for entry in record["applied"]] == [7]
+    assert len([s for s in server.statements if s.lower().startswith("update")]) == len(written) + 1
     state = installer.read_state(env_root, project.name)
+    assert list(state["releases"]) == ["0007"]  # true again, against the new database
     assert state["baseline"] == record["baseline"]  # what the fresh database is
+
+    clean = envs.provision(project, "local", yes=True, clean=True, connect=server.connect)
+
+    assert clean["applied"] == []
+    assert installer.read_state(env_root, project.name)["releases"] == {}
+    assert installer.handed_over(env_root) == [7]
+
+
+def test_provision_leaves_the_environment_at_the_content_it_holds(tmp_path, client):
+    """§D6: what the operator gets from a provision is a test server that runs
+    this project — the baseline, then every release the folder holds, oldest
+    first."""
+    project, env_root, _baseline_dir, server = _ready(
+        tmp_path, client, row={"Door_ID": "d1", "X": "32768", "Y": "32768"}
+    )
+    patch = {"0": [{"table": "door", "key": "d1", "values": {"X": "30000"}}]}
+    _handed(env_root, 6, rows=patch)
+    _handed(env_root, 7, rows=patch)
+
+    record = envs.provision(project, "local", yes=True, connect=server.connect)
+
+    assert [entry["release"] for entry in record["applied"]] == [6, 7]
+    assert record["applied"][0]["written"] == 1
+    assert list(installer.read_state(env_root, project.name)["releases"]) == ["0006", "0007"]
+    assert "avalon_local" in server.databases
+
+
+def test_provision_clean_leaves_the_baseline_alone(tmp_path, client):
+    """The other half of §D6's sentence: `--clean` is an environment that is the
+    baseline and nothing else — the releases stay handed over, unapplied."""
+    project, env_root, _baseline_dir, server = _ready(
+        tmp_path, client, row={"Door_ID": "d1", "X": "32768", "Y": "32768"}
+    )
+    _handed(env_root, 7, rows={"0": [{"table": "door", "key": "d1", "values": {"X": "30000"}}]})
+
+    record = envs.provision(project, "local", yes=True, clean=True, connect=server.connect)
+
+    assert record["applied"] == []
+    assert installer.read_state(env_root, project.name)["releases"] == {}
+    assert installer.handed_over(env_root) == [7]
 
 
 def test_verify_reads_the_environment_back(tmp_path, client):
@@ -437,9 +479,10 @@ def test_apply_refuses_an_environment_that_holds_nothing(tmp_path, client):
     assert pj.deploy_log(project.root) == []
 
 
-def test_apply_takes_the_newest_release_the_environment_holds(tmp_path, client):
-    """Oldest first is wrong: an environment is meant to hold the newest release,
-    and the state is what says which ones it already has."""
+def test_apply_takes_every_release_the_environment_holds_in_order(tmp_path, client):
+    """A release carries the rows of its own range's zones, so a later one does
+    not cover an earlier one's zones: what reconstructs the content is the whole
+    folder, oldest first (§D6)."""
     project, env_root, _baseline_dir, server = _ready(
         tmp_path, client, row={"Door_ID": "d1", "X": "32768", "Y": "32768"}
     )
@@ -449,22 +492,30 @@ def test_apply_takes_the_newest_release_the_environment_holds(tmp_path, client):
 
     applied = envs.apply(project, "local", connect=server.connect)
 
-    assert applied["release"] == 7
-    assert list(installer.read_state(env_root, project.name)["releases"]) == ["0007"]
-    facts = [line for line in pj.deploy_log(project.root) if line["kind"] == "apply"]
-    assert [(line["env"], line["release"], line["outcome"]) for line in facts] == [
-        ("local", 7, "ok")
-    ]
-
-    again = envs.apply(project, "local", connect=server.connect)
-
-    assert again["release"] == 6  # 7 is newer, and it is already applied
+    assert [entry["release"] for entry in applied["applied"]] == [6, 7]
     assert list(installer.read_state(env_root, project.name)["releases"]) == ["0006", "0007"]
+    facts = [line for line in pj.deploy_log(project.root) if line["kind"] == "apply"]
+    assert [(line["release"], line["outcome"]) for line in facts] == [(6, "ok"), (7, "ok")]
 
     done = envs.apply(project, "local", connect=server.connect)
 
     # nothing is pending: the newest answers for the environment, as a no-op
     assert done["release"] == 7 and done["unchanged"] is True
+
+
+def test_a_row_says_which_release_will_be_applied(tmp_path, client):
+    """`--release N` is exact: it applies that one, applied or not."""
+    project, env_root, _baseline_dir, server = _ready(
+        tmp_path, client, row={"Door_ID": "d1", "X": "32768", "Y": "32768"}
+    )
+    patch = {"0": [{"table": "door", "key": "d1", "values": {"X": "30000"}}]}
+    _handed(env_root, 6, rows=patch)
+    _handed(env_root, 7, rows=patch)
+
+    applied = envs.apply(project, "local", release=6, connect=server.connect)
+
+    assert [entry["release"] for entry in applied["applied"]] == [6]
+    assert list(installer.read_state(env_root, project.name)["releases"]) == ["0006"]
 
 
 def test_apply_names_a_release_that_was_not_handed_over(tmp_path, client):
@@ -521,6 +572,62 @@ def test_a_release_lands_on_a_fresh_local_server_twice(tmp_path, client):
     assert list(state["releases"]) == ["0001"]
     assert installer.read_applied(env_root, 1)["written"] == 1
     assert envs.verify(project, "local", connect=server.connect)["installer"]["state"] is True
+
+
+def test_a_release_that_removes_a_row_keeps_the_whole_row(tmp_path, client):
+    """`row-remove` is an op like any other (§D14): the row goes, and the whole
+    row is recorded as its original, because putting the release back is putting
+    the row back."""
+    project, env_root, _baseline_dir, server = _ready(
+        tmp_path, client, row={"Door_ID": "d1", "X": "32768", "Y": "32768", "Heading": "1024"}
+    )
+    _handed(
+        env_root,
+        7,
+        rows={"0": [{"table": "door", "key": "d1", "values": {}, "deleted": True}]},
+    )
+
+    applied = installer.apply(
+        env_root,
+        installer.releases_folder(env_root, 7),
+        connect=server.connect,
+        project=project.name,
+        number=7,
+    )
+
+    removed = [s for s in server.statements if s.lower().startswith("delete from")]
+    assert len(removed) == 1 and "`door`" in removed[0]
+    assert applied["removed"] == 1 and applied["written"] == 0
+    state = installer.read_state(env_root, project.name)
+    assert state["releases"]["0007"]["originals"]["door"]["d1"] == {
+        "Door_ID": "d1",
+        "Heading": "1024",
+        "X": "32768",
+        "Y": "32768",
+    }
+    assert installer.read_applied(env_root, 7)["rows"][0]["action"] == "remove"
+
+
+def test_a_release_that_removes_a_row_that_is_gone_is_a_no_op(tmp_path, client):
+    """The row is already gone: nothing to remove, nothing to say but that."""
+    project, env_root, _baseline_dir, server = _ready(tmp_path, client, row=None)
+    _handed(
+        env_root,
+        7,
+        rows={"0": [{"table": "door", "key": "d9", "values": {}, "deleted": True}]},
+    )
+
+    applied = installer.apply(
+        env_root,
+        installer.releases_folder(env_root, 7),
+        connect=server.connect,
+        project=project.name,
+        number=7,
+    )
+
+    assert applied["removed"] == 0 and applied["skipped"] == 1
+    assert [s for s in server.statements if s.lower().startswith("delete")] == []
+    assert installer.read_applied(env_root, 7)["rows"][0]["why"] == "the row is not there any more"
 
 
 def test_the_id_space_check_names_the_row_that_holds_the_id(tmp_path):
