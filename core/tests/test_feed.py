@@ -174,6 +174,30 @@ def test_a_project_with_no_client_half_has_no_feed_to_build(tmp_path, client):
 # --- the consumer --------------------------------------------------------------
 
 
+def test_the_feed_carries_the_shard_s_own_settings(tmp_path, client):
+    """A player is told **one URL** — the feed's — and everything else comes from it: the
+    shard's name, where the game is, and the version to compare with. The protocol's two
+    files stay exactly the protocol's; this sits beside them (`launcher.json`)."""
+    project = _published(tmp_path, client)
+
+    report = feed.build(
+        project,
+        base=client,
+        base_url="https://avalon.example/patch/",
+        server="play.avalon.example:10300",
+    )
+
+    where = project.root / feed.FEED
+    shard = feed.launcher_of(where)
+    assert shard["shard"] == report.get("shard", "Avalon")
+    assert shard["feed"] == "https://avalon.example/patch/"
+    assert shard["server"] == "play.avalon.example:10300"
+    assert shard["version"] == report["version"] == 1
+    # and a feed that names no game is still a feed: the launcher has to be told
+    assert feed.read(where)["launcher"]["server"] == "play.avalon.example:10300"
+    assert feed.launcher_of(tmp_path / "nowhere") == {}
+
+
 def test_an_update_writes_what_differs_and_reads_it_back(tmp_path, client):
     """`C §D11`: every written file is hashed again. The client here is a copy whose
     files were put back to something else — what a player's client is."""

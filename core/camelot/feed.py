@@ -42,6 +42,10 @@ FORMAT = "camelot.feed/1"
 VERSION_FILE = "version-new.txt"
 PATCHLIST_FILE = "patchlist-new.txt"
 RECORD_FILE = "release.json"
+#: The shard's own settings, beside the protocol's two files (ours, and the one thing a
+#: launcher needs that the protocol does not carry: where the game is, and what the shard
+#: is called). A player is told one URL — the feed's — and everything else comes from it.
+LAUNCHER_FILE = "launcher.json"
 #: The project's own directory for the players' feed (C §D4).
 FEED = "feed"
 
@@ -52,11 +56,13 @@ __all__ = [
     "EXCLUDED",
     "FEED",
     "FORMAT",
+    "LAUNCHER_FILE",
     "PATCHLIST_FILE",
     "RECORD_FILE",
     "VERSION_FILE",
     "FeedError",
     "build",
+    "launcher_of",
     "plan",
     "read",
     "read_patchlist",
@@ -240,6 +246,7 @@ def build(
     base=None,
     out=None,
     base_url: str = "http://127.0.0.1/feed/",
+    server: str = "",
     scratch=None,
 ) -> dict:
     """Write the players' feed for what the project holds now.
@@ -247,6 +254,10 @@ def build(
     Refused when the staged tree is **missing** files the base has: the protocol
     replaces and adds, it never removes (`C §D7`), so a feed that lost a file would
     leave players holding content the shard no longer ships.
+
+    *server* is where the game is (`host:port`), and it is written beside the protocol's
+    two files (`launcher.json`): a player is told one URL, and the shard's own settings
+    come from it.
     """
     root = Path(project.root)
     where = Path(out) if out is not None else root / FEED
@@ -284,6 +295,17 @@ def build(
             shutil.copyfile(staged / rel, target)
         write_version(where / VERSION_FILE, version)
         write_patchlist(where / PATCHLIST_FILE, base_url, tree)
+        shard = {
+            "format": FORMAT,
+            "shard": project.name,
+            "feed": base_url,
+            "server": str(server or ""),
+            "version": version,
+            "built": journal_mod.now(),
+        }
+        (where / LAUNCHER_FILE).write_text(
+            json.dumps(shard, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
         record = {
             "format": FORMAT,
             "release": int((releases[-1] if releases else {}).get("number") or 0),
@@ -328,6 +350,20 @@ def _get_text(base: str, name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def launcher_of(where) -> dict:
+    """A shard's own settings, as a feed carries them (`launcher.json`). Missing is a
+    fact: a launcher then has to be told where the game is."""
+    root = Path(where)
+    path = root / LAUNCHER_FILE
+    if not path.is_file():
+        return {}
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
 def read(where) -> dict:
     """A feed, read back: the two protocol files (from a folder or over HTTP) and our
     own record when it is there."""
@@ -343,6 +379,7 @@ def read(where) -> dict:
         "files": len(entries),
         "bytes": sum(entry["size"] for entry in entries),
         "record": {},
+        "launcher": {},
     }
     if _source_of(base) != "url":
         record = Path(base) / RECORD_FILE
@@ -351,6 +388,7 @@ def read(where) -> dict:
                 found["record"] = json.loads(record.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 found["record"] = {}
+        found["launcher"] = launcher_of(base)
     return found
 
 

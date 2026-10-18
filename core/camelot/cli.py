@@ -731,7 +731,12 @@ def cmd_project(args) -> int:
         base_url = args.base_url or shown.get("base_url") or "http://127.0.0.1/feed/"
         try:
             report = feed_mod.build(
-                project, base=args.client, out=args.out, base_url=base_url, scratch=args.scratch
+                project,
+                base=args.client,
+                out=args.out,
+                base_url=base_url,
+                server=args.server,
+                scratch=args.scratch,
             )
         except (feed_mod.FeedError, clientinstall.InstallError) as error:
             print(f"error: {error}", file=sys.stderr)
@@ -739,6 +744,8 @@ def cmd_project(args) -> int:
         print(f"feed {report['version']}  {report['path']}")
         print(f"  {report['files']} file(s) listed · {report['published']} published")
         print(f"  {report['bytes']:,} bytes to fetch · base URL {report['base_url']}")
+        if args.server:
+            print(f"  the game   {args.server} (in {feed_mod.LAUNCHER_FILE})")
         for rel in (report.get("changed") or ())[:10]:
             print(f"    {rel}")
         if len(report.get("changed") or ()) > 10:
@@ -1803,6 +1810,12 @@ def main(argv=None) -> int:
         "(default: what the feed already records)",
     )
     fp2.add_argument("--out", default=None, help="where to write it (default: <project>/feed)")
+    fp2.add_argument(
+        "--server",
+        default="",
+        help="where the game is, host:port — written beside the feed so a "
+        "player only has to be told the feed's URL",
+    )
     fp2.add_argument("--client", help="the base client (default: this machine's own answers)")
     fp2.add_argument(
         "--scratch", default=None, help="where to stage the tree (default: <out>/.staged)"
