@@ -312,32 +312,45 @@ def build(
 # --- the consumer --------------------------------------------------------------
 
 
+def _get_text(base: str, name: str) -> str:
+    """One of the two files, from a directory or from a URL — a player's machine has no
+    feed folder, so a URL is the normal case and a folder is the convenient one."""
+    if _source_of(base) == "url":
+        url = base.rstrip("/") + "/" + name
+        try:
+            with urllib.request.urlopen(url, timeout=30) as answer:
+                return answer.read().decode("utf-8", "replace")
+        except urllib.error.URLError as error:
+            raise FeedError(f"{url}: {error}") from error
+    path = Path(urllib.parse.unquote(urllib.parse.urlparse(base).path or base)) / name
+    if not path.is_file():
+        raise FeedError(f"{path}: no {name} — that is not a feed")
+    return path.read_text(encoding="utf-8")
+
+
 def read(where) -> dict:
-    """A feed, read back: the two protocol files and our own record when it is there."""
-    root = Path(where)
-    version_path = root / VERSION_FILE
-    patchlist_path = root / PATCHLIST_FILE
-    if not version_path.is_file() or not patchlist_path.is_file():
-        raise FeedError(
-            f"{root}: no feed — {VERSION_FILE} and {PATCHLIST_FILE} are what a launcher reads"
-        )
-    base_url, entries = read_patchlist(patchlist_path.read_text(encoding="utf-8"))
+    """A feed, read back: the two protocol files (from a folder or over HTTP) and our
+    own record when it is there."""
+    base = str(where)
+    base_url, entries = read_patchlist(_get_text(base, PATCHLIST_FILE))
+    version = read_version(_get_text(base, VERSION_FILE))
     found = {
-        "path": str(root),
+        "path": base,
         "format": FORMAT,
-        "version": read_version(version_path.read_text(encoding="utf-8")),
+        "version": version,
         "base_url": base_url,
         "entries": entries,
         "files": len(entries),
         "bytes": sum(entry["size"] for entry in entries),
         "record": {},
     }
-    record = root / RECORD_FILE
-    if record.is_file():
-        try:
-            found["record"] = json.loads(record.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            found["record"] = {}
+    if _source_of(base) != "url":
+        record = Path(base) / RECORD_FILE
+        if record.is_file():
+            try:
+                found["record"] = json.loads(record.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                found["record"] = {}
     return found
 
 
@@ -413,9 +426,10 @@ def update(where, client, *, dry_run=False, on_file=None) -> dict:
     if dry_run:
         return {**found, "dry_run": True, "written": []}
     target = Path(client)
+    local = None if _source_of(str(where)) == "url" else str(where)
     written: list[dict] = []
     for row in found["wanted"]:
-        data = _fetch(found["base_url"], row["path"], found["path"])
+        data = _fetch(found["base_url"], row["path"], local)
         path = target / row["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".camelot-tmp")

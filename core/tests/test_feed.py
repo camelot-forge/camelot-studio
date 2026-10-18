@@ -231,7 +231,40 @@ def test_a_file_the_feed_does_not_publish_is_refused_by_name(tmp_path, client):
         feed.update(where, player)
 
 
-def test_the_dry_run_says_what_it_would_write_and_writes_nothing(tmp_path, client):
+def test_a_feed_served_over_http_reads_the_same(tmp_path, client):
+    """A player's machine has no feed folder: the two files come over HTTP, and the
+    file it downloads comes from the base URL the patchlist names — never from the
+    feed folder's last known place."""
+    import http.server
+    import threading
+
+    project = _published(tmp_path, client)
+    where = project.root / feed.FEED
+    report = feed.build(project, base=client, base_url=str(where).replace("\\", "/") + "/")
+    player = tmp_path / "player"
+    feed._link_tree(client, player)
+    _spoil(player / report["changed"][0], b"stale")
+
+    server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), lambda *a: http.server.SimpleHTTPRequestHandler(*a, directory=str(where))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/"
+        read_back = feed.read(url)
+        done = feed.update(url, player)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert read_back["version"] == report["version"]
+    assert read_back["files"] == report["files"]
+    assert [row["path"] for row in done["written"]] == report["changed"]
+    assert _md5(player / report["changed"][0]) == _md5(where / report["changed"][0])
+
+
+def test_a_dry_run_says_what_it_would_write_and_writes_nothing(tmp_path, client):
     project = _published(tmp_path, client)
     report = feed.build(project, base=client, base_url="https://shard.example/patch/")
     player = tmp_path / "player"
