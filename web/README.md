@@ -26,6 +26,14 @@ pnpm lint        # prettier --check + eslint
 pnpm format      # prettier --write
 ```
 
+## The launcher's page (`launcher/`)
+
+`launcher/` is a separate build from the Studio's app: the players' page reads
+one feed and starts the game, and shares the design tokens by file
+(`src/app.css`). `cd launcher && pnpm install && pnpm build` writes `dist/`,
+which `camelot launcher` serves. It is not a route of the Studio and never
+ships in `build/`.
+
 ## Verifying in a browser
 
 The app is served from `build/` by `camelot serve`: `pnpm build`, then reload —

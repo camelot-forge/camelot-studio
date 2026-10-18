@@ -1,0 +1,141 @@
+/* The studio's design system, by file — the launcher shows the same surface, the same
+   tokens, the same font. Only the page's own rules live below. */
+@import '../../src/app.css';
+
+main {
+	max-width: 34rem;
+	margin: 0 auto;
+	padding: 2.5rem 1.5rem 4rem;
+}
+
+h1 {
+	font-size: 1.6rem;
+	font-weight: 500;
+	margin: 0;
+}
+
+.where {
+	color: var(--text-3);
+	font-size: 0.85rem;
+	margin: 0.25rem 0 1.75rem;
+}
+
+.card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 0.6rem;
+	padding: 1rem 1.15rem;
+	margin-bottom: 1rem;
+}
+
+.facts {
+	display: grid;
+	grid-template-columns: 7rem 1fr;
+	gap: 0.4rem 0.75rem;
+	font-size: 0.9rem;
+}
+
+.facts dt {
+	color: var(--text-3);
+}
+
+.facts dd {
+	margin: 0;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+label {
+	display: block;
+	color: var(--text-3);
+	font-size: 0.8rem;
+	margin-bottom: 0.25rem;
+}
+
+input {
+	width: 100%;
+	background: var(--surface-input);
+	border: 1px solid var(--border-input);
+	border-radius: 0.4rem;
+	color: var(--text);
+	padding: 0.5rem 0.6rem;
+	font: inherit;
+}
+
+input:focus {
+	border-color: var(--border-hover);
+	outline: none;
+}
+
+.row {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 0.75rem;
+	margin-bottom: 0.75rem;
+}
+
+.buttons {
+	display: flex;
+	gap: 0.6rem;
+	align-items: center;
+	margin-top: 1rem;
+}
+
+button {
+	font: inherit;
+	border-radius: 0.4rem;
+	padding: 0.55rem 1.1rem;
+	border: 1px solid var(--border-input);
+	background: var(--surface-2);
+	color: var(--text);
+	cursor: pointer;
+}
+
+button.primary {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-ink);
+	font-weight: 500;
+}
+
+button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.bar {
+	flex: 1;
+	height: 0.4rem;
+	background: var(--surface-input);
+	border-radius: 0.2rem;
+	overflow: hidden;
+}
+
+.bar span {
+	display: block;
+	height: 100%;
+	background: var(--accent);
+}
+
+.state {
+	font-size: 0.85rem;
+	color: var(--text-3);
+	margin: 0.75rem 0 0;
+}
+
+.state.ok {
+	color: var(--accent);
+}
+
+.problems {
+	margin: 0.5rem 0 0;
+	padding-left: 1.1rem;
+	color: var(--danger-text);
+	font-size: 0.85rem;
+}
+
+.hint {
+	color: var(--text-4);
+	font-size: 0.8rem;
+	margin-top: 1.5rem;
+}

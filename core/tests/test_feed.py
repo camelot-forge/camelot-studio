@@ -244,8 +244,37 @@ def test_a_feed_served_over_http_reads_the_same(tmp_path, client):
 
     assert read_back["version"] == report["version"]
     assert read_back["files"] == report["files"]
+    assert read_back["launcher"]["shard"] == "Avalon"
+    assert read_back["launcher"]["version"] == report["version"]
     assert [row["path"] for row in done["written"]] == report["changed"]
     assert _md5(player / report["changed"][0]) == _md5(where / report["changed"][0])
+
+
+def test_a_feed_over_http_without_launcher_json_still_announces_its_version(tmp_path, client):
+    """`launcher.json` is ours and optional (`C §D15`): a feed that only speaks the
+    protocol still says its version, and the launcher asks for the game's address
+    instead of calling the feed broken."""
+    import http.server
+    import threading
+
+    _published_project, where = _feed_of(tmp_path, client)
+    version = feed.read(where)["version"]
+    (where / feed.LAUNCHER_FILE).unlink()
+
+    server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        lambda *a: http.server.SimpleHTTPRequestHandler(*a, directory=str(where)),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        peeked = feed.peek(f"http://127.0.0.1:{server.server_port}/")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert peeked["version"] == version
+    assert peeked["launcher"] == {}
 
 
 def test_a_dry_run_says_what_it_would_write_and_writes_nothing(tmp_path, client):

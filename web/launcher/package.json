@@ -1,0 +1,16 @@
+{
+	"name": "launcher",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"preview": "vite preview"
+	},
+	"devDependencies": {
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"svelte": "^5.45.6",
+		"vite": "^7.3.1"
+	}
+}

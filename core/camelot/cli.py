@@ -1273,6 +1273,37 @@ def cmd_mod(args) -> int:
     return 0
 
 
+def cmd_launcher(args) -> int:
+    """The players' launcher: a page on the loopback interface, and the game behind it."""
+    from . import launcher as launcher_mod
+
+    try:
+        settings = launcher_mod.read_settings(args.settings)
+    except launcher_mod.LauncherError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    if args.feed:
+        settings["feed"] = args.feed
+    if args.client:
+        settings["client"] = args.client
+    if args.account:
+        settings["account"] = args.account
+    if args.server:
+        settings["server"] = args.server
+    launcher_mod.write_settings(settings, args.settings)
+    try:
+        return launcher_mod.serve(
+            settings,
+            page=args.page or launcher_mod._default_page(),
+            host=args.host,
+            port=args.port,
+            open_browser=not args.no_open,
+        )
+    except launcher_mod.LauncherError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+
 def cmd_client(args) -> int:
     """Apply a mod's client half, and read the client back."""
     from . import clientinstall
@@ -1704,6 +1735,18 @@ def main(argv=None) -> int:
     )
     rp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
     p.set_defaults(func=cmd_env)
+
+    p = sub.add_parser("launcher", help="the players' launcher: a page, and the game")
+    p.add_argument("--feed", help="the shard's feed URL (a player types this once)")
+    p.add_argument("--client", help="the game client's folder")
+    p.add_argument("--account", help="the account to fill in (never a password)")
+    p.add_argument("--server", help="where the game is, when the feed does not say")
+    p.add_argument("--settings", help="this launcher's own settings file")
+    p.add_argument("--page", help="the built page (default: web/launcher/dist)")
+    p.add_argument("--host", default="127.0.0.1", help="the interface (default: 127.0.0.1)")
+    p.add_argument("--port", type=int, default=8710, help="the port (default: 8710)")
+    p.add_argument("--no-open", action="store_true", help="do not open a browser")
+    p.set_defaults(func=cmd_launcher)
 
     p = sub.add_parser("project", help="the project: the whole content of one server")
     pp = p.add_subparsers(dest="project_cmd", required=True)

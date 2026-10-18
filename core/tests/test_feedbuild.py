@@ -53,8 +53,8 @@ def test_the_feed_publishes_only_what_differs_from_the_base(
 
 def test_the_feed_refuses_a_tree_that_lost_a_file(
     tmp_path,
-    client,
-    monkeypatch,  # noqa: F811  (the fixture the import names)
+    client,  # noqa: F811  (the fixture the import names)
+    monkeypatch,
 ):
     """A release can remove a client file (the author's install does, exactly), and the
     protocol cannot (`C §D7`): a feed built from a tree that lost one would leave

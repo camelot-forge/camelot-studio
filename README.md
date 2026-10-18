@@ -21,8 +21,10 @@ private-server community.
 > holds the whole content of one shard, and content leaves it as numbered,
 > immutable **releases** — a server package and a client update — promoted
 > unchanged through environments (`local`, optional `staging`, `production`)
-> and published as a feed the players' launcher reads. None of this is built
-> yet: it is a proposal, designed in the private workspace's `notes/`.
+> and published as a feed the players' launcher reads. The project, releases,
+> environments, the local test server and the players' launcher are built
+> (P1–P6); the Console (P7) and the re-base (P8) are next. The design lives in
+> the private workspace's `notes/`.
 
 **Principle: engine fidelity.** The project aims to reproduce the client's
 own behaviour — same tables, order and values — and to make every approximation
@@ -47,6 +49,7 @@ together. Camelot Studio covers that layer on top of formats handled by pyffi
 camelot-studio/
 ├── core/            # Python 3.11+: camelot CLI (NIF/KFA, glTF, roundtrip, batch…)
 ├── web/             # (M1) Svelte + three.js viewer: figures & animations
+│   └── launcher/    # (P6) the players' page: one feed, Update, Play
 ├── addon/           # (M2) Blender addon: UI shell around core/
 ├── server-bridge/   # (M2) artifacts/integration with the OpenDAoC emulator (C#)
 └── docs/            # DAoC format specs & journals (contract between layers)
@@ -81,6 +84,22 @@ Examples:
 # local asset library + viewer (daemon; serves the built web/ UI + API)
 .venv/bin/camelot serve
 ```
+
+### The players' launcher
+
+`camelot launcher` is the players' own surface: a page on `127.0.0.1` and the
+two things a browser cannot do — update the client and start the game. It reads
+one feed URL; the shard's name, version and game address come from the feed's
+`launcher.json`.
+
+```sh
+.venv/bin/camelot launcher --feed /path/to/feed/ --client "$DAOC_CLIENT"
+```
+
+The page's source is `web/launcher/`; its built `dist/` is what the command
+serves, and `cd web/launcher && pnpm install && pnpm build` rebuilds it. On
+Linux the game runs under Wine (`wine` and `wineprefix` in the launcher's
+settings); on Windows, directly.
 
 Set `DAOC_CLIENT` to your client directory to validate against the real
 corpus (`camelot batch` rewrites `DAOC CLIENT/...` manifest paths from it).

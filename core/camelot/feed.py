@@ -57,6 +57,7 @@ __all__ = [
     "VERSION_FILE",
     "FeedError",
     "launcher_of",
+    "peek",
     "plan",
     "read",
     "read_patchlist",
@@ -183,16 +184,39 @@ def _get_text(base: str, name: str) -> str:
 
 def launcher_of(where) -> dict:
     """A shard's own settings, as a feed carries them (`launcher.json`). Missing is a
-    fact: a launcher then has to be told where the game is."""
-    root = Path(where)
-    path = root / LAUNCHER_FILE
-    if not path.is_file():
-        return {}
+    fact: a launcher then has to be told where the game is — and a feed read over HTTP
+    may not carry the file at all, which is not an error either."""
+    base = str(where)
+    if _source_of(base) == "url":
+        try:
+            text = _get_text(base, LAUNCHER_FILE)
+        except FeedError:
+            return {}
+    else:
+        path = Path(base) / LAUNCHER_FILE
+        if not path.is_file():
+            return {}
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            return {}
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        document = json.loads(text)
+    except json.JSONDecodeError:
         return {}
     return document if isinstance(document, dict) else {}
+
+
+def peek(base) -> dict:
+    """What a feed *announces*, without its list: the version, and the shard's own
+    settings. That is what a launcher shows before it decides to walk a client — the
+    patchlist can be megabytes, and a page that loads in a second is worth one."""
+    base = str(base)
+    return {
+        "path": base,
+        "version": read_version(_get_text(base, VERSION_FILE)),
+        "launcher": launcher_of(base),
+    }
 
 
 def read(where) -> dict:
@@ -219,7 +243,7 @@ def read(where) -> dict:
                 found["record"] = json.loads(record.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 found["record"] = {}
-        found["launcher"] = launcher_of(base)
+    found["launcher"] = launcher_of(base)
     return found
 
 
