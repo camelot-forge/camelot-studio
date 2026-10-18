@@ -97,7 +97,9 @@ distributed launcher carries `shard.json` beside the executable:
 
 The page never asks for the feed URL. `--feed` / `CAMELOT_FEED_URL` override it
 for a development run; the game address comes from the feed's `launcher.json`,
-with `--server` / `CAMELOT_GAME_SERVER` as an override.
+with `--server` / `CAMELOT_GAME_SERVER` as an override. `Play` is refused while
+the client is behind the feed — the page disables it and the process re-checks
+(`C §D17`); `Update` is the only way through.
 
 ```sh
 .venv/bin/camelot launcher --feed /path/to/feed/ --client "$DAOC_CLIENT"

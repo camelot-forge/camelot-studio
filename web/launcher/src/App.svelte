@@ -180,13 +180,16 @@
 			<div class="buttons">
 				<button
 					class="primary"
-					disabled={busy || !account || !password || !state.shard.server}
+					disabled={busy || !account || !password || !state.shard.server || !state.up_to_date}
 					onclick={start_play}
 				>
 					Play
 				</button>
 				<button disabled={busy} onclick={save}>Remember</button>
 			</div>
+			{#if !state.up_to_date}
+				<p class="state">an update is waiting — Update is what makes Play possible</p>
+			{/if}
 			{#if said}<p class="state">{said}</p>{/if}
 		</div>
 

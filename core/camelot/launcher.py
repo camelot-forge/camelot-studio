@@ -343,8 +343,22 @@ def command(
 
 def play(settings: dict, *, account: str, password: str, system: str | None = None):
     """Start the game, from the client's folder. What runs keeps the launcher's own
-    output: a client that cannot start says why in *its* words, not ours."""
+    output: a client that cannot start says why in *its* words, not ours.
+
+    Refuses while the client is behind the feed (`C §D17`): the page disables Play,
+    and this check is the gate — a page in a browser is not one."""
     argv = command(settings, account=account, password=password, system=system)
+    found = state(settings)
+    if not found.get("up_to_date"):
+        if found["problems"]:
+            raise LauncherError("; ".join(found["problems"]))
+        installed = found.get("installed")
+        published = (found.get("shard") or {}).get("version")
+        raise LauncherError(
+            "an update is waiting — the client is at "
+            f"{installed if installed is not None else 'nothing installed'}, the shard "
+            f"publishes {published}: Update first"
+        )
     client = Path(str(settings["client"])).expanduser()
     environment = dict(os.environ)
     if not (system or sys.platform).startswith("win"):

@@ -328,7 +328,8 @@ def test_the_command_is_what_the_operators_scripts_call(tmp_path, client):  # no
 def test_play_starts_the_client_from_the_clients_own_folder(tmp_path, client, monkeypatch):  # noqa: F811  (the fixture the import names)
     """The game runs *in* the client's folder (its data files are relative to it), and a
     Linux run carries the player's Wine prefix."""
-    settings, player, _where, _report = _ready(tmp_path, client)
+    settings, player, _where, report = _ready(tmp_path, client)
+    settings["installed"] = report["version"]
     settings["wineprefix"] = "/tmp/prefix"
     seen: dict = {}
 
@@ -344,6 +345,19 @@ def test_play_starts_the_client_from_the_clients_own_folder(tmp_path, client, mo
     assert seen["cwd"] == str(player) and seen["shell"] is False
     assert seen["env"]["WINEPREFIX"] == "/tmp/prefix"
     assert seen["argv"][-2:] == ["forge", "pw"]
+
+
+def test_play_refuses_while_the_client_is_behind_the_feed(tmp_path, client):  # noqa: F811  (the fixture the import names)
+    """`C §D17`: a player must not enter the shard with content it no longer publishes.
+    The page disables Play; the process is the gate behind it."""
+    settings, _player, _where, report = _ready(tmp_path, client)
+
+    with pytest.raises(launcher.LauncherError, match="update is waiting"):
+        launcher.play(settings, account="forge", password="pw", system="linux")
+
+    settings["installed"] = report["version"] - 1 if report["version"] > 1 else 0
+    with pytest.raises(launcher.LauncherError, match="update is waiting"):
+        launcher.play(settings, account="forge", password="pw", system="linux")
 
 
 # --- the page's own routes -----------------------------------------------------
@@ -394,6 +408,16 @@ def test_the_routes_say_the_state_save_the_settings_and_refuse_what_they_should(
             _call(server, "/api/play", method="POST", body={"password": ""})
         assert refused.value.code == 400
         assert "account" in json.loads(refused.value.read().decode("utf-8"))["error"]
+
+        with pytest.raises(urllib.error.HTTPError) as stale:
+            _call(
+                server,
+                "/api/play",
+                method="POST",
+                body={"account": "forge", "password": "pw"},
+            )
+        assert stale.value.code == 400
+        assert "update is waiting" in json.loads(stale.value.read().decode("utf-8"))["error"]
 
         with pytest.raises(urllib.error.HTTPError) as missing:
             _call(server, "/api/nothing")
