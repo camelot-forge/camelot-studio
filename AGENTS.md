@@ -28,6 +28,12 @@ fixes**:
   docstrings, READMEs, docs, commit messages, issue titles, CLI help text.
 - Code identifiers (variable/function names) are English.
 - Questions, PR descriptions and reviews are in English too.
+- Some MANDATORY elements when you write to me or when you write code/documents/UI:
+  - No catchphrases
+  - No bullshit AI made up phrases
+  - the action and its result, in its own words
+- Worked examples of that rule (what was wrong, what replaced it):
+  `workspace/notes/ui-modernization.md` § Copy.
 
 ## Testing (TDD by default)
 
@@ -83,10 +89,68 @@ Two MCP servers overlap on purpose; use each for its strength:
 - The subagent is read-only — it reports issues, the main agent fixes them.
   Do the browser pass yourself only when explicitly needed in-thread.
 
+### The Playwright MCP (the agent drives a browser in-thread)
+
+`browser_navigate` / `browser_snapshot` / `browser_click` / `browser_type` /
+`browser_evaluate` / `browser_console_messages` / `browser_network_requests`
+are in the agent's own tool list: a real browser, no subagent, no screenshot
+round-trip. Use it to *read* the running app — a label, the status bar, the
+console after a click, a question the probes do not assert. The probes stay
+the contract: they are versioned, deterministic and run per slice; an MCP
+session is not a regression net.
+
+Verified working 2026-10-16, on `/world` and `/` (a figure loaded from the
+library) against the operator's daemon: 0 page errors; the page loads and the
+inspector's cards read as they should. The one console error seen — a 404 on
+`/api/v1/assets/<id>/anim` — is *expected*: a figure with no animation answers
+404 and the card says so. Snapshots and console logs land in `.playwright-mcp/`
+at the **workspace root** — outside both repositories, so nothing to ignore.
+
+Setup on this host (Zed `context_servers.playwright`):
+
+```json
+"args": [
+  "@playwright/mcp@latest", "--headless", "--isolated",
+  "--executable-path", "/home/you/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome"
+]
+```
+
+The path goes in **unquoted**: wrapped in quotes, Playwright looks for a file
+whose name contains them and reports `executable doesn't exist at
+"…/chrome"` — the failure mode to recognise before doubting the binary.
+
+Without `--executable-path` the server asks for the **Chrome channel** and
+fails to start ("Chromium distribution 'chrome' is not found").
+`npx playwright install chrome` is no way out on this host: it switches to root
+and refuses Pika (`ERROR: cannot install on pika distribution`). The MCP pins
+its **own alpha Playwright** (`@playwright/mcp@0.0.83` → `1.64.0-alpha-…`),
+whose Chromium revision is not the one `web/` installed (`1.63.0` →
+`chromium-1243`) — which is why the explicit `--executable-path` is the
+combination that works, and why it must be re-checked after an MCP upgrade
+(`ls ~/.cache/ms-playwright`). Fallback if that build ever mismatches over the
+protocol: `npx playwright install chromium` (a download, no apt) and a
+`--config` file with `{"browser": {"browserName": "chromium"}}`.
+
+Caveats:
+
+- **WebGL.** Verified 2026-10-16: the canvas renders and the app reads it
+  back (GL `GPU stall due to ReadPixels` warnings, 0 console errors). The
+  probes' `--use-gl=swiftshader --enable-unsafe-swiftshader` stays what makes
+  *them* deterministic on a GPU-less runner; it is not a limitation of the MCP
+  on this host.
+- **Never write into the operator's daemon.** Port 8760 is their session on
+  `/tmp/ux-session` (`notes` in the workspace; the product's own
+  default port): read there, never edit. Anything that edits gets its own
+  scratch daemon (`--project /tmp/<name>`, port 8761+ so it never takes the
+  session's) — the rule the probes already follow.
+- The app is served from `web/build`: `pnpm build`, then reload. The running
+  daemon serves the new files without a restart (static assets are read per
+  request).
+
 ## Comments
 
 - Don't over-comment. Comments must explain **intent, constraints or
-  trade-offs** — never restate the code.
+  trade-offs**.
 - Docstrings describe the *why* and the contract, not the implementation.
 
 ## Struct
@@ -130,3 +194,5 @@ Two MCP servers overlap on purpose; use each for its strength:
 ## Misc
 
 - If you use a tool and have an issue with it, stop what you are doing and tell the user about it. We must have a perfect workflow and not fallback to another tool.
+- Don't overthink things, don't be zealous, be direct when you think and talk.
+- If you already proved something, don't do it twice and don't lose time.
