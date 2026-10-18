@@ -485,8 +485,13 @@ def describe(project: project_mod.Project, env: str) -> dict:
 
 def verify(project: project_mod.Project, env: str, *, connect=None) -> dict:
     """Read the environment back: the database answers and is the one the record
-    names, its tables are the baseline's own count, and the tables the project
-    owns are there. Nothing here writes."""
+    names, it still holds the tables the import made, and the tables the project
+    owns are there. Nothing here writes.
+
+    A server that has run creates tables of its own, so **more** tables than the
+    import made is a fact, not a fault — the report counts them apart. Fewer is a
+    fault: tables went missing, or this is not the database that was provisioned.
+    """
     env_root = folder(project, env)
     recorded = read_record(env_root)
     if not recorded:
@@ -507,8 +512,11 @@ def verify(project: project_mod.Project, env: str, *, connect=None) -> dict:
     except serverrows.mysql_errors() as error:
         problems.append(f"the database did not answer: {error}")
     expected = int(recorded.get("tables") or 0)
-    if tables and expected and len(tables) != expected:
-        problems.append(f"{len(tables)} table(s) in the database, the record says {expected}")
+    if tables and expected and len(tables) < expected:
+        problems.append(
+            f"{len(tables)} table(s) in the database, the record says {expected} — "
+            "tables went missing, or this is not the database that was provisioned"
+        )
     problems += [
         f"{name}: the table the project writes is not in the database"
         for name, facts in sorted(targets.OWNED_TABLES.items())
@@ -520,6 +528,7 @@ def verify(project: project_mod.Project, env: str, *, connect=None) -> dict:
         "root": str(env_root),
         "database": connection["database"],
         "tables": len(tables),
+        "extra": max(0, len(tables) - expected) if expected else 0,
         "baseline": recorded.get("baseline") or {},
         "installer": {
             "state": bool(state.get("releases")),

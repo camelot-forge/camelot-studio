@@ -333,6 +333,26 @@ def test_verify_reads_the_environment_back(tmp_path, client):
     assert report["installer"]["state"] is False
 
 
+def test_verify_does_not_mind_tables_a_running_server_added(tmp_path, client):
+    """The operator's core makes a table of its own at boot (`camelotmod`,
+    measured 2026-10-18): more tables than the import made is a fact, not a
+    fault. Fewer is a fault — that is what "the record says 110" is for."""
+    project, _env_root, _baseline_dir, server = _ready(tmp_path, client)
+    envs.provision(project, "local", yes=True, connect=server.connect)
+    server.tables = [*server.tables, "camelotmod"]
+
+    report = envs.verify(project, "local", connect=server.connect)
+
+    assert report["ok"] is True and report["extra"] == 1 and report["tables"] == 6
+
+    server.tables = ["ability", "door"]
+
+    lost = envs.verify(project, "local", connect=server.connect)
+
+    assert lost["ok"] is False
+    assert any("tables went missing" in problem for problem in lost["problems"])
+
+
 def test_verify_names_a_table_the_project_writes_that_is_gone(tmp_path, client):
     project, _env_root, _baseline_dir, server = _ready(tmp_path, client)
     envs.provision(project, "local", yes=True, connect=server.connect)

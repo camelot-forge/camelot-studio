@@ -399,6 +399,11 @@ def cmd_env(args) -> int:
             print(f"{args.env}  {report['root']}  {report['database']}  {report['tables']} table(s)")
             for problem in report["problems"]:
                 print(f"  {problem}")
+            if report["extra"]:
+                print(
+                    f"  the import made {report['tables'] - report['extra']} table(s): "
+                    f"the database holds {report['tables']}"
+                )
             return 0 if report["ok"] else 1
         if args.env_cmd == "apply":
             report = envs.apply(project, args.env, release=args.release)
