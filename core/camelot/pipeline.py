@@ -23,6 +23,7 @@ What this module does not do: it never talks to a running server (S §D1, R
 the feed (C, phase P6). `promote()` moves the same bytes to the next
 environment, never a rebuild (§D4).
 """
+
 from __future__ import annotations
 
 import json
@@ -329,8 +330,7 @@ def _id_refusals(record: dict, root, env: str) -> tuple[list[str], int]:
             other = held.get(str(zone), {}).get(int(row_id))
             if other is not None:
                 refusals.append(
-                    f"id {row_id} in zone {zone} is already held by release {other} "
-                    f"in {env}"
+                    f"id {row_id} in zone {zone} is already held by release {other} in {env}"
                 )
     return refusals, checked
 
@@ -347,9 +347,7 @@ def _client_refusal(record: dict, env_client: Path) -> str | None:
     wanted = ((record.get("base") or {}).get("client") or {}).get("build")
     found = contract.client_build(str(env_client))
     if wanted and found and str(wanted) != str(found):
-        return (
-            f"the target is client build {found}, the release was built against {wanted}"
-        )
+        return f"the target is client build {found}, the release was built against {wanted}"
     return None
 
 
@@ -380,9 +378,7 @@ def plan(root, number, *, env, adopt=False) -> dict:
             for item in items:
                 if item["family"] == "client":
                     item["verdict"], item["why"] = "refused", reason
-    refusals += [
-        f"{item['what']}: {item['why']}" for item in items if item["verdict"] == "drift"
-    ]
+    refusals += [f"{item['what']}: {item['why']}" for item in items if item["verdict"] == "drift"]
     id_refusals, checked = _id_refusals(record, root, str(env))
     if id_refusals:
         refusals += id_refusals
@@ -422,9 +418,7 @@ def _deploy_client(record: dict, root, table: dict, env_root: Path, *, adopt: bo
     the same code that produces the local environment's client and the staged
     tree the feed publishes (C §2)."""
     pack_path, _ = _pack(record, root)
-    report = clientinstall.install_pack(
-        str(client_of(env_root)), str(pack_path), adopt=adopt
-    )
+    report = clientinstall.install_pack(str(client_of(env_root)), str(pack_path), adopt=adopt)
     wrote = [f"{CLIENT}/{rel}" for rel in report.get("changed") or ()]
     if any(item["what"] == STATE for item in _writes(table)):
         wrote.append(f"{CLIENT}/{STATE}")
@@ -537,9 +531,11 @@ def live(root, *, env=None) -> dict[str, dict]:
 
 
 def feed(root) -> dict:
-    """What the players can fetch, read from the project's own `feed/` (C §D4):
-    the launcher's two text files, and our record beside them. A feed that is
-    not there yet is a fact, not an error — building it is P6."""
+    """What the players can fetch, read from the project's own `feed/` (C §D4): the
+    launcher's two files, and our record beside them. A feed that is not there yet is a
+    fact, not an error — `camelot project feed` is what builds one."""
+    from . import feed as feed_mod
+
     where = Path(root) / FEED
     found: dict = {
         "path": str(where),
@@ -547,34 +543,27 @@ def feed(root) -> dict:
         "version": None,
         "files": 0,
         "bytes": 0,
+        "published": 0,
+        "published_bytes": 0,
         "release": None,
     }
     if not found["present"]:
         return found
-    version = where / "version-new.txt"
-    if version.is_file():
-        text = version.read_text(encoding="utf-8").strip()
-        found["version"] = int(text) if text.isdigit() else (text or None)
-    patchlist = where / "patchlist-new.txt"
-    if patchlist.is_file():
-        lines = patchlist.read_text(encoding="utf-8").splitlines()
-        # line 1 is the base URL the launcher downloads from; the rest are
-        # `path \t md5 \t size` (C §3)
-        found["files"] = max(0, len(lines) - 1)
-        found["bytes"] = sum(
-            int(parts[2])
-            for parts in (line.split("\t") for line in lines[1:])
-            if len(parts) >= 3 and parts[2].strip().isdigit()
-        )
-    record = where / "release.json"
-    if record.is_file():
-        try:
-            found["release"] = int(
-                json.loads(record.read_text(encoding="utf-8")).get("release")
-            )
-        except (ValueError, TypeError, OSError):
-            found["release"] = None
-    return found
+    try:
+        read_back = feed_mod.read(where)
+    except feed_mod.FeedError:
+        return found  # a folder without the two files is not a feed yet
+    record = read_back["record"] or {}
+    return {
+        **found,
+        "version": read_back["version"],
+        "files": read_back["files"],
+        "bytes": read_back["bytes"],
+        "published": len(record.get("changed") or ()),
+        "published_bytes": int(record.get("bytes") or 0),
+        "release": record.get("release"),
+        "base_url": read_back["base_url"],
+    }
 
 
 def verify(root, *, env) -> dict:

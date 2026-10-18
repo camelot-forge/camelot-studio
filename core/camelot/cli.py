@@ -34,6 +34,7 @@ Paths in the manifest starting with ``DAOC CLIENT/`` are resolved against the
 ``DAOC_CLIENT`` environment variable when set (the manifest format predates
 the env var and keeps those literal prefixes).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -55,7 +56,7 @@ def resolve_path(p: str) -> str:
     """Rewrite a manifest path against $DAOC_CLIENT when applicable."""
     client = os.environ.get("DAOC_CLIENT")
     if client and p.startswith(MANIFEST_CLIENT_PREFIX):
-        return os.path.join(client, p[len(MANIFEST_CLIENT_PREFIX):])
+        return os.path.join(client, p[len(MANIFEST_CLIENT_PREFIX) :])
     return p
 
 
@@ -124,8 +125,10 @@ def cmd_gltf(args) -> int:
                 rate = fps / native_fps(pose)
                 pose_time = args.pose_time * rate
                 if not args.quiet:
-                    print(f"  anim timing: {frames:g} frames @ {fps:g}fps "
-                          f"(rate {rate:.3g}, loop {frames / fps:.3g}s)")
+                    print(
+                        f"  anim timing: {frames:g} frames @ {fps:g}fps "
+                        f"(rate {rate:.3g}, loop {frames / fps:.3g}s)"
+                    )
     kwargs = {
         "verbose": not args.quiet,
         "emit_skinned": args.skinned,
@@ -206,7 +209,9 @@ def cmd_batch(args) -> int:
             types = Counter(block_types(data))
             line = f"READ OK  {p}  version={ver} blocks={nb}"
             if is_legacy(data) or args.read_only:
-                line += "  RT=N/A (read-only mode)" if args.read_only else "  RT=N/A (legacy read-only)"
+                line += (
+                    "  RT=N/A (read-only mode)" if args.read_only else "  RT=N/A (legacy read-only)"
+                )
                 n_na += 1
                 n_ok += 1
             else:
@@ -215,7 +220,10 @@ def cmd_batch(args) -> int:
                     store(data, tmp)
                     data2 = load(tmp)
                 ok = (data2.version, len(data2.blocks), Counter(block_types(data2))) == (
-                    data.version, nb, types)
+                    data.version,
+                    nb,
+                    types,
+                )
                 line += f"  RT={'OK' if ok else 'DIFF'}"
                 n_ok += 1 if ok else 0
                 n_diff += 0 if ok else 1
@@ -226,11 +234,19 @@ def cmd_batch(args) -> int:
             print(f"[{i}/{len(paths)}] ERROR {p}: {type(e).__name__}: {e}", flush=True)
         if i % 25 == 0 or i == len(paths):
             el = time.time() - t0
-            print(f"[{i}/{len(paths)}] {el:.1f}s elapsed ({el/max(i,1):.2f}s/file) "
-                  f"ok={n_ok} err={n_err} absent={n_absent}", flush=True)
-    lines += ["", (f"summary: {n_ok} OK, {n_diff} DIFF (reorder), "
-                 f"{n_na} N/A (read-only), {n_absent} absent, "
-                 f"{n_err} parse errors")]
+            print(
+                f"[{i}/{len(paths)}] {el:.1f}s elapsed ({el / max(i, 1):.2f}s/file) "
+                f"ok={n_ok} err={n_err} absent={n_absent}",
+                flush=True,
+            )
+    lines += [
+        "",
+        (
+            f"summary: {n_ok} OK, {n_diff} DIFF (reorder), "
+            f"{n_na} N/A (read-only), {n_absent} absent, "
+            f"{n_err} parse errors"
+        ),
+    ]
     dest = args.out or "work/camelot_batch.txt"
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
     with open(dest, "w", encoding="utf-8") as fh:
@@ -257,14 +273,18 @@ def cmd_mpak(args) -> int:
             with open(path, "rb") as fh:
                 replacements[name] = fh.read()
         repack_mpak(args.archive, args.out, replacements)
-        print(f"wrote {args.out} ({len(replacements)} entr{'y' if len(replacements) == 1 else 'ies'} replaced)")
+        print(
+            f"wrote {args.out} ({len(replacements)} entr{'y' if len(replacements) == 1 else 'ies'} replaced)"
+        )
         return 0
 
     if args.mpak_cmd == "list":
         a = MpakArchive(args.archive)
         try:
-            print(f"# {os.path.basename(args.archive)} (internal name: {a.name!r}) "
-                  f"— {len(a.entries)} entries")
+            print(
+                f"# {os.path.basename(args.archive)} (internal name: {a.name!r}) "
+                f"— {len(a.entries)} entries"
+            )
             for e in sorted(a.entries):
                 print(f"  {e}")
         finally:
@@ -303,7 +323,11 @@ def cmd_server(args) -> int:
         # content is ours, state is theirs.
         for name, facts in sorted(targets.OWNED_TABLES.items()):
             note = facts.get("client")
-            kind = "write" if facts.get("write") else (f"read · the client's {note}" if note else "read")
+            kind = (
+                "write"
+                if facts.get("write")
+                else (f"read · the client's {note}" if note else "read")
+            )
             print(f"  {name:<14} {facts.get('key')!s:<16} {kind}")
         print(f"  {len(targets.OWNED_TABLES)} table(s): the content this project may name")
         return 0
@@ -312,8 +336,11 @@ def cmd_server(args) -> int:
         print("error: pass exactly one of --config or --dsn", file=sys.stderr)
         return 2
     try:
-        connection = (serverrows.parse_server_config(args.config) if args.config
-                      else serverrows.parse_dsn(args.dsn))
+        connection = (
+            serverrows.parse_server_config(args.config)
+            if args.config
+            else serverrows.parse_dsn(args.dsn)
+        )
         snapshot = serverrows.export_snapshot(connection, args.out)
     except serverrows.ServerRowsError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -342,6 +369,7 @@ def cmd_env(args) -> int:
         return 1
     try:
         if args.env_cmd == "provision":
+
             def step(path: Path) -> None:
                 print(f"  importing {path.name} …", flush=True)
 
@@ -371,7 +399,9 @@ def cmd_env(args) -> int:
                 print(f"  applied    {len(done)} release(s), oldest first")
                 print_applied(done)
             else:
-                print("  content    none handed over yet — `camelot project deploy` is what puts one here")
+                print(
+                    "  content    none handed over yet — `camelot project deploy` is what puts one here"
+                )
             print(f"  record   {envs.record_path(envs.folder(project, args.env))}")
             return 0
         if args.env_cmd == "status":
@@ -396,7 +426,9 @@ def cmd_env(args) -> int:
             return 0
         if args.env_cmd == "verify":
             report = envs.verify(project, args.env)
-            print(f"{args.env}  {report['root']}  {report['database']}  {report['tables']} table(s)")
+            print(
+                f"{args.env}  {report['root']}  {report['database']}  {report['tables']} table(s)"
+            )
             for problem in report["problems"]:
                 print(f"  {problem}")
             if report["extra"]:
@@ -409,8 +441,7 @@ def cmd_env(args) -> int:
             report = envs.apply(project, args.env, release=args.release)
             if report["unchanged"]:
                 print(
-                    f"{args.env} holds release {report['release']:04d} already: "
-                    "nothing was written"
+                    f"{args.env} holds release {report['release']:04d} already: nothing was written"
                 )
                 return 0
             print(f"applied {len(report['applied'])} release(s) to {args.env}, oldest first")
@@ -682,6 +713,37 @@ def cmd_project(args) -> int:
             print(line)
         return 0
 
+    if args.project_cmd == "feed":
+        from . import clientinstall
+        from . import feed as feed_mod
+        from . import pipeline as pipe
+
+        shown = pipe.feed(project.root)
+        if args.read:
+            if not shown["present"]:
+                print(f"no feed at {shown['path']}")
+                return 1
+            print(f"feed {shown['version']}  {shown['path']}  {shown['files']} file(s)")
+            print(f"  files      {shown['published']} published · {shown['bytes']:,} bytes listed")
+            print(f"  base URL   {shown['base_url']}")
+            print(f"  release    {shown['release']}")
+            return 0
+        base_url = args.base_url or shown.get("base_url") or "http://127.0.0.1/feed/"
+        try:
+            report = feed_mod.build(
+                project, base=args.client, out=args.out, base_url=base_url, scratch=args.scratch
+            )
+        except (feed_mod.FeedError, clientinstall.InstallError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(f"feed {report['version']}  {report['path']}")
+        print(f"  {report['files']} file(s) listed · {report['published']} published")
+        print(f"  {report['bytes']:,} bytes to fetch · base URL {report['base_url']}")
+        for rel in (report.get("changed") or ())[:10]:
+            print(f"    {rel}")
+        if len(report.get("changed") or ()) > 10:
+            print(f"    … and {len(report['changed']) - 10} more")
+        return 0
     if args.project_cmd == "envs":
         from . import pipeline as pipe
 
@@ -719,9 +781,7 @@ def cmd_project(args) -> int:
                 print_plan(table)
                 return 1 if table["refusals"] else 0
             else:
-                report = pipe.deploy(
-                    project.root, args.number, env=args.env, adopt=args.adopt
-                )
+                report = pipe.deploy(project.root, args.number, env=args.env, adopt=args.adopt)
         except (pipe.PipelineError, projects.ProjectError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
@@ -748,9 +808,7 @@ def cmd_project(args) -> int:
         except (pipe.PipelineError, projects.ProjectError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
-        held = (
-            f"release {int(report['release']):04d}" if report["release"] else "nothing deployed"
-        )
+        held = f"release {int(report['release']):04d}" if report["release"] else "nothing deployed"
         print(f"{report['env']}  {report['root']}  {held}")
         for item in report["server"]["files"]:
             print(f"  {'ok' if item['ok'] else 'MISSING':<8} {item['what']}")
@@ -813,14 +871,12 @@ def cmd_serve(args) -> int:
     host = args.host or DEFAULT_HOST
     port = args.port or DEFAULT_PORT
     if host not in ("127.0.0.1", "localhost", "::1") and not args.allow_remote:
-        print(f"refusing to bind {host}: pass --allow-remote to expose the daemon",
-              file=sys.stderr)
+        print(f"refusing to bind {host}: pass --allow-remote to expose the daemon", file=sys.stderr)
         return 2
 
     static_dir = args.static or _default_static_dir()
     if static_dir is None:
-        print("note: no built viewer found (run `pnpm build` in web/); API only",
-              file=sys.stderr)
+        print("note: no built viewer found (run `pnpm build` in web/); API only", file=sys.stderr)
 
     from .serve.app import create_app
 
@@ -915,8 +971,11 @@ def cmd_pack(args) -> int:
     print(f"reading {client} ...", flush=True)
     try:
         manifest = contract_mod.build_player_manifest(
-            client, pack_id=args.id, version=args.version,
-            material=args.material, with_states=not args.no_states,
+            client,
+            pack_id=args.id,
+            version=args.version,
+            material=args.material,
+            with_states=not args.no_states,
         )
     except (OSError, ValueError, KeyError, IndexError) as exc:
         print(f"contract: build failed: {exc}", file=sys.stderr)
@@ -932,10 +991,14 @@ def cmd_pack(args) -> int:
             return 2
         logical_id, kind, rig = parts[0], parts[1], parts[2]
         try:
-            manifest.figures.append(contract_mod.Figure(
-                logical_id=logical_id, figure_id=int(parts[3]) if len(parts) > 3 else 0,
-                kind=kind, rig=rig or None,
-            ))
+            manifest.figures.append(
+                contract_mod.Figure(
+                    logical_id=logical_id,
+                    figure_id=int(parts[3]) if len(parts) > 3 else 0,
+                    kind=kind,
+                    rig=rig or None,
+                )
+            )
         except ValueError as exc:
             print(f"contract: --add-figure {spec!r}: {exc}", file=sys.stderr)
             return 2
@@ -1007,8 +1070,7 @@ def cmd_pack(args) -> int:
         try:
             from .targets import TARGETS
 
-            written = write_targets(manifest, args.out,
-                                    targets=args.target or list(TARGETS))
+            written = write_targets(manifest, args.out, targets=args.target or list(TARGETS))
         except (OSError, ValueError, KeyError, IndexError) as exc:
             print(f"contract: projection failed: {exc}", file=sys.stderr)
             return 1
@@ -1019,8 +1081,10 @@ def cmd_pack(args) -> int:
         print("emitting the creature spawn package ...", flush=True)
         try:
             rel = write_creatures(
-                args.out, limit=args.creatures or None,
-                mod_id=args.id, version=args.version,
+                args.out,
+                limit=args.creatures or None,
+                mod_id=args.id,
+                version=args.version,
             )
         except (OSError, ValueError, KeyError, IndexError) as exc:
             print(f"contract: creature package failed: {exc}", file=sys.stderr)
@@ -1031,11 +1095,15 @@ def cmd_pack(args) -> int:
     # Merge, never replace: emit_artifacts has already hashed the content
     # files, and overwriting here would leave the lock covering only the
     # report while the manifest claims to pin the GLBs.
-    manifest.artifacts.update(contract_mod.artifact_hashes({
-        os.path.join("reports", "validation.json"): (
-            json.dumps(payload, indent=2, sort_keys=True) + "\n"
-        ).encode("utf-8"),
-    }))
+    manifest.artifacts.update(
+        contract_mod.artifact_hashes(
+            {
+                os.path.join("reports", "validation.json"): (
+                    json.dumps(payload, indent=2, sort_keys=True) + "\n"
+                ).encode("utf-8"),
+            }
+        )
+    )
     # The manifest hashes the report, so the lock covers the whole build in
     # one place.
     with open(os.path.join(args.out, "manifest", "content.json"), "wb") as fh:
@@ -1053,7 +1121,6 @@ def cmd_pack(args) -> int:
             return 1
         print(f"packaged {args.package} ({len(lock)} members)")
     return 0
-
 
 
 def write_targets(manifest, out_dir: str, *, targets) -> list[str]:
@@ -1099,8 +1166,9 @@ def write_targets(manifest, out_dir: str, *, targets) -> list[str]:
     return written
 
 
-def write_creatures(out_dir: str, *, limit=None, mod_id: str = "daoc.studio.spawns",
-                    version: str = "0.1.0") -> str:
+def write_creatures(
+    out_dir: str, *, limit=None, mod_id: str = "daoc.studio.spawns", version: str = "0.1.0"
+) -> str:
     """Emit the declarative rows the mod loader will allocate ids for.
 
     No ids are chosen here: the manager owns identity, which is what makes
@@ -1119,7 +1187,10 @@ def write_creatures(out_dir: str, *, limit=None, mod_id: str = "daoc.studio.spaw
         rows = rows[:limit]
     declarative = [
         opendaoc.creature_row(
-            model_id=c.model_id, name=c.name, nif=c.nif, anim_set=c.anim_set,
+            model_id=c.model_id,
+            name=c.name,
+            nif=c.nif,
+            anim_set=c.anim_set,
         )
         for c in rows
     ]
@@ -1163,47 +1234,55 @@ def cmd_mod(args) -> int:
 
     client = args.client or os.environ.get("DAOC_CLIENT")
     if not client or not os.path.isdir(client):
-        print("mod build: no client corpus (pass --client or set $DAOC_CLIENT)",
-              file=sys.stderr)
+        print("mod build: no client corpus (pass --client or set $DAOC_CLIENT)", file=sys.stderr)
         return 2
     if os.path.exists(os.path.join(client, ".camelot", "state.json")):
         # The builder resolves ids and columns against this directory; with
         # mods installed it is no longer the pristine reference, and an `add`
         # of a row an installed mod already carries is refused for the wrong
         # reason. Point at a clean copy of the client instead.
-        print("mod build: warning: this client has mods installed; it is not a "
-              "pristine reference (use a clean copy)", file=sys.stderr)
+        print(
+            "mod build: warning: this client has mods installed; it is not a "
+            "pristine reference (use a clean copy)",
+            file=sys.stderr,
+        )
     try:
         used_text = None
         if args.used_models:
             with open(args.used_models, encoding="utf-8") as fh:
                 used_text = fh.read()
-        report = modbuild.build_mod_pack(args.dir, client, args.out,
-                                         creatures=args.creatures,
-                                         used_models=used_text)
+        report = modbuild.build_mod_pack(
+            args.dir, client, args.out, creatures=args.creatures, used_models=used_text
+        )
     except (OSError, TypeError, ValueError, KeyError) as error:
         print(f"mod build: {error}", file=sys.stderr)
         return 1
     print(f"built {report['out']}")
-    print(f"  mod {report['mod']} {report['version']}: "
-          f"{report['items']} client item(s), {report['rows']} server row(s), "
-          f"{report['members']} payload member(s)")
+    print(
+        f"  mod {report['mod']} {report['version']}: "
+        f"{report['items']} client item(s), {report['rows']} server row(s), "
+        f"{report['members']} payload member(s)"
+    )
     return 0
 
 
 def cmd_client(args) -> int:
     """Apply a mod's client half, and read the client back."""
     from . import clientinstall
+    from .feed import FeedError
+
+    def step(rel: str) -> None:
+        print(f"  {rel}", flush=True)
 
     client = args.client or os.environ.get("DAOC_CLIENT")
     if not client or not os.path.isdir(client):
-        print("client: no client directory (pass --client or set $DAOC_CLIENT)",
-              file=sys.stderr)
+        print("client: no client directory (pass --client or set $DAOC_CLIENT)", file=sys.stderr)
         return 2
     try:
         if args.client_cmd == "install":
             report = clientinstall.install_pack(
-                client, args.pack,
+                client,
+                args.pack,
                 priority=args.priority,
                 allow_build_mismatch=args.allow_build_mismatch,
                 adopt=args.adopt,
@@ -1229,9 +1308,11 @@ def cmd_client(args) -> int:
             if not report["installs"]:
                 print("no mods installed on this client")
             for install in report["installs"]:
-                print(f"{install['mod']} {install['version']} "
-                      f"(priority {install['priority']}, "
-                      f"{len(install['claims'])} claim(s))")
+                print(
+                    f"{install['mod']} {install['version']} "
+                    f"(priority {install['priority']}, "
+                    f"{len(install['claims'])} claim(s))"
+                )
             for claim, owner in report["owners"].items():
                 print(f"  {claim} -> {owner}")
             return 0
@@ -1254,11 +1335,14 @@ def cmd_client(args) -> int:
             note = f" (client.modelids.{carried})" if carried and not args.max_id else ""
             print(f"{args.table}: {len(ids)} rows, ceiling {max_id}{note}")
             head = ", ".join(str(i) for i in free[:12])
-            print(f"  free to add:       {len(free):4d} ids"
-                  + (f"  (first: {head})" if free else ""))
+            print(
+                f"  free to add:       {len(free):4d} ids" + (f"  (first: {head})" if free else "")
+            )
             head = ", ".join(str(i) for i in reclaimable[:12])
-            print(f"  safe to take over: {len(reclaimable):4d} shipped rows"
-                  + (f"  (first: {head})" if reclaimable else ""))
+            print(
+                f"  safe to take over: {len(reclaimable):4d} shipped rows"
+                + (f"  (first: {head})" if reclaimable else "")
+            )
             print("  take-over is a `set` on that row (point it at your figure")
             print("  and textures); `add` needs an id from the free list.")
             return 0
@@ -1267,13 +1351,13 @@ def cmd_client(args) -> int:
 
             running = clientinstall.blocks_install(client)
             if running:
-                print(f"client: the game is running ({running}); close it and retry",
-                      file=sys.stderr)
+                print(
+                    f"client: the game is running ({running}); close it and retry", file=sys.stderr
+                )
                 return 1
             path = clientinstall.resolve_existing(client, clientpatch.CLIENT_BINARY)
             if path is None:
-                print(f"client: no {clientpatch.CLIENT_BINARY} under {client}",
-                      file=sys.stderr)
+                print(f"client: no {clientpatch.CLIENT_BINARY} under {client}", file=sys.stderr)
                 return 1
             try:
                 if args.restore:
@@ -1284,11 +1368,30 @@ def cmd_client(args) -> int:
             except (OSError, clientpatch.PatchError) as error:
                 print(f"client patch: {error}", file=sys.stderr)
                 return 1
-            print(f"patched {clientpatch.CLIENT_BINARY}: the model table holds "
-                  f"{args.max_id + 1} entries (ids up to {args.max_id}), providing "
-                  f"{', '.join(recipe['provides'])}")
-            print(f"  backup: {clientpatch.CLIENT_BINARY}.orig "
-                  "(restore with: camelot client patch --restore)")
+            print(
+                f"patched {clientpatch.CLIENT_BINARY}: the model table holds "
+                f"{args.max_id + 1} entries (ids up to {args.max_id}), providing "
+                f"{', '.join(recipe['provides'])}"
+            )
+            print(
+                f"  backup: {clientpatch.CLIENT_BINARY}.orig "
+                "(restore with: camelot client patch --restore)"
+            )
+            return 0
+        if args.client_cmd == "update":
+            from . import feed as feed_mod
+
+            report = feed_mod.update(args.feed, client, dry_run=args.dry_run, on_file=step)
+            print(
+                f"feed {report['version']}  {report['path']}  "
+                f"{report['files']} file(s), {len(report['wanted'])} to write"
+            )
+            for row in report["wanted"]:
+                print(f"  {row['state']:<8} {row['path']}")
+            if report["dry_run"]:
+                print("dry run: nothing was written")
+                return 0
+            print(f"written {len(report['written'])} file(s) — every one read back")
             return 0
         if args.client_cmd == "verify":
             report = clientinstall.verify(client)
@@ -1298,7 +1401,7 @@ def cmd_client(args) -> int:
                 print(f"  problem: {problem}", file=sys.stderr)
             print("ok" if report["ok"] else "NOT ok")
             return 0 if report["ok"] else 1
-    except (clientinstall.InstallError, OSError) as error:
+    except (clientinstall.InstallError, FeedError, OSError) as error:
         print(f"client: {error}", file=sys.stderr)
         return 1
     return 2
@@ -1322,21 +1425,35 @@ def main(argv=None) -> int:
     p = sub.add_parser("gltf", help="export a figure NIF to glTF")
     p.add_argument("path")
     p.add_argument("--out", help="output prefix (default: input basename)")
-    p.add_argument("--skinned", action="store_true",
-                   help="experimental: emit JOINTS/WEIGHTS (inverseBind = inv(worldBind))")
+    p.add_argument(
+        "--skinned",
+        action="store_true",
+        help="experimental: emit JOINTS/WEIGHTS (inverseBind = inv(worldBind))",
+    )
     p.add_argument("--pose", help="pose the skeleton from a .kfa file")
-    p.add_argument("--pose-time", type=float, default=0.0,
-                   help="game seconds to sample the --pose KFA at (mapped to key "
-                        "time via animnifs.csv when $DAOC_CLIENT resolves it, "
-                        "else key seconds)")
-    p.add_argument("--bake-pose", action="store_true",
-                   help="bake the --pose KFA sample into the vertices (CPU skinning)")
+    p.add_argument(
+        "--pose-time",
+        type=float,
+        default=0.0,
+        help="game seconds to sample the --pose KFA at (mapped to key "
+        "time via animnifs.csv when $DAOC_CLIENT resolves it, "
+        "else key seconds)",
+    )
+    p.add_argument(
+        "--bake-pose",
+        action="store_true",
+        help="bake the --pose KFA sample into the vertices (CPU skinning)",
+    )
     p.add_argument("--texture", help="embed a .dds texture (CS_camelot_texture extension)")
-    p.add_argument("--no-texture", action="store_true",
-                   help="skip automatic gamedata texture resolution")
-    p.add_argument("--no-fig3-head", action="store_true",
-                   help="keep the classic (headless) player head instead of "
-                        "attaching the Catacombs fig3 head/hair")
+    p.add_argument(
+        "--no-texture", action="store_true", help="skip automatic gamedata texture resolution"
+    )
+    p.add_argument(
+        "--no-fig3-head",
+        action="store_true",
+        help="keep the classic (headless) player head instead of "
+        "attaching the Catacombs fig3 head/hair",
+    )
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_gltf)
 
@@ -1347,10 +1464,14 @@ def main(argv=None) -> int:
     p = sub.add_parser("batch", help="bulk validation from a manifest")
     p.add_argument("manifest")
     p.add_argument("--out", help="report file (default: work/camelot_batch.txt)")
-    p.add_argument("--read-only", action="store_true",
-                   help="skip the roundtrip write/rewrite (faster coverage runs)")
-    p.add_argument("--limit", type=int, default=0,
-                   help="only validate the first N manifest entries")
+    p.add_argument(
+        "--read-only",
+        action="store_true",
+        help="skip the roundtrip write/rewrite (faster coverage runs)",
+    )
+    p.add_argument(
+        "--limit", type=int, default=0, help="only validate the first N manifest entries"
+    )
     p.set_defaults(func=cmd_batch)
 
     p = sub.add_parser("mpak", help="MPAK archive tools (.mpk/.npk)")
@@ -1363,8 +1484,12 @@ def main(argv=None) -> int:
     rp = mp.add_parser("repack", help="rewrite an archive, preserving its header")
     rp.add_argument("archive")
     rp.add_argument("out")
-    rp.add_argument("--replace", action="append", metavar="NAME=FILE",
-                    help="replace an entry's content with a file")
+    rp.add_argument(
+        "--replace",
+        action="append",
+        metavar="NAME=FILE",
+        help="replace an entry's content with a file",
+    )
 
     pp = mp.add_parser("pack", help="build an MPAK archive from files")
     pp.add_argument("out")
@@ -1379,21 +1504,36 @@ def main(argv=None) -> int:
     p.add_argument("--version", default="0.1.0", help="pack version")
     p.add_argument("--material", help="pskins material to describe (default: first family)")
     p.add_argument("--no-states", action="store_true", help="skip the anim sets")
-    p.add_argument("--no-artifacts", action="store_true",
-                   help="describe only, emit no glTF")
-    p.add_argument("--figures", type=int, nargs="*", metavar="ID",
-                   help="restrict to these fig3 row ids (default: all 36)")
-    p.add_argument("--add-figure", action="append", metavar="ID:KIND:RIG[:ROWID]",
-                   help="add a custom figure, e.g. daoc.custom.sword:object:sword")
-    p.add_argument("--target", action="append",
-                   help="project onto these targets (default: all)")
-    p.add_argument("--no-targets", action="store_true",
-                   help="skip the target projections")
+    p.add_argument("--no-artifacts", action="store_true", help="describe only, emit no glTF")
+    p.add_argument(
+        "--figures",
+        type=int,
+        nargs="*",
+        metavar="ID",
+        help="restrict to these fig3 row ids (default: all 36)",
+    )
+    p.add_argument(
+        "--add-figure",
+        action="append",
+        metavar="ID:KIND:RIG[:ROWID]",
+        help="add a custom figure, e.g. daoc.custom.sword:object:sword",
+    )
+    p.add_argument("--target", action="append", help="project onto these targets (default: all)")
+    p.add_argument("--no-targets", action="store_true", help="skip the target projections")
 
-    p.add_argument("--package", metavar="PATH.tar.gz",
-                   help="assemble the written pack into one deployable archive")
-    p.add_argument("--creatures", type=int, metavar="N", nargs="?", const=0,
-                   help="also emit the OpenDAoC spawn package (all, or N models)")
+    p.add_argument(
+        "--package",
+        metavar="PATH.tar.gz",
+        help="assemble the written pack into one deployable archive",
+    )
+    p.add_argument(
+        "--creatures",
+        type=int,
+        metavar="N",
+        nargs="?",
+        const=0,
+        help="also emit the OpenDAoC spawn package (all, or N models)",
+    )
 
     p.add_argument("--dry-run", action="store_true", help="report only, write no manifest")
     p.set_defaults(func=cmd_pack)
@@ -1404,11 +1544,18 @@ def main(argv=None) -> int:
     bp.add_argument("--dir", required=True, help="the authoring directory")
     bp.add_argument("--client", help="client corpus (default: $DAOC_CLIENT)")
     bp.add_argument("--out", required=True, help="output pack (.tar.gz)")
-    bp.add_argument("--creatures", type=int, metavar="N", nargs="?", const=0,
-                    help="also add spawn rows (all, or the first N creature models)")
-    bp.add_argument("--used-models",
-                    help="file of server-referenced model ids (default: the "
-                         "measured shipped list)")
+    bp.add_argument(
+        "--creatures",
+        type=int,
+        metavar="N",
+        nargs="?",
+        const=0,
+        help="also add spawn rows (all, or the first N creature models)",
+    )
+    bp.add_argument(
+        "--used-models",
+        help="file of server-referenced model ids (default: the measured shipped list)",
+    )
     p.set_defaults(func=cmd_mod)
 
     p = sub.add_parser("client", help="apply a mod's client half to a client directory")
@@ -1417,37 +1564,59 @@ def main(argv=None) -> int:
     ip.add_argument("pack")
     ip.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
     ip.add_argument("--priority", type=int, help="override the pack's priority")
-    ip.add_argument("--allow-build-mismatch", action="store_true",
-                    help="install a pack built against another client build")
-    ip.add_argument("--adopt", action="store_true",
-                    help="make files changed outside the tool the new baseline")
+    ip.add_argument(
+        "--allow-build-mismatch",
+        action="store_true",
+        help="install a pack built against another client build",
+    )
+    ip.add_argument(
+        "--adopt", action="store_true", help="make files changed outside the tool the new baseline"
+    )
     rp = cp.add_parser("uninstall", help="remove a mod's client half")
     rp.add_argument("mod")
     rp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
     tp = cp.add_parser("status", help="what is installed, and who owns what")
     tp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
-    fp = cp.add_parser("free-ids",
-                       help="model ids a mod may use without a client patch")
+    fp = cp.add_parser("free-ids", help="model ids a mod may use without a client patch")
     fp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
-    fp.add_argument("--table", default="monsters.csv",
-                    help="table to inspect (default: monsters.csv)")
-    fp.add_argument("--used-models",
-                    help="file of server-referenced model ids (default: the "
-                         "measured shipped list)")
-    fp.add_argument("--max-id", type=int,
-                    help="client ceiling to respect (default: the measured one, "
-                         "or the patched table's when the client carries one)")
-    pp = cp.add_parser("patch",
-                       help="raise the client's model-id ceiling in place "
-                            "(unmanaged clients; packs carry the same recipe)")
+    fp.add_argument(
+        "--table", default="monsters.csv", help="table to inspect (default: monsters.csv)"
+    )
+    fp.add_argument(
+        "--used-models",
+        help="file of server-referenced model ids (default: the measured shipped list)",
+    )
+    fp.add_argument(
+        "--max-id",
+        type=int,
+        help="client ceiling to respect (default: the measured one, "
+        "or the patched table's when the client carries one)",
+    )
+    pp = cp.add_parser(
+        "patch",
+        help="raise the client's model-id ceiling in place "
+        "(unmanaged clients; packs carry the same recipe)",
+    )
     pp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
-    pp.add_argument("--max-id", type=int, default=32767,
-                    help="highest usable model id (default 32767; the table "
-                         "becomes max_id+1 entries wide)")
-    pp.add_argument("--restore", action="store_true",
-                    help="put the original game1127.dll back from its .orig backup")
+    pp.add_argument(
+        "--max-id",
+        type=int,
+        default=32767,
+        help="highest usable model id (default 32767; the table becomes max_id+1 entries wide)",
+    )
+    pp.add_argument(
+        "--restore",
+        action="store_true",
+        help="put the original game1127.dll back from its .orig backup",
+    )
     vp = cp.add_parser("verify", help="read the client back against the state")
     vp.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
+    up = cp.add_parser("update", help="bring a player's client up to what a feed publishes")
+    up.add_argument("feed", help="the feed: a directory, or the URL the two files are served from")
+    up.add_argument("--client", help="client directory (default: $DAOC_CLIENT)")
+    up.add_argument(
+        "--dry-run", action="store_true", help="say what would be written, write nothing"
+    )
     p.set_defaults(func=cmd_client)
 
     p = sub.add_parser("serve", help="local daemon: asset library + viewer")
@@ -1458,25 +1627,31 @@ def main(argv=None) -> int:
     p.add_argument("--static", help="built viewer directory (default: web/build)")
     p.add_argument("--no-open", action="store_true", help="do not open the browser")
     p.add_argument("--no-watch", action="store_true", help="disable filesystem watching")
-    p.add_argument("--server-rows",
-                   help="snapshot exported from the server DB (camelot server export)")
-    p.add_argument("--db-config",
-                   help="the server's own serverconfig.xml: read the live MySQL")
-    p.add_argument("--db-write", action="store_true",
-                   help="let the editor write the server's own rows (patches "
-                        "and removals, recorded and reversible) — never silent")
-    p.add_argument("--project",
-                   help="the project's directory (P1): the journal's shards, the "
-                        "build outputs and the deploy log live there")
-    p.add_argument("--edits", dest="project",
-                   help="the older name of --project (the 6.3 authoring directory)")
-    p.add_argument("--allow-remote", action="store_true",
-                   help="allow binding a non-loopback host (unsafe)")
+    p.add_argument(
+        "--server-rows", help="snapshot exported from the server DB (camelot server export)"
+    )
+    p.add_argument("--db-config", help="the server's own serverconfig.xml: read the live MySQL")
+    p.add_argument(
+        "--db-write",
+        action="store_true",
+        help="let the editor write the server's own rows (patches "
+        "and removals, recorded and reversible) — never silent",
+    )
+    p.add_argument(
+        "--project",
+        help="the project's directory (P1): the journal's shards, the "
+        "build outputs and the deploy log live there",
+    )
+    p.add_argument(
+        "--edits", dest="project", help="the older name of --project (the 6.3 authoring directory)"
+    )
+    p.add_argument(
+        "--allow-remote", action="store_true", help="allow binding a non-loopback host (unsafe)"
+    )
     p.add_argument("--log-level", default="info")
     p.set_defaults(func=cmd_serve)
 
-    p = sub.add_parser("server",
-                       help="the server's world rows (mob/worldobject/door/path)")
+    p = sub.add_parser("server", help="the server's world rows (mob/worldobject/door/path)")
     sp = p.add_subparsers(dest="server_cmd", required=True)
     ep = sp.add_parser("export", help="export the world rows to a snapshot the viewer reads")
     ep.add_argument("--out", required=True, help="snapshot file to write")
@@ -1487,14 +1662,22 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("env", help="an environment's server half: its database and its folder")
     envp = p.add_subparsers(dest="env_cmd", required=True)
-    pp_ = envp.add_parser("provision", help="drop the environment's database and import the baseline")
-    pp_.add_argument("env", nargs="?", default="local", help="local, staging, production (default: local)")
+    pp_ = envp.add_parser(
+        "provision", help="drop the environment's database and import the baseline"
+    )
+    pp_.add_argument(
+        "env", nargs="?", default="local", help="local, staging, production (default: local)"
+    )
     pp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
     pp_.add_argument("--baseline", help="OpenDAoC's database checkout (default: machine.json)")
-    pp_.add_argument("--yes", action="store_true",
-                     help="provisioning deletes the environment's database: say so")
-    pp_.add_argument("--clean", action="store_true",
-                     help="leave the environment at the baseline alone (no release is applied)")
+    pp_.add_argument(
+        "--yes", action="store_true", help="provisioning deletes the environment's database: say so"
+    )
+    pp_.add_argument(
+        "--clean",
+        action="store_true",
+        help="leave the environment at the baseline alone (no release is applied)",
+    )
     sp_ = envp.add_parser("status", help="what an environment holds")
     sp_.add_argument("env", nargs="?", default="local")
     sp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
@@ -1520,45 +1703,69 @@ def main(argv=None) -> int:
     np = pp.add_parser("new", help="create a project (and its git scaffolding)")
     np.add_argument("name", help="the project's name; also its directory's name")
     np.add_argument("--dir", default=".", help="where to create it (default: .)")
-    np.add_argument("--client",
-                    help="the DAoC client to record as the base (default: $DAOC_CLIENT)")
-    np.add_argument("--cache", choices=("shared", "local"), default="shared",
-                    help="where derived data lives (default: shared)")
-    np.add_argument("--environments", default="local,production",
-                    help="comma-separated names (default: local,production; staging is optional)")
+    np.add_argument(
+        "--client", help="the DAoC client to record as the base (default: $DAOC_CLIENT)"
+    )
+    np.add_argument(
+        "--cache",
+        choices=("shared", "local"),
+        default="shared",
+        help="where derived data lives (default: shared)",
+    )
+    np.add_argument(
+        "--environments",
+        default="local,production",
+        help="comma-separated names (default: local,production; staging is optional)",
+    )
     np.add_argument("--author", help="the name that signs your journal shards")
-    np.add_argument("--git", action="store_true",
-                    help="run git init in the new project (no commit, no remote)")
+    np.add_argument(
+        "--git", action="store_true", help="run git init in the new project (no commit, no remote)"
+    )
     ip = pp.add_parser("info", help="what the project is, and where it stands")
     ip.add_argument("--dir", default=".", help="the project's directory (default: .)")
     mp = pp.add_parser("import", help="make a 6.3 authoring directory a project, in place")
     mp.add_argument("dir", help="the authoring directory (mod.json, journal.json, …)")
     mp.add_argument("--name", help="the project's name (default: mod.json's id, else the folder)")
-    mp.add_argument("--client",
-                    help="the DAoC client to record as the base (default: $DAOC_CLIENT)")
+    mp.add_argument(
+        "--client", help="the DAoC client to record as the base (default: $DAOC_CLIENT)"
+    )
     mp.add_argument("--author", help="the name that signs your journal shards")
     mp.add_argument("--git", action="store_true", help="run git init (no commit, no remote)")
     op = pp.add_parser("open", help="verify a project and start the daemon on it")
     op.add_argument("dir", help="the project's directory")
     op.add_argument("--client", help="the client to check (default: this machine's own answers)")
-    op.add_argument("rest", nargs=argparse.REMAINDER,
-                    help="flags for the daemon, forwarded as-is (see `camelot serve --help`)")
+    op.add_argument(
+        "rest",
+        nargs=argparse.REMAINDER,
+        help="flags for the daemon, forwarded as-is (see `camelot serve --help`)",
+    )
     pop = pp.add_parser("populate", help="record the resources the project's edits depend on")
     pop.add_argument("--dir", default=".", help="the project's directory (default: .)")
     pop.add_argument("--client", help="the client to read (default: this machine's own answers)")
     pop.add_argument("--zones", default="", help="zone ids to record, comma-separated (e.g. 0,12)")
-    pop.add_argument("--all-zones", action="store_true",
-                     help="every zone folder the client ships (a walk, not the index)")
-    pop.add_argument("--tables", default="",
-                     help="gamedata tables to record, comma-separated (e.g. items.csv)")
-    pop.add_argument("--update", action="store_true",
-                     help="adopt a resource whose bytes moved (otherwise it is refused)")
+    pop.add_argument(
+        "--all-zones",
+        action="store_true",
+        help="every zone folder the client ships (a walk, not the index)",
+    )
+    pop.add_argument(
+        "--tables", default="", help="gamedata tables to record, comma-separated (e.g. items.csv)"
+    )
+    pop.add_argument(
+        "--update",
+        action="store_true",
+        help="adopt a resource whose bytes moved (otherwise it is refused)",
+    )
     vp = pp.add_parser("verify", help="read the base back against the recorded fingerprints")
     vp.add_argument("--dir", default=".", help="the project's directory (default: .)")
     vp.add_argument("--client", help="the client to read (default: this machine's own answers)")
-    vp.add_argument("--rebuild", type=int, metavar="N",
-                    help="rebuild release N from the journal plus the base and compare the "
-                         "bytes (pipeline.md §D5: what a CI job runs)")
+    vp.add_argument(
+        "--rebuild",
+        type=int,
+        metavar="N",
+        help="rebuild release N from the journal plus the base and compare the "
+        "bytes (pipeline.md §D5: what a CI job runs)",
+    )
     vp.add_argument("--env", help="read that environment back instead of the base")
     rp = pp.add_parser("release", help="cut the next release (the range since the last one)")
     rp.add_argument("--dir", default=".", help="the project's directory (default: .)")
@@ -1569,20 +1776,38 @@ def main(argv=None) -> int:
     dp.add_argument("number", type=int, help="the release to deploy")
     dp.add_argument("--env", required=True, help="local, staging, production (as declared)")
     dp.add_argument("--dir", default=".", help="the project's directory (default: .)")
-    dp.add_argument("--dry-run", action="store_true",
-                    help="print the table and write nothing")
-    dp.add_argument("--adopt", action="store_true",
-                    help="make bytes that changed outside the tool the target's own")
+    dp.add_argument("--dry-run", action="store_true", help="print the table and write nothing")
+    dp.add_argument(
+        "--adopt",
+        action="store_true",
+        help="make bytes that changed outside the tool the target's own",
+    )
     pp_ = pp.add_parser("promote", help="the same bytes to the next environment")
     pp_.add_argument("number", type=int, help="the release to promote")
-    pp_.add_argument("--from", dest="frm", required=True,
-                     help="the environment it is deployed to")
+    pp_.add_argument("--from", dest="frm", required=True, help="the environment it is deployed to")
     pp_.add_argument("--to", required=True, help="the environment it should go to")
     pp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
-    pp_.add_argument("--adopt", action="store_true",
-                     help="make bytes that changed outside the tool the target's own")
+    pp_.add_argument(
+        "--adopt",
+        action="store_true",
+        help="make bytes that changed outside the tool the target's own",
+    )
     ep = pp.add_parser("envs", help="the environments, and what each holds")
     ep.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    fp2 = pp.add_parser("feed", help="what the players' launcher reads (C §D4)")
+    fp2.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    fp2.add_argument(
+        "--base-url",
+        default=None,
+        help="the URL the feed's files will be served from, ending with / "
+        "(default: what the feed already records)",
+    )
+    fp2.add_argument("--out", default=None, help="where to write it (default: <project>/feed)")
+    fp2.add_argument("--client", help="the base client (default: this machine's own answers)")
+    fp2.add_argument(
+        "--scratch", default=None, help="where to stage the tree (default: <out>/.staged)"
+    )
+    fp2.add_argument("--read", action="store_true", help="only read the feed back")
     p.set_defaults(func=cmd_project)
 
     args = ap.parse_args(argv)
