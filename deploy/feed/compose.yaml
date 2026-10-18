@@ -1,0 +1,14 @@
+services:
+  feed:
+    build:
+      context: ../..
+      dockerfile: deploy/feed/Dockerfile
+    environment:
+      CAMELOT_FEED_DIR: /feed
+      CAMELOT_FEED_URL: ${CAMELOT_FEED_URL:?set CAMELOT_FEED_URL}
+      CAMELOT_GAME_SERVER: ${CAMELOT_GAME_SERVER:?set CAMELOT_GAME_SERVER}
+    volumes:
+      - ${CAMELOT_FEED_SOURCE:?set CAMELOT_FEED_SOURCE}:/feed:ro
+    ports:
+      - "${CAMELOT_FEED_PORT:-8080}:8080"
+    restart: unless-stopped

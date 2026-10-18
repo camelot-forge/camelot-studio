@@ -11,6 +11,9 @@ core/tests/output/
 *.bin
 work/
 
+# Deployment's local values (the example is committed)
+deploy/feed/.env
+
 # OS
 .DS_Store
 Thumbs.db
