@@ -18,6 +18,7 @@ from test_release import served_client  # noqa: F401  (what `project_client` wra
 from test_serve_editor import editing  # noqa: F401
 from test_zones import FIXTURES, world  # noqa: F401
 
+from camelot import feed as feed_mod
 from camelot import feedbuild
 from camelot import release as rel
 from camelot.mpak import write_mpak
@@ -219,9 +220,17 @@ def test_the_publish_route_builds_the_feed_in_the_background(
     """`POST /deploy/publish` is `feedbuild.build` with the public URL and the
     game address the daemon's environment names; the page polls the progress."""
     project, _record, _local, _production = _ready(tmp_path, project_client)
+    machine = project.root / "machine.json"
+    document = json.loads(machine.read_text(encoding="utf-8"))
+    document["client"] = str(project_client)
+    machine.write_text(json.dumps(document), encoding="utf-8")
     monkeypatch.setenv("CAMELOT_FEED_URL", "https://patch.example")
     monkeypatch.setenv("CAMELOT_GAME_SERVER", "play.example:10300")
-    api = _api(project_client, project.root)
+    # The daemon's root is the environment it edits, not the feed's base: the
+    # publish must use the project's own client (`machine.json.client`).
+    daemon_root = tmp_path / "daemon-client"
+    daemon_root.mkdir()
+    api = _api(daemon_root, project.root)
 
     started = api.post("/api/v1/deploy/publish")
 
@@ -234,6 +243,7 @@ def test_the_publish_route_builds_the_feed_in_the_background(
     assert (feed_dir / "version-new.txt").read_text(encoding="utf-8").strip() == "1"
     patchlist = (feed_dir / "patchlist-new.txt").read_text(encoding="utf-8").splitlines()
     assert patchlist[0] == "https://patch.example/"
+    assert len(patchlist) == 1 + len(feed_mod.walk(project_client))
     launcher = json.loads((feed_dir / "launcher.json").read_text(encoding="utf-8"))
     assert launcher["feed"] == "https://patch.example/"
     assert launcher["server"] == "play.example:10300"

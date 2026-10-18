@@ -279,6 +279,11 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
                 raise HTTPException(status_code=409, detail="a feed build is already running")
             try:
                 project = project_mod.load(root)
+                # The feed's base is the project's own client (`machine.json.client`),
+                # not the daemon's root: a local daemon edits an environment's install,
+                # and a feed built against that would compare a tree with itself. The
+                # daemon's root is only a fallback for a project that names none.
+                base = project_mod.client_root(project) or config.root
             except project_mod.ProjectError as error:
                 raise _refused(error) from error
             progress.update(
@@ -294,7 +299,7 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
             )
             threading.Thread(
                 target=publish_in_background,
-                args=(project, config.root, feed_url, server),
+                args=(project, base, feed_url, server),
                 daemon=True,
             ).start()
         return publish_progress()
