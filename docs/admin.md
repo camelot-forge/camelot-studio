@@ -343,6 +343,13 @@ deploy/server/camelot.sh reverse            # the newest applied release
 camelot env reverse production --release 6  # or name one
 ```
 
+From the Console, the same thing without SSH: the page's **Reverse** button
+writes the ask (`<env>/server/camelot/reverse.json`) and the Installer's next run
+does the work — the Console never opens the database, so it cannot put a row back
+any more than it can write one. The page shows the ask as *asked* until the state
+stops recording the release, and `camelot env apply` honours it before it applies
+anything else.
+
 It is refused while a **later** release is applied (its values would be written
 over), and it does **not** undo the players' side: a client whose launcher
 already took release N's half keeps it, and the feed never goes back. Use it in

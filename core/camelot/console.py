@@ -135,6 +135,25 @@ OUTCOMES = {
         ),
         "confirm": ("not confirmed", "The confirmation was not ticked.", "warn"),
     },
+    "reverse": {
+        "asked": (
+            "asked",
+            "The ask is written; the Installer's next run puts the rows back (camelot env apply).",
+            "ok",
+        ),
+        "nothing": (
+            "nothing applied",
+            "No release is applied to this environment; there is nothing to put back.",
+            "warn",
+        ),
+        "disabled": ("disabled", "Reverse is disabled on this Console.", "warn"),
+        "token": (
+            "expired form",
+            "The form token is no longer valid; reload the page and try again.",
+            "warn",
+        ),
+        "confirm": ("not confirmed", "The confirmation was not ticked.", "warn"),
+    },
 }
 
 
@@ -625,6 +644,19 @@ def live(
     elif not env:
         pull_why = "no environment name (--env)"
 
+    ask = {}
+    try:
+        ask = installer.read_reverse_ask(root)
+    except installer.InstallerError as error:
+        problems.append(str(error))
+    asked = [int(number) for number in (ask.get("releases") or ())]
+    reverse_enabled = bool(latest and audit)
+    reverse_why = ""
+    if not latest:
+        reverse_why = "nothing is applied to this environment"
+    elif not audit:
+        reverse_why = "no audit path (--audit or CAMELOT_CONSOLE_AUDIT)"
+
     return {
         "format": FORMAT,
         "at": _now(),
@@ -663,6 +695,19 @@ def live(
                 "dir": str(deploy_dir) if deploy_dir else None,
                 "why": pull_why,
             },
+            "reverse": {
+                "enabled": reverse_enabled,
+                "release": latest["number"] if latest else None,
+                "why": reverse_why,
+            },
+        },
+        "reverse": {
+            "path": str(installer.reverse_ask_path(root)),
+            "releases": asked,
+            "at": ask.get("at"),
+            "by": ask.get("by"),
+            # asked, and still applied: the Installer's step has not run yet
+            "pending": [number for number in asked if number in recorded],
         },
         "remote": _remote_doc(deploy_dir, root, problems=problems),
         "audit": _audit_doc(audit, problems),
@@ -908,6 +953,15 @@ def _action_form(kind: str, action: dict, *, token: str | None = None) -> str:
             f'<code>{_e(action.get("target"))}</code>. Without a supervisor this is a stop, '
             "not a restart."
         )
+    elif kind == "reverse":
+        confirm = "I understand this asks the server to put back what one release replaced."
+        button = "Ask to reverse the newest release"
+        note = (
+            "Writes <code>reverse.json</code> for release "
+            f'<code>{_e(action.get("release"))}</code>: the Installer\'s next run puts back the '
+            "rows that release changed, and the release leaves this server. It is a repair, "
+            "not a rollback — the players' clients keep what they downloaded."
+        )
     else:
         confirm = "I understand this hands the published release over to this server."
         button = "Pull &amp; hand over"
@@ -942,6 +996,14 @@ def _page_actions(
         found.append(f'<p>{_chip(label, kind)} {_e(text)}</p>')
     found.append(_action_form("restart", actions.get("restart") or {}, token=token))
     found.append(_action_form("pull", actions.get("pull") or {}, token=token))
+    found.append(_action_form("reverse", actions.get("reverse") or {}, token=token))
+    asked = (document.get("reverse") or {}).get("pending") or []
+    if asked:
+        numbers = ", ".join(f"{int(number):04d}" for number in asked)
+        found.append(
+            f'<p>{_chip("asked", "warn")} release {numbers} — the Installer\'s step has not '
+            "run yet.</p>"
+        )
     return "\n".join(found)
 
 
@@ -1168,6 +1230,7 @@ class _ConsoleState:
         api_password: str | None,
         audit,
         env: str | None = None,
+        root=None,
         deploy=None,
         remote: str | None = None,
         feed=None,
@@ -1178,6 +1241,7 @@ class _ConsoleState:
         self.api_password = api_password
         self.audit = Path(audit).expanduser() if audit else None
         self.env = env
+        self.root = Path(str(root)).expanduser() if root else None
         self.deploy = Path(str(deploy)).expanduser() if deploy else None
         self.remote = remote
         self.feed = Path(str(feed)).expanduser() if feed else None
@@ -1187,6 +1251,17 @@ class _ConsoleState:
     def pull_enabled(self) -> bool:
         """The pull needs a checkout and an environment to hand over to."""
         return bool(self.deploy and self.env and self.deploy.is_dir())
+
+    def reverse_enabled(self) -> bool:
+        """The reversal needs the environment folder (the ask is a file inside it),
+        an audit to write to, and something applied to put back."""
+        if not self.root or not self.audit:
+            return False
+        try:
+            state = installer.read_state(self.root)
+        except installer.InstallerError:
+            return False
+        return bool(state.get("releases"))
 
 
 class ConsoleServer(ThreadingHTTPServer):
@@ -1254,7 +1329,11 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
             state = self.server.console
             if state.audit is None:
                 return "no audit path"
-            target = state.api_url if action == "restart" else str(state.deploy or "")
+            target = {
+                "restart": state.api_url,
+                "pull": str(state.deploy) if state.deploy else "",
+                "reverse": str(state.root) if state.root else "",
+            }.get(action)
             try:
                 append_audit(
                     state.audit,
@@ -1271,6 +1350,38 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
             except ConsoleError as error:
                 return str(error)
             return None
+
+        def _reverse(self, state, refuse):
+            """Write the ask (`console.md` §D10): which release to put back.
+
+            The Console never opens the database (S §D1) — the Installer's step
+            reads this file and does the reversing.
+            """
+            try:
+                applied = sorted(
+                    int(name) for name in (installer.read_state(state.root).get("releases") or {})
+                )
+            except installer.InstallerError as error:
+                audit_error = self._audit(action="reverse", result="error", detail=str(error))
+                if audit_error:
+                    return self._json({"ok": False, "error": audit_error}, status=500)
+                return self._redirect("reverse", "error")
+            if not applied:
+                return refuse("nothing", "nothing is applied")
+            number = applied[-1]
+            try:
+                installer.write_reverse_ask(state.root, [number], by=audit_user)
+            except (OSError, installer.InstallerError) as error:
+                audit_error = self._audit(action="reverse", result="error", detail=str(error))
+                if audit_error:
+                    return self._json({"ok": False, "error": audit_error}, status=500)
+                return self._redirect("reverse", "error")
+            error = self._audit(
+                action="reverse", result="asked", detail=f"release {number:04d}"
+            )
+            if error:
+                return self._json({"ok": False, "error": error}, status=500)
+            return self._redirect("reverse", "asked")
 
         def _get(self, *, head: bool = False) -> None:
             path = urllib.parse.urlparse(self.path).path
@@ -1304,7 +1415,11 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
 
         def _post(self) -> None:
             path = urllib.parse.urlparse(self.path).path
-            routes = {"restart": "/action/restart", "pull": "/action/pull"}
+            routes = {
+                "restart": "/action/restart",
+                "pull": "/action/pull",
+                "reverse": "/action/reverse",
+            }
             kind = next((name for name, route in routes.items() if route == path), None)
             if kind is None:
                 return self._json({"detail": f"no such route: {path}"}, status=404)
@@ -1329,7 +1444,11 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
                 return self._redirect(kind, outcome)
 
             with state.lock:
-                enabled = state.allow_restart if kind == "restart" else state.pull_enabled()
+                enabled = {
+                    "restart": state.allow_restart,
+                    "pull": state.pull_enabled(),
+                    "reverse": state.reverse_enabled(),
+                }[kind]
                 if not enabled:
                     if state.audit is None:
                         return self._redirect(kind, "disabled")
@@ -1340,6 +1459,8 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
                     return refuse("token", "form token")
                 if confirm != "yes":
                     return refuse("confirm", "confirmation not ticked")
+                if kind == "reverse":
+                    return self._reverse(state, refuse)
                 if kind == "restart":
                     if not state.api_url or not state.api_password:
                         return refuse("api", "API URL or password is missing")
@@ -1404,6 +1525,7 @@ def server_for(
     api_password: str | None = None,
     audit=None,
     env: str | None = None,
+    root=None,
     deploy=None,
     remote: str | None = None,
     feed=None,
@@ -1437,6 +1559,7 @@ def server_for(
         api_password=api_password,
         audit=audit,
         env=env,
+        root=root,
         deploy=deploy,
         remote=remote,
         feed=feed,
@@ -1463,6 +1586,7 @@ def serve(
     api_password: str | None = None,
     audit=None,
     env: str | None = None,
+    root=None,
     deploy=None,
     remote: str | None = None,
     feed=None,
@@ -1479,6 +1603,7 @@ def serve(
         api_password=api_password,
         audit=audit,
         env=env,
+        root=root,
         deploy=deploy,
         remote=remote,
         feed=feed,
@@ -1550,6 +1675,7 @@ def run(
         api_password=api_password,
         audit=audit_path,
         env=env,
+        root=root,
         deploy=deploy,
         remote=deploy_remote,
         feed=feed_out,

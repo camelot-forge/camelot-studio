@@ -668,3 +668,90 @@ def test_the_action_page_says_when_restart_is_disabled(tmp_path):
     rendered = console.page(enabled, action_token="t")
     assert "Restart (stop; supervisor restarts)" in rendered
     assert "Without a supervisor this is a stop" in rendered
+
+
+# --- the other direction: the reverse ask (§D10, §D17) --------------------------
+
+
+def test_the_reverse_action_is_disabled_when_nothing_is_applied(tmp_path):
+    """There is nothing to put back, and the page says so instead of offering a
+    button that cannot work."""
+    root = tmp_path / "env"
+    installer.written_state(root, installer.empty_state("Forge Project"))
+    document = console.live(root, env="staging", audit=tmp_path / "audit.jsonl")
+
+    assert document["actions"]["reverse"]["enabled"] is False
+    assert "nothing is applied" in document["actions"]["reverse"]["why"]
+    assert "Reverse is disabled" in console.page(document)
+
+
+def test_the_reverse_action_writes_the_ask_and_audits(tmp_path):
+    """`console.md` §D10: the Console never opens the database (S §D1). It writes
+    the ask; the Installer's step does the reversing."""
+    root = _environment(tmp_path)
+    audit = tmp_path / "audit.jsonl"
+    bound = _serving(
+        lambda: console.live(root, env="staging", audit=audit),
+        audit=audit,
+        root=root,
+        env="staging",
+        token="t",
+    )
+    try:
+        status, location, _body = _post(
+            bound, "/action/reverse", {"token": "t", "confirm": "yes"}
+        )
+        assert status == 303
+        assert "action=reverse" in location and "outcome=asked" in location
+    finally:
+        bound.shutdown()
+        bound.server_close()
+
+    ask = json.loads(installer.reverse_ask_path(root).read_text(encoding="utf-8"))
+    assert ask["format"] == installer.REVERSE_FORMAT
+    assert ask["releases"] == [1]  # the newest applied release
+    assert ask["by"] == "local"  # no password on loopback, so no operator name
+    entry = json.loads(audit.read_text(encoding="utf-8").splitlines()[-1])
+    assert entry["action"] == "reverse"
+    assert entry["result"] == "asked"
+    assert "0001" in entry["detail"]
+    assert entry["target"] == str(root)
+
+
+def test_the_reverse_form_needs_the_token_and_the_confirmation(tmp_path):
+    root = _environment(tmp_path)
+    audit = tmp_path / "audit.jsonl"
+    bound = _serving(
+        lambda: console.live(root, env="staging", audit=audit),
+        audit=audit,
+        root=root,
+        env="staging",
+        token="t",
+    )
+    try:
+        status, location, _body = _post(bound, "/action/reverse", {"token": "no", "confirm": "yes"})
+        assert status == 303 and "outcome=token" in location
+        status, location, _body = _post(bound, "/action/reverse", {"token": "t", "confirm": "no"})
+        assert status == 303 and "outcome=confirm" in location
+    finally:
+        bound.shutdown()
+        bound.server_close()
+
+    assert not installer.reverse_ask_path(root).exists()
+    lines = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+    assert [line["result"] for line in lines] == ["refused", "refused"]
+    assert [line["detail"] for line in lines] == ["form token", "confirmation not ticked"]
+
+
+def test_the_page_says_an_ask_has_not_been_honoured_yet(tmp_path):
+    """Asked and still applied: the Installer's step has not run, and the page says
+    that rather than showing the release as reversed."""
+    root = _environment(tmp_path)
+    installer.write_reverse_ask(root, [1], by="operator")
+
+    document = console.live(root, env="staging", audit=tmp_path / "audit.jsonl")
+
+    assert document["reverse"]["releases"] == [1]
+    assert document["reverse"]["pending"] == [1]
+    assert document["reverse"]["by"] == "operator"
+    assert "not run yet" in console.page(document)

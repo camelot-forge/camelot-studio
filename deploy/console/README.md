@@ -94,6 +94,25 @@ that is `camelot env apply <env>` (in a `camelot-core` job until the C#
 Installer exists); the Console's page shows the wanted release as `pending`
 until the state file records it.
 
+## Reverse (7e)
+
+The other direction, and the same rule: the Console never opens the database
+(`S §D1`), so **Reverse** writes an ask — `<env>/server/camelot/reverse.json`,
+naming the newest applied release — and stops there. The Installer's step
+(`camelot env apply`, or the C# Installer at boot) honours it first, newest
+first, then applies what is handed over, and clears the file.
+
+It is a **repair**, not a rollback (`S §D17`): the rows the release changed go
+back, the release leaves the state and the environment's folder — a pull is what
+puts it back — but the feed never goes back, so a player whose launcher already
+took that release's client half keeps it. Use it in the hours after a bad apply;
+anything the players have already seen is undone by a new release.
+
+The button is off when nothing is applied, a release the ask names that is not
+applied any more is skipped and said so, and every attempt writes one audit
+line, refused or not. The page shows the ask as *asked* until the state stops
+recording the release.
+
 ## Online
 
 The same image and compose file. The compose service uses **host networking**

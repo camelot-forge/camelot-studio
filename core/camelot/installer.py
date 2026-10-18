@@ -33,6 +33,7 @@ from .targets.opendaoc import OWNED_TABLES, owned  # noqa: F401  (the map, re-ex
 STATE_FORMAT = "camelot.installer.state/1"
 APPLIED_FORMAT = "camelot.installer.applied/1"
 REVERSED_FORMAT = "camelot.installer.reversed/1"
+REVERSE_FORMAT = "camelot.reverse/1"
 
 SERVER = "server"
 INSTALLER = "camelot"
@@ -40,6 +41,9 @@ STATE = "state.json"
 RELEASES = "releases"
 APPLIED = "applied"
 REVERSED = "reversed"
+#: The Console's ask for the other direction (`console.md` §D10): a file, because
+#: the Console never opens the database (S §D1).
+REVERSE_ASK = "reverse.json"
 
 __all__ = [
     "APPLIED",
@@ -48,6 +52,8 @@ __all__ = [
     "RELEASES",
     "REVERSED",
     "REVERSED_FORMAT",
+    "REVERSE_ASK",
+    "REVERSE_FORMAT",
     "SERVER",
     "STATE",
     "STATE_FORMAT",
@@ -55,12 +61,14 @@ __all__ = [
     "applied_path",
     "applied_releases",
     "apply",
+    "clear_reverse_ask",
     "empty_state",
     "folder",
     "handed_over",
     "id_collisions",
     "owned",
     "read_applied",
+    "read_reverse_ask",
     "read_reversed",
     "read_state",
     "refused_tables",
@@ -68,10 +76,12 @@ __all__ = [
     "releases_folder",
     "reset",
     "reverse",
+    "reverse_ask_path",
     "reversed_path",
     "reversed_releases",
     "state_path",
     "write_applied",
+    "write_reverse_ask",
     "write_reversed",
     "written_state",
 ]
@@ -102,6 +112,51 @@ def applied_path(env_root, number) -> Path:
 def reversed_path(env_root, number) -> Path:
     """Where a reversal leaves its evidence (§D17), beside the apply's own."""
     return folder(env_root) / REVERSED / f"{int(number):04d}" / "reversed.json"
+
+
+def reverse_ask_path(env_root) -> Path:
+    """The Console's ask, beside the state it will change (`console.md` §D10)."""
+    return folder(env_root) / REVERSE_ASK
+
+
+def read_reverse_ask(env_root) -> dict:
+    """What the Console asked to reverse, or `{}`. A missing file is a fact: no
+    ask, not an empty one."""
+    path = reverse_ask_path(env_root)
+    if not path.is_file():
+        return {}
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise InstallerError(f"{path}: {error}") from error
+    if not isinstance(document, dict):
+        raise InstallerError(f"{path}: expected an object")
+    return document
+
+
+def write_reverse_ask(env_root, releases, *, by="console", at=None) -> Path:
+    """The ask itself: which releases to put back, and who asked. Written whole,
+    like every other document of the contract."""
+    path = reverse_ask_path(env_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = {
+        "format": REVERSE_FORMAT,
+        "releases": [int(number) for number in releases],
+        "by": str(by),
+        "at": journal_mod.now(at),
+    }
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def clear_reverse_ask(env_root) -> bool:
+    """The ask has been honoured (or refused): it goes, so the next run does not
+    replay it. True when there was one."""
+    path = reverse_ask_path(env_root)
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True
 
 
 def _read(path: Path) -> dict:
@@ -279,6 +334,8 @@ def reset(env_root, *, project: str, baseline=None) -> dict:
     # The reversals describe the same database as the applies: they go with it.
     if (where / REVERSED).is_dir():
         shutil.rmtree(where / REVERSED)
+    # And so does an ask that named a release of the database that is gone.
+    clear_reverse_ask(env_root)
     state = empty_state(project)
     state["baseline"] = dict(baseline or {})
     written_state(env_root, state)

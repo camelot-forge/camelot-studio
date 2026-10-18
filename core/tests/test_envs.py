@@ -920,3 +920,63 @@ def test_a_removals_record_carries_a_timestamp_as_text(tmp_path, client):
     # column keeps the schema's default.
     assert server.rows[("door", "d1")]["Door_ID"] == "d1"
     assert server.rows[("door", "d1")]["X"] == "32768"
+
+
+def test_the_console_s_ask_is_honoured_by_the_installers_step(tmp_path, client):
+    """`console.md` §D10 + §D17: the Console never opens the database (S §D1), it
+    writes `reverse.json`; the Installer's step puts the rows back and the ask goes."""
+    project, env_root, server = _applied(
+        tmp_path,
+        client,
+        rows={("door", "d1"): {"Door_ID": "d1", "X": "32768", "Y": "32768"}},
+        patch=[{"table": "door", "key": "d1", "values": {"X": "30000"}}],
+    )
+    installer.write_reverse_ask(env_root, [7], by="operator")
+
+    report = envs.apply(project, "local", connect=server.connect)
+
+    assert [entry["release"] for entry in report["reversed"]] == [7]
+    assert report["reversed"][0]["restored"] == 1
+    assert server.rows[("door", "d1")]["X"] == "32768"
+    assert installer.read_reverse_ask(env_root) == {}
+    assert not installer.releases_folder(env_root, 7).exists()
+    facts = [line for line in pj.deploy_log(project.root) if line["kind"] == "reverse"]
+    assert [line["release"] for line in facts] == [7]
+    # the ask was the whole job: the folder holds nothing left to apply
+    assert report["applied"] == []
+
+
+def test_a_stale_ask_is_skipped_and_cleared(tmp_path, client):
+    """The ask names a release that is not applied any more — the operator reversed
+    it by hand, or a provision started the record over. The ask went stale; the
+    environment did not break, and the run goes on."""
+    project, env_root, server = _applied(
+        tmp_path,
+        client,
+        rows={("door", "d1"): {"Door_ID": "d1", "X": "32768", "Y": "32768"}},
+        patch=[{"table": "door", "key": "d1", "values": {"X": "30000"}}],
+    )
+    installer.reverse(env_root, connect=server.connect, project=project.name, number=7)
+    installer.write_reverse_ask(env_root, [7], by="operator")
+
+    report = envs.apply(project, "local", connect=server.connect)
+
+    assert report["reversed"][0]["why"] == "not applied any more"
+    assert report["reversed"][0]["fact"] is None
+    assert installer.read_reverse_ask(env_root) == {}
+
+
+def test_the_direct_verb_takes_the_ask_down_with_it(tmp_path, client):
+    """`camelot env reverse` and the Console's ask are the same intention: whichever
+    runs first leaves the other nothing to do."""
+    project, env_root, server = _applied(
+        tmp_path,
+        client,
+        rows={("door", "d1"): {"Door_ID": "d1", "X": "32768", "Y": "32768"}},
+        patch=[{"table": "door", "key": "d1", "values": {"X": "30000"}}],
+    )
+    installer.write_reverse_ask(env_root, [7], by="operator")
+
+    envs.reverse(project, "local", connect=server.connect)
+
+    assert installer.read_reverse_ask(env_root) == {}

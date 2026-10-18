@@ -101,10 +101,12 @@ players  their launchers read the feed and update themselves
 The pull never applies anything, and the apply is never the Console's: the
 Console asks (`wanted.json`), the Installer writes (`S §D1`).
 
-A bad apply is repaired on the server with `server/camelot.sh reverse`: the rows
-the release changed go back, and the release leaves the folder and the state.
-It is a repair, not a rollback — the feed never goes back, so anything the
-players have already seen is undone by a **new** release (`S §D17`).
+A bad apply is repaired on the server with `server/camelot.sh reverse`, or from
+the Console's **Reverse** button — which asks, and lets the Installer's next run
+do the work. The rows the release changed go back, and the release leaves the
+folder and the state. It is a repair, not a rollback — the feed never goes back,
+so anything the players have already seen is undone by a **new** release
+(`S §D17`).
 
 ## When something is off
 

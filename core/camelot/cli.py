@@ -446,6 +446,19 @@ def cmd_env(args) -> int:
             return 0 if report["ok"] else 1
         if args.env_cmd == "apply":
             report = envs.apply(project, args.env, release=args.release)
+            for entry in report.get("reversed") or ():
+                if entry["fact"] is None:
+                    print(
+                        f"asked to reverse {entry['release']:04d}: not applied any more — "
+                        "nothing to put back"
+                    )
+                    continue
+                print(
+                    f"reversed {entry['release']:04d} as asked · {entry['restored']} restored · "
+                    f"{entry['reinserted']} re-inserted"
+                )
+            if not report["applied"]:
+                return 0
             if report["unchanged"]:
                 print(
                     f"{args.env} holds release {report['release']:04d} already: nothing was written"

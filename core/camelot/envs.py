@@ -590,14 +590,78 @@ def _one(project: project_mod.Project, env: str, env_root, number: int, write) -
     }
 
 
-def apply(project: project_mod.Project, env: str, *, release=None, connect=None) -> dict:
-    """Bring the environment to what its folder holds (`server-install.md` §2).
+def _reverse_asked(project: project_mod.Project, env: str, env_root, connection, write) -> list[dict]:
+    """Honour the Console's ask (`server-install.md` §D17, `console.md` §D10).
 
-    The Installer's step, run from here: every release Deploy handed over that the
-    environment's own state does not record, **oldest first**. The order is not a
-    preference — a release carries the rows of the zones its range touches, so a
-    later one does not cover an earlier one's zones, and only the order
-    reconstructs the content a fresh database needs (§D6).
+    The Console never opens the database (S §D1): it writes `reverse.json`, and the
+    Installer's step does the rest — the reversals, newest first, each with the fact
+    it leaves in the deploy log. A release the ask names that is not applied any
+    more is skipped and said so: the ask went stale, the environment did not break.
+    """
+    ask = installer.read_reverse_ask(env_root)
+    if not ask:
+        return []
+    state = installer.read_state(env_root, project.name)
+    asked = sorted({int(number) for number in (ask.get("releases") or ())}, reverse=True)
+    done: list[dict] = []
+    for number in asked:
+        if installer.released(state, number) is None:
+            done.append(
+                {
+                    "release": number,
+                    "restored": 0,
+                    "reinserted": 0,
+                    "skipped": 0,
+                    "needs": [],
+                    "withdrew": False,
+                    "fact": None,
+                    "why": "not applied any more",
+                }
+            )
+            continue
+        report = installer.reverse(
+            env_root, connect=lambda: write(connection), project=project.name, number=number
+        )
+        fact = project_mod.record_deploy(
+            project.root,
+            {
+                "kind": "reverse",
+                "env": str(env),
+                "release": number,
+                "outcome": "ok",
+                "rows": {
+                    "restored": int(report["restored"]),
+                    "reinserted": int(report["reinserted"]),
+                    "skipped": int(report["skipped"]),
+                },
+                "needs": [str(name) for name in report["needs"]],
+            },
+        )
+        done.append(
+            {
+                "release": number,
+                "restored": int(report["restored"]),
+                "reinserted": int(report["reinserted"]),
+                "skipped": int(report["skipped"]),
+                "needs": [str(name) for name in report["needs"]],
+                "withdrew": bool(report["withdrew"]),
+                "fact": fact,
+                "why": "",
+            }
+        )
+    installer.clear_reverse_ask(env_root)
+    return done
+
+
+def apply(project: project_mod.Project, env: str, *, release=None, connect=None) -> dict:
+    """Bring the environment to what it is asked for (`server-install.md` §2).
+
+    The Installer's step, run from here: **first the Console's reversals** (§D17),
+    newest first, then every release Deploy handed over that the environment's own
+    state does not record, **oldest first**. The order is not a preference — a
+    release carries the rows of the zones its range touches, so a later one does
+    not cover an earlier one's zones, and only the order reconstructs the content a
+    fresh database needs (§D6).
 
     On a server the Installer does this itself (§D1); an environment this project
     provisioned is a test server, and the step can run from here. An environment
@@ -606,6 +670,9 @@ def apply(project: project_mod.Project, env: str, *, release=None, connect=None)
     as a no-op that says so (§D14).
     """
     env_root = folder(project, env)
+    connection = connection_for(project, env)
+    write = connect or serverrows.connect
+    reversed_ = _reverse_asked(project, env, env_root, connection, write)
     state = installer.read_state(env_root, project.name)
     handed = installer.handed_over(env_root)
     if release is not None:
@@ -616,22 +683,36 @@ def apply(project: project_mod.Project, env: str, *, release=None, connect=None)
                 f"`camelot project deploy {number} --env {env}` hands it over"
             )
         numbers = [number]
+    elif not handed:
+        if reversed_:
+            # the ask was the whole job this time: the folder holds nothing to apply
+            return {
+                "env": str(env),
+                "folder": str(env_root),
+                "database": connection["database"],
+                "applied": [],
+                "reversed": reversed_,
+                "release": reversed_[-1]["release"],
+                "written": 0,
+                "removed": 0,
+                "skipped": 0,
+                "unchanged": False,
+                "pending": [],
+            }
+        raise EnvError(
+            f"{env_root}: no release is handed over to {env} — "
+            f"`camelot project deploy N --env {env}` puts one there"
+        )
     else:
-        if not handed:
-            raise EnvError(
-                f"{env_root}: no release is handed over to {env} — "
-                f"`camelot project deploy N --env {env}` puts one there"
-            )
         pending = [number for number in handed if not installer.released(state, number)]
         numbers = pending or [handed[-1]]
-    connection = connection_for(project, env)
-    write = connect or serverrows.connect
     done = [_one(project, env, env_root, number, lambda: write(connection)) for number in numbers]
     return {
         "env": str(env),
         "folder": str(env_root),
         "database": connection["database"],
         "applied": done,
+        "reversed": reversed_,
         "release": done[-1]["release"],
         "written": sum(entry["written"] for entry in done),
         "removed": sum(entry["removed"] for entry in done),
@@ -690,6 +771,15 @@ def reverse(project: project_mod.Project, env: str, *, release=None, connect=Non
                 env_root, [name for name in asked if name != number], by="reverse"
             )
         )
+    # The ask goes the same way: it named this release, and this release is done.
+    request = installer.read_reverse_ask(env_root)
+    wanted_back = [int(name) for name in (request.get("releases") or ())]
+    if number in wanted_back:
+        left = [name for name in wanted_back if name != number]
+        if left:
+            installer.write_reverse_ask(env_root, left, by=str(request.get("by") or "reverse"))
+        else:
+            installer.clear_reverse_ask(env_root)
     return {
         "env": str(env),
         "folder": str(env_root),
