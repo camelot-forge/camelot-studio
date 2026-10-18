@@ -12,11 +12,14 @@ there yet is a fact the page says out loud — building it is P6.
 """
 from __future__ import annotations
 
+import os
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from .. import clientinstall
+from .. import clientinstall, feedbuild
+from .. import feed as feed_mod
 from .. import pipeline as pipeline_mod
 from .. import project as project_mod
 from .. import release as release_mod
@@ -118,9 +121,65 @@ def _releases(root, live: dict[str, dict]) -> list[dict]:
 
 
 def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
-    """The four routes of the Deploy page: its facts, the dry run, the push and
-    the read-back. `world` is only read, for the work the chip shows."""
+    """The Deploy page's routes: its facts, the dry run, the push, the read-back
+    and the feed build. `world` is only read, for the work the chip shows."""
     router = APIRouter(prefix="/api/v1")
+    progress = {
+        "running": False,
+        "stage": "",
+        "done": 0,
+        "total": 0,
+        "error": None,
+        "version": None,
+        "path": None,
+    }
+    guard = threading.Lock()
+
+    def publish_progress() -> dict:
+        return {"progress": dict(progress)}
+
+    def publish_target() -> tuple[str, str]:
+        """The two values the feed server will serve; the daemon reads the same
+        environment, so the page never asks for a URL (`F §D4`)."""
+        feed_url = (os.environ.get("CAMELOT_FEED_URL") or "").strip()
+        server = (os.environ.get("CAMELOT_GAME_SERVER") or "").strip()
+        if not feed_url:
+            raise HTTPException(
+                status_code=400,
+                detail="CAMELOT_FEED_URL is not set: the feed's public base URL",
+            )
+        feed_url = feed_url if feed_url.endswith("/") else feed_url + "/"
+        if not server:
+            raise HTTPException(
+                status_code=400,
+                detail="CAMELOT_GAME_SERVER is not set: the game's host:port",
+            )
+        if ":" not in server:
+            raise HTTPException(
+                status_code=400,
+                detail=f"CAMELOT_GAME_SERVER must be host:port, got {server!r}",
+            )
+        return feed_url, server
+
+    def publish_in_background(project, base, feed_url: str, server: str) -> None:
+        def step(stage: str, done: int = 0, total: int = 0) -> None:
+            progress.update({"stage": stage, "done": done, "total": total})
+
+        try:
+            report = feedbuild.build(
+                project,
+                base=base,
+                base_url=feed_url,
+                server=server,
+                on_step=step,
+            )
+            progress["version"] = report["version"]
+            progress["path"] = report["path"]
+        except (feedbuild.FeedError, feed_mod.FeedError, clientinstall.InstallError, OSError) as error:
+            progress["error"] = str(error)
+            progress["stage"] = "error"
+        finally:
+            progress["running"] = False
 
     def work_waiting() -> dict[str, int]:
         editor = getattr(world, "editor", None)
@@ -144,6 +203,7 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
                 "environments": _environments(project, live),
                 "releases": _releases(root, live),
                 "feed": pipeline_mod.feed(root),
+                "publish": dict(progress),
                 "log": list(reversed(project_mod.deploy_log(root)[-LOG_LINES:])),
             }
         except (release_mod.ReleaseError, project_mod.ProjectError) as error:
@@ -200,6 +260,44 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
             clientinstall.InstallError,
         ) as error:
             raise _refused(error) from error
+
+    @router.get("/deploy/publish")
+    def deploy_publish_progress() -> dict:
+        """The feed build's state; the page polls it after starting one."""
+        return publish_progress()
+
+    @router.post("/deploy/publish")
+    def deploy_publish() -> dict:
+        """Build the players' feed in the background: the same `feedbuild.build`
+        as `camelot project feed`, with the public URL and game address read from
+        the daemon's environment (`F §D4`)."""
+        root = _root(config)
+        _writable(config)
+        feed_url, server = publish_target()
+        with guard:
+            if progress["running"]:
+                raise HTTPException(status_code=409, detail="a feed build is already running")
+            try:
+                project = project_mod.load(root)
+            except project_mod.ProjectError as error:
+                raise _refused(error) from error
+            progress.update(
+                {
+                    "running": True,
+                    "stage": "staging",
+                    "done": 0,
+                    "total": 0,
+                    "error": None,
+                    "version": None,
+                    "path": None,
+                }
+            )
+            threading.Thread(
+                target=publish_in_background,
+                args=(project, config.root, feed_url, server),
+                daemon=True,
+            ).start()
+        return publish_progress()
 
     @router.post("/deploy/verify")
     def deploy_verify(body: DeployEnvAsk) -> dict:

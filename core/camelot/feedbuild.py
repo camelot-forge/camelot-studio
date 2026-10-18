@@ -107,6 +107,7 @@ def build(
     base_url: str = "http://127.0.0.1/feed/",
     server: str = "",
     scratch=None,
+    on_step=None,
 ) -> dict:
     """Write the players' feed for what the project holds now.
 
@@ -117,7 +118,15 @@ def build(
     *server* is where the game is (`host:port`), and it is written beside the protocol's
     two files (`launcher.json`): a player is told one URL, and the shard's own settings
     come from it.
+
+    *on_step* is the page's progress: `staging`, `walking`, `writing` (counted),
+    then `done`. It is a listener, never a second implementation.
     """
+
+    def step(stage: str, done: int = 0, total: int = 0) -> None:
+        if on_step is not None:
+            on_step(stage, done, total)
+
     root = Path(project.root)
     where = Path(out) if out is not None else root / feed.FEED
     client = base or project_mod.client_root(project)
@@ -134,8 +143,10 @@ def build(
     space = Path(scratch) if scratch is not None else where / ".staged"
     if space.exists():
         shutil.rmtree(space)
+    step("staging")
     staged = stage(client, packs, space)
     try:
+        step("walking")
         tree = feed.walk(staged)
         before = feed.walk(client)
         removed = sorted(set(before) - set(tree))
@@ -148,10 +159,12 @@ def build(
         version = _version_of(root)
         releases = release_mod.releases(root)
         where.mkdir(parents=True, exist_ok=True)
-        for rel, facts in sorted(changed.items()):
+        step("writing", 0, len(changed))
+        for number, (rel, facts) in enumerate(sorted(changed.items()), start=1):
             target = where / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(staged / rel, target)
+            step("writing", number, len(changed))
         feed.write_version(where / feed.VERSION_FILE, version)
         feed.write_patchlist(where / feed.PATCHLIST_FILE, base_url, tree)
         shard = {
@@ -179,6 +192,7 @@ def build(
         (where / feed.RECORD_FILE).write_text(
             json.dumps(record, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
         )
+        step("done", len(changed), len(changed))
     finally:
         shutil.rmtree(space, ignore_errors=True)
     return {

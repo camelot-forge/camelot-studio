@@ -169,7 +169,21 @@ export interface DeployFeed {
 	version: number | string | null;
 	files: number;
 	bytes: number;
+	published: number;
+	published_bytes: number;
 	release: number | null;
+	base_url: string;
+}
+
+/** The feed build's progress (`F §D4`): the page polls it after Publish. */
+export interface DeployPublish {
+	running: boolean;
+	stage: string;
+	done: number;
+	total: number;
+	error: string | null;
+	version: number | null;
+	path: string | null;
 }
 
 /** One line of `deploy/log.jsonl` — the record of an attempt. */
@@ -258,6 +272,7 @@ export interface DeployPage {
 	environments: DeployEnvironment[];
 	releases: DeployRelease[];
 	feed: DeployFeed;
+	publish: DeployPublish;
 	log: DeployLogLine[];
 }
 
@@ -884,5 +899,7 @@ export const api = {
 	deployPlan: (ask: DeployAsk) => send<DeployPlan>('POST', '/deploy/plan', ask),
 	deployPush: (ask: DeployAsk) => send<DeployOutcome>('POST', '/deploy/deploy', ask),
 	deployCut: () => send<DeployCut>('POST', '/deploy/cut'),
-	deployVerify: (env: string) => send<DeployVerify>('POST', '/deploy/verify', { env })
+	deployVerify: (env: string) => send<DeployVerify>('POST', '/deploy/verify', { env }),
+	deployPublish: () => send<{ progress: DeployPublish }>('POST', '/deploy/publish'),
+	deployPublishProgress: () => get<{ progress: DeployPublish }>('/deploy/publish')
 };

@@ -546,6 +546,7 @@ def feed(root) -> dict:
         "published": 0,
         "published_bytes": 0,
         "release": None,
+        "base_url": "",
     }
     if not found["present"]:
         return found

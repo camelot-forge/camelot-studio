@@ -6,6 +6,8 @@ does, and the two refusals it inherits — no project, and a read-only daemon
 """
 
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,7 @@ from test_release import served_client  # noqa: F401  (what `project_client` wra
 from test_serve_editor import editing  # noqa: F401
 from test_zones import FIXTURES, world  # noqa: F401
 
+from camelot import feedbuild
 from camelot import release as rel
 from camelot.mpak import write_mpak
 from camelot.serve.app import create_app
@@ -197,6 +200,93 @@ def test_without_a_project_the_page_is_off(project_client):
 
     assert answer.status_code == 503
     assert "--project" in answer.json()["detail"]
+
+
+def _published(api, deadline=10.0):
+    """The progress of the publish the test just started, once it stops."""
+    until = time.monotonic() + deadline
+    while time.monotonic() < until:
+        progress = api.get("/api/v1/deploy/publish").json()["progress"]
+        if not progress["running"]:
+            return progress
+        time.sleep(0.01)
+    raise AssertionError("the feed build did not finish")
+
+
+def test_the_publish_route_builds_the_feed_in_the_background(
+    project_client, tmp_path, monkeypatch
+):
+    """`POST /deploy/publish` is `feedbuild.build` with the public URL and the
+    game address the daemon's environment names; the page polls the progress."""
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+    monkeypatch.setenv("CAMELOT_FEED_URL", "https://patch.example")
+    monkeypatch.setenv("CAMELOT_GAME_SERVER", "play.example:10300")
+    api = _api(project_client, project.root)
+
+    started = api.post("/api/v1/deploy/publish")
+
+    assert started.status_code == 200
+    assert "progress" in started.json()
+    progress = _published(api)
+    assert progress["error"] is None and progress["version"] == 1
+    feed_dir = project.root / "feed"
+    assert progress["path"] == str(feed_dir)
+    assert (feed_dir / "version-new.txt").read_text(encoding="utf-8").strip() == "1"
+    patchlist = (feed_dir / "patchlist-new.txt").read_text(encoding="utf-8").splitlines()
+    assert patchlist[0] == "https://patch.example/"
+    launcher = json.loads((feed_dir / "launcher.json").read_text(encoding="utf-8"))
+    assert launcher["feed"] == "https://patch.example/"
+    assert launcher["server"] == "play.example:10300"
+    body = api.get("/api/v1/deploy").json()
+    assert body["publish"]["version"] == 1
+    assert body["feed"]["present"] is True
+
+
+def test_the_publish_route_names_the_missing_public_value(
+    project_client, tmp_path, monkeypatch
+):
+    """No guessed URL: the daemon says which variable the container and the
+    publish share (`F §D4`)."""
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+    monkeypatch.delenv("CAMELOT_FEED_URL", raising=False)
+    monkeypatch.delenv("CAMELOT_GAME_SERVER", raising=False)
+    api = _api(project_client, project.root)
+
+    missing_feed = api.post("/api/v1/deploy/publish")
+    assert missing_feed.status_code == 400
+    assert "CAMELOT_FEED_URL" in missing_feed.json()["detail"]
+
+    monkeypatch.setenv("CAMELOT_FEED_URL", "https://patch.example/")
+    missing_server = api.post("/api/v1/deploy/publish")
+    assert missing_server.status_code == 400
+    assert "CAMELOT_GAME_SERVER" in missing_server.json()["detail"]
+
+
+def test_a_second_publish_is_refused_while_one_runs(project_client, tmp_path, monkeypatch):
+    """One build at a time: two walks of the same client would fight over the
+    same feed files."""
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+    monkeypatch.setenv("CAMELOT_FEED_URL", "https://patch.example/")
+    monkeypatch.setenv("CAMELOT_GAME_SERVER", "play.example:10300")
+    started = threading.Event()
+    release = threading.Event()
+
+    def held(project, *, base_url="", server="", on_step=None, **_kwargs):
+        started.set()
+        release.wait(5)
+        return {"version": 1, "path": str(project.root / "feed")}
+
+    monkeypatch.setattr(feedbuild, "build", held)
+    api = _api(project_client, project.root)
+    try:
+        assert api.post("/api/v1/deploy/publish").status_code == 200
+        assert started.wait(5)
+        again = api.post("/api/v1/deploy/publish")
+        assert again.status_code == 409
+        assert "already running" in again.json()["detail"]
+    finally:
+        release.set()
+        _published(api)
 
 
 def test_the_feed_panel_reads_the_launcher_files(project_client, tmp_path):

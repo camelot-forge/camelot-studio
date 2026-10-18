@@ -14,6 +14,7 @@
 		type DeployOutcome,
 		type DeployPage,
 		type DeployPlan,
+		type DeployPublish,
 		type DeployVerify
 	} from '$lib/api/client';
 	import { ArrowUpRight, Eye, Package, Rocket, Scissors, Send, ShieldCheck } from '@lucide/svelte';
@@ -24,6 +25,7 @@
 	let plan = $state<DeployPlan | null>(null);
 	let outcome = $state<DeployOutcome | null>(null);
 	let verified = $state<DeployVerify | null>(null);
+	let publish = $state<DeployPublish | null>(null);
 	let reading = $state<string | null>(null);
 	let busy = $state(false);
 	let error = $state<string | null>(null);
@@ -46,11 +48,46 @@
 		error = null;
 		try {
 			facts = await api.deploy();
+			publish = facts.publish;
 			if (release === null) release = facts.releases[0]?.number ?? null;
 			if (env === null) env = facts.environments[0]?.name ?? null;
 			await planOnly();
+			if (publish?.running) {
+				await followPublish();
+				facts = await api.deploy();
+			}
 		} catch (problem) {
 			say(problem);
+		}
+	}
+
+	function publishing(found: DeployPublish): string {
+		if (found.stage === 'staging') return 'applying the release to the base…';
+		if (found.stage === 'walking') return 'walking the client…';
+		if (found.stage === 'writing') return `${found.done} / ${found.total} file(s)`;
+		if (found.stage === 'done') return 'done';
+		return found.stage;
+	}
+
+	async function followPublish(): Promise<void> {
+		while (publish?.running) {
+			await new Promise((done) => setTimeout(done, 400));
+			publish = (await api.deployPublishProgress()).progress;
+		}
+		if (publish?.error) error = publish.error;
+	}
+
+	async function publishFeed(): Promise<void> {
+		busy = true;
+		error = null;
+		try {
+			publish = (await api.deployPublish()).progress;
+			await followPublish();
+			await load();
+		} catch (problem) {
+			say(problem);
+		} finally {
+			busy = false;
 		}
 	}
 
@@ -230,9 +267,10 @@
 			</button>
 			<button
 				class="tool"
-				title="publish the players' update — it lands with P6"
+				title={publish?.running ? publishing(publish) : "publish the players' update"}
 				aria-label="Publish"
-				disabled
+				disabled={busy || publish?.running || !facts || facts.read_only}
+				onclick={publishFeed}
 			>
 				<Send size={17} />
 			</button>
@@ -447,13 +485,24 @@
 						Feed
 						<span class="card-meta">the players' update</span>
 					</h3>
+					{#if publish?.running}
+						<p class="line">building the feed — {publishing(publish)}</p>
+					{:else if publish?.error}
+						<p class="line warn">{publish.error}</p>
+					{/if}
 					{#if facts?.feed.present}
 						<p class="version">version {facts.feed.version ?? '—'}</p>
 						<p class="line">
 							{facts.feed.files} file(s) · {size(facts.feed.bytes)}
+							{#if facts.feed.published}
+								· {facts.feed.published} published ({size(facts.feed.published_bytes)})
+							{/if}
 							{facts.feed.release ? ` · release ${facts.feed.release}` : ''}
 						</p>
 						<p class="path">{facts.feed.path}</p>
+						{#if facts.feed.base_url}
+							<p class="path">{facts.feed.base_url}</p>
+						{/if}
 						{#if facts.feed.release && newest && facts.feed.release > newest}
 							<p class="line warn">
 								the feed carries {facts.feed.release}, newer than the newest release here
@@ -473,8 +522,9 @@
 						</p>
 					{:else}
 						<p class="hint">
-							No feed yet. The players' update is built by <code>camelot project publish</code>,
-							which lands with P6 — until then the panel shows what the launcher would read.
+							No feed yet. <strong>Publish</strong> builds it with the daemon's
+							<code>CAMELOT_FEED_URL</code> and <code>CAMELOT_GAME_SERVER</code>; the
+							CLI verb is <code>camelot project feed</code>.
 						</p>
 						<p class="path">{facts?.feed.path ?? ''}</p>
 					{/if}
