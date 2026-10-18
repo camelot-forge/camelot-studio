@@ -1279,17 +1279,20 @@ def cmd_launcher(args) -> int:
 
     try:
         settings = launcher_mod.read_settings(args.settings)
+        shard = launcher_mod.read_shard(args.shard)
     except launcher_mod.LauncherError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    if args.feed:
-        settings["feed"] = args.feed
+    settings = launcher_mod.configure(
+        settings,
+        shard,
+        feed=args.feed,
+        server=args.server,
+    )
     if args.client:
         settings["client"] = args.client
     if args.account:
         settings["account"] = args.account
-    if args.server:
-        settings["server"] = args.server
     launcher_mod.write_settings(settings, args.settings)
     try:
         return launcher_mod.serve(
@@ -1742,6 +1745,9 @@ def main(argv=None) -> int:
     p.add_argument("--account", help="the account to fill in (never a password)")
     p.add_argument("--server", help="the game's address, overriding the feed's")
     p.add_argument("--settings", help="this launcher's own settings file")
+    p.add_argument(
+        "--shard", help="the distributed shard.json (default: beside the launcher)"
+    )
     p.add_argument("--page", help="the built page (default: web/launcher/dist)")
     p.add_argument("--host", default="127.0.0.1", help="the interface (default: 127.0.0.1)")
     p.add_argument("--port", type=int, default=8710, help="the port (default: 8710)")

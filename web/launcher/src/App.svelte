@@ -37,7 +37,6 @@
 	});
 	let account = $state('');
 	let password = $state('');
-	let feed = $state('');
 	let client = $state('');
 	let busy = $state(false);
 	let said = $state('');
@@ -57,7 +56,6 @@
 		if (next.state) {
 			state = next.state;
 			account = state.account || account;
-			feed = state.shard.feed || feed;
 			client = state.client || client;
 		}
 		if (next.progress) progress = next.progress;
@@ -96,7 +94,7 @@
 	}
 
 	async function save() {
-		read(await call('/api/settings', { feed, client, account, remember: true }));
+		read(await call('/api/settings', { client, account, remember: true }));
 	}
 
 	$effect(() => {
@@ -193,9 +191,7 @@
 		</div>
 
 		<div class="card">
-			<label for="feed">feed</label>
-			<input id="feed" bind:value={feed} onblur={save} />
-			<label for="client" style="margin-top:0.75rem">client folder</label>
+			<label for="client">client folder</label>
 			<input id="client" bind:value={client} onblur={save} />
 		</div>
 	{/if}

@@ -119,6 +119,67 @@ def test_a_settings_file_keeps_its_own_path_across_writes(tmp_path):
     assert launcher.read_settings(custom)["installed"] == 4
 
 
+def test_the_shard_file_is_what_the_player_does_not_type(tmp_path):
+    """F §D1: the distributed file names the feed and the shard. A player never
+    sees the URL field; the file is beside the launcher."""
+    path = tmp_path / "shard.json"
+    path.write_text(
+        json.dumps(
+            {"name": "Avalon", "feed": "https://patch.example", "server": "fallback:1"}
+        ),
+        encoding="utf-8",
+    )
+
+    shard = launcher.read_shard(path)
+
+    assert shard["name"] == "Avalon"
+    assert shard["feed"] == "https://patch.example/"
+    assert shard["server"] == "fallback:1"
+
+    settings = launcher.configure(dict(launcher.DEFAULTS, feed="https://stale/"), shard)
+    assert settings["feed"] == "https://patch.example/"
+    assert settings["shard_name"] == "Avalon"
+    assert settings["shard_server"] == "fallback:1"
+
+
+def test_the_environment_and_the_command_line_override_the_shard(tmp_path):
+    """F §D2: a development run points at another feed without editing the
+    distributed file."""
+    shard = {"name": "Avalon", "feed": "https://patch.example/", "server": "fallback:1"}
+
+    from_env = launcher.configure(
+        dict(launcher.DEFAULTS),
+        shard,
+        environ={
+            "CAMELOT_FEED_URL": "http://env.example/",
+            "CAMELOT_GAME_SERVER": "env:2",
+        },
+    )
+    assert from_env["feed"] == "http://env.example/"
+    assert from_env["server_override"] == "env:2"
+
+    from_cli = launcher.configure(
+        from_env,
+        shard,
+        feed="http://cli.example",
+        server="cli:3",
+        environ={
+            "CAMELOT_FEED_URL": "http://env.example/",
+            "CAMELOT_GAME_SERVER": "env:2",
+        },
+    )
+    assert from_cli["feed"] == "http://cli.example/"
+    assert from_cli["server_override"] == "cli:3"
+
+
+def test_a_broken_shard_file_is_an_error_not_a_default(tmp_path):
+    path = tmp_path / "shard.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(launcher.LauncherError, match="shard.json"):
+        launcher.read_shard(path)
+
+
 # --- what it can say without walking a client ----------------------------------
 
 
@@ -162,11 +223,29 @@ def test_a_feed_that_does_not_say_where_the_game_is_is_a_problem(tmp_path, clien
         launcher.command(settings, account="forge", password="pw", system="linux")
 
 
+def test_the_shard_name_and_fallback_server_show_before_the_feed(tmp_path):
+    settings = dict(launcher.DEFAULTS, shard_name="Avalon", shard_server="fallback:1")
+
+    found = launcher.state(settings)
+
+    assert found["shard"] == {"shard": "Avalon", "server": "fallback:1"}
+    assert any("no feed URL" in problem for problem in found["problems"])
+
+
+def test_the_command_uses_the_shard_fallback_when_the_feed_has_no_address(tmp_path, client):  # noqa: F811  (the fixture the import names)
+    settings, _player, _where, _report = _ready(tmp_path, client, server="")
+    settings["shard_server"] = "fallback:1"
+
+    argv = launcher.command(settings, account="forge", password="pw", system="linux")
+
+    assert argv[-3] == "fallback:1"
+
+
 def test_a_local_server_override_is_what_the_page_and_the_command_use(tmp_path, client):  # noqa: F811  (the fixture the import names)
     """`--server` is for a machine pointing at another address than the feed's: the
     page must show the address Play will use, not the one it overrides."""
     settings, _player, _where, _report = _ready(tmp_path, client)
-    settings["server"] = "127.0.0.1:10300"
+    settings["server_override"] = "127.0.0.1:10300"
 
     found = launcher.state(settings)
 

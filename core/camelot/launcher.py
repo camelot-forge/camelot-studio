@@ -31,17 +31,24 @@ __all__ = [
     "DEFAULTS",
     "LauncherError",
     "command",
+    "configure",
     "play",
     "read_settings",
+    "read_shard",
     "settings_path",
+    "shard_config_path",
     "shard_of",
     "state",
     "update",
     "write_settings",
 ]
 
+#: The distributed file that names the shard: beside the launcher binary, so a player
+#: never types the feed's URL. `launcher.json` is the *feed's* own file, a different one.
+SHARD_FILE = "shard.json"
+
 #: What a launcher remembers between runs. The *shard's* settings are not here: they come
-#: from the feed (`launcher.json`), so a player is told one URL and nothing else.
+#: from the feed (`launcher.json`) or the distributed `shard.json`.
 DEFAULTS: dict = {
     "feed": "",
     "client": "",
@@ -71,6 +78,78 @@ def settings_path(explicit=None) -> Path:
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     return base / "camelot-launcher" / "settings.json"
+
+
+def shard_config_path(explicit=None) -> Path | None:
+    """Where the distributed shard file is: the one a run names, then
+    `$CAMELOT_SHARD`, then `shard.json` beside the launcher binary. A source
+    checkout run from `python -m` may find none, which is why the CLI can name
+    one."""
+    if explicit:
+        return Path(explicit).expanduser()
+    named = os.environ.get("CAMELOT_SHARD")
+    if named:
+        return Path(named).expanduser()
+    executable = Path(sys.argv[0]).expanduser()
+    if executable.is_file():
+        return executable.resolve().parent / SHARD_FILE
+    return None
+
+
+def _with_slash(value: str) -> str:
+    """A feed base URL ends with `/`: the protocol composes `base + path` and
+    `write_patchlist` refuses anything else."""
+    value = str(value)
+    return value if not value or value.endswith("/") else value + "/"
+
+
+def read_shard(path=None) -> dict:
+    """The shard this launcher was built for (`shard.json`): its name, its feed,
+    and an optional game address used only when the feed does not carry one.
+
+    Missing is a fact — a development run can name a feed directly — but a file
+    that exists and does not parse is an error, never a silent default."""
+    where = shard_config_path(path)
+    if where is None or not where.exists():
+        return {}
+    if not where.is_file():
+        raise LauncherError(f"{where}: not a file")
+    try:
+        document = json.loads(where.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise LauncherError(f"{where}: {error}") from error
+    if not isinstance(document, dict):
+        raise LauncherError(f"{where}: the shard file must be an object")
+    return {
+        "name": str(document.get("name") or ""),
+        "feed": _with_slash(str(document.get("feed") or "")),
+        "server": str(document.get("server") or ""),
+        "path": str(where),
+    }
+
+
+def configure(settings: dict, shard: dict | None = None, *, feed=None, server=None, environ=None) -> dict:
+    """The settings one run uses: the distributed shard first, then the
+    environment, then the command line. The shard's name and fallback server
+    ride along; the explicit server override and neither of those is written to
+    the player's settings file."""
+    environ = os.environ if environ is None else environ
+    shard = shard or {}
+    found = dict(settings)
+    found["shard_name"] = str(shard.get("name") or "")
+    found["shard_server"] = str(shard.get("server") or "")
+    found["server_override"] = ""
+    if shard.get("feed"):
+        found["feed"] = _with_slash(str(shard["feed"]))
+    if environ.get("CAMELOT_FEED_URL"):
+        found["feed"] = _with_slash(str(environ["CAMELOT_FEED_URL"]))
+    if environ.get("CAMELOT_GAME_SERVER"):
+        found["server_override"] = str(environ["CAMELOT_GAME_SERVER"])
+    if feed:
+        found["feed"] = _with_slash(str(feed))
+    if server:
+        found["server_override"] = str(server)
+    return found
 
 
 def read_settings(path=None) -> dict:
@@ -125,8 +204,14 @@ def shard_of(base_url: str, *, settings: dict | None = None) -> dict:
     return {
         "feed": base_url,
         "version": announced["version"],
-        "shard": str(carried.get("shard") or ""),
-        "server": str(settings.get("server") or carried.get("server") or ""),
+        "shard": str(carried.get("shard") or settings.get("shard_name") or ""),
+        "server": str(
+            settings.get("server_override")
+            or carried.get("server")
+            or settings.get("shard_server")
+            or settings.get("server")
+            or ""
+        ),
         "built": carried.get("built"),
     }
 
@@ -139,8 +224,9 @@ def state(settings: dict) -> dict:
     """
     where = str(settings.get("client") or "")
     client = Path(where).expanduser() if where else None
+    internal = ("wineprefix", "server_override", "shard_name", "shard_server")
     found = {
-        "settings": {key: value for key, value in settings.items() if key != "wineprefix"},
+        "settings": {key: value for key, value in settings.items() if key not in internal},
         "settings_path": str(settings.get("path") or settings_path()),
         "client": str(client) if client else "",
         "client_there": bool(client and client.is_dir()),
@@ -153,13 +239,24 @@ def state(settings: dict) -> dict:
         found["problems"].append("no client folder yet — pick one")
     elif not (client / "connect.exe").is_file():
         found["problems"].append(f"{client} does not look like a DAoC client (no connect.exe)")
+    name = str(settings.get("shard_name") or "")
+    fallback = str(
+        settings.get("server_override")
+        or settings.get("shard_server")
+        or settings.get("server")
+        or ""
+    )
     if not settings.get("feed"):
         found["problems"].append("no feed URL yet — your shard's patch address")
+        if name:
+            found["shard"] = {"shard": name, "server": fallback}
         return found
     try:
         found["shard"] = shard_of(str(settings["feed"]), settings=settings)
     except LauncherError as error:
         found["problems"].append(str(error))
+        if name or fallback:
+            found["shard"] = {"shard": name, "server": fallback}
         return found
     found["up_to_date"] = found["installed"] is not None and int(found["installed"]) >= int(
         found["shard"]["version"]
@@ -225,9 +322,14 @@ def command(
     client = Path(str(settings.get("client") or "")).expanduser()
     if not (client / "connect.exe").is_file():
         raise LauncherError(f"{client}: no connect.exe — that is not a DAoC client")
-    address = str(settings.get("server") or "")
+    address = str(settings.get("server_override") or "")
+    if not address and settings.get("feed"):
+        try:
+            address = shard_of(str(settings["feed"]), settings=settings)["server"]
+        except LauncherError:
+            address = ""
     if not address:
-        address = shard_of(str(settings.get("feed") or ""), settings=settings)["server"]
+        address = str(settings.get("shard_server") or settings.get("server") or "")
     if not address:
         raise LauncherError("no game address — the feed does not say where the game is")
     if not account or not password:

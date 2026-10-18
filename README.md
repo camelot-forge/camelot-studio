@@ -88,9 +88,16 @@ Examples:
 ### The players' launcher
 
 `camelot launcher` is the players' own surface: a page on `127.0.0.1` and the
-two things a browser cannot do — update the client and start the game. It reads
-one feed URL; the shard's name, version and game address come from the feed's
-`launcher.json`.
+two things a browser cannot do — update the client and start the game. A
+distributed launcher carries `shard.json` beside the executable:
+
+```json
+{ "name": "Camelot Hills", "feed": "https://patch.example/" }
+```
+
+The page never asks for the feed URL. `--feed` / `CAMELOT_FEED_URL` override it
+for a development run; the game address comes from the feed's `launcher.json`,
+with `--server` / `CAMELOT_GAME_SERVER` as an override.
 
 ```sh
 .venv/bin/camelot launcher --feed /path/to/feed/ --client "$DAOC_CLIENT"
