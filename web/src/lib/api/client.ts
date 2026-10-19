@@ -321,6 +321,8 @@ export interface HomeRebase {
 	clean: boolean;
 	resources: HomeRebaseResource[];
 	journal: HomeRebaseEntry[];
+	/** Zones the journal writes whose table `project.json` never fingerprinted. */
+	unwatched: Array<{ zone: number; resource: string; ops: number }>;
 	moved: number;
 	missing: number;
 	pinned: number;

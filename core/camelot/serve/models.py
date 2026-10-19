@@ -529,6 +529,9 @@ class HomeRebase(BaseModel):
     clean: bool = False
     resources: list[dict[str, Any]] = []
     journal: list[dict[str, Any]] = []
+    #: Zones the journal writes whose table `project.json` never fingerprinted:
+    #: a client update there would pass unnoticed (`project.md` §D16).
+    unwatched: list[dict[str, Any]] = []
     moved: int = 0
     missing: int = 0
     pinned: int = 0

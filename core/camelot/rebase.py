@@ -91,6 +91,10 @@ def analysis(project: project_mod.Project, client=None) -> dict:
         "clean": not resources,
         "resources": resources,
         "journal": report,
+        #: A zone the journal writes but whose table was never fingerprinted:
+        #: a client update there would be absorbed in silence, which is the one
+        #: thing this phase exists to prevent (`project.md` §D16).
+        "unwatched": _unwatched(project, directory, journal.live()),
         "moved": sum(1 for item in resources if item["state"] == "moved"),
         "missing": sum(1 for item in resources if item["state"] == "missing"),
         "pinned": sum(1 for item in resources if item["state"] == "pinned"),
@@ -98,6 +102,46 @@ def analysis(project: project_mod.Project, client=None) -> dict:
             item["conflicts"] for item in report
         ),
     }
+
+
+def _unwatched(
+    project: project_mod.Project, directory: Path, lines: list[journal_mod.Line]
+) -> list[dict]:
+    """The zones the journal writes but `project.json` never fingerprinted.
+
+    A zone whose `fixtures.csv` is not recorded can move under the project and
+    no `verify` will say so: the re-base has to name it, or the phase's promise
+    (nothing is absorbed in silence) is false for that zone.
+    """
+    watched = set(project.fingerprints)
+    found = []
+    zones = sorted(
+        {
+            line.zone
+            for line in lines
+            if line.family == "world" and line.zone is not None and line.op
+        }
+    )
+    for zone_id in zones:
+        resources = [
+            resource
+            for resource in project_mod.zone_resources(directory, zone_id)
+            if resource.endswith("#fixtures.csv")
+        ]
+        if not resources or any(resource in watched for resource in resources):
+            continue
+        found.append(
+            {
+                "zone": zone_id,
+                "resource": resources[0],
+                "ops": sum(
+                    1
+                    for line in lines
+                    if line.family == "world" and line.zone == zone_id and line.op
+                ),
+            }
+        )
+    return found
 
 
 def _found(directory: Path, finding: dict) -> str | None:

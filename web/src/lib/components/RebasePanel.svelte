@@ -115,6 +115,17 @@
 			{/if}
 		{/if}
 
+		{#if view?.unwatched?.length}
+			<ul class="unwatched">
+				{#each view.unwatched as item (item.resource)}
+					<li>
+						zone {item.zone}: {item.ops} op(s), but <code>{item.resource}</code> is not
+						fingerprinted — <code>camelot project populate --zones {item.zone}</code>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+
 		<footer>
 			<button class="btn ghost" type="button" onclick={close} disabled={busy !== ''}>
 				Close
@@ -251,6 +262,19 @@
 	}
 	.detail {
 		color: var(--warn-text);
+	}
+	.unwatched {
+		margin: 0;
+		padding: 8px 10px;
+		border: 1px solid var(--warn-border);
+		border-radius: var(--r-md);
+		background: var(--warn-tint);
+		font-size: var(--fs-small);
+		color: var(--warn-text);
+		list-style: none;
+	}
+	.unwatched code {
+		font-family: var(--font-mono, monospace);
 	}
 	footer {
 		display: flex;

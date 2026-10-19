@@ -566,32 +566,41 @@ def print_rebase(view: dict, decided: str = "") -> None:
     print(f"  {'client':<9} {view['client']}")
     if view["clean"]:
         print("  the base is the one this project recorded: nothing to decide")
-        return
-    print(
-        f"  {len(view['resources'])} resource(s) no longer match: "
-        f"{view['moved']} moved, {view['missing']} missing, {view['pinned']} pinned"
-    )
-    print()
-    width = max(len(item["state"]) for item in view["resources"])
-    for item in view["resources"]:
-        print(f"  {item['state']:<{width}}  {item['resource']}")
-        if item["detail"]:
-            print(f"  {'':<{width}}  {item['detail']}")
-    for entry in view["journal"]:
+    else:
+        print(
+            f"  {len(view['resources'])} resource(s) no longer match: "
+            f"{view['moved']} moved, {view['missing']} missing, {view['pinned']} pinned"
+        )
         print()
-        print(f"  {entry['resource']}")
-        for op in entry["ops"]:
-            line = f"    {op['verdict']:<9} {op['key']}  ({op['where']})  row {op['row']}"
-            if op["detail"]:
-                line += f"  {op['detail']}"
-            print(line)
-        if entry["unwalked"]:
-            print(f"    {entry['unwalked']} op(s) after the conflict were not judged")
-        if entry["note"]:
-            print(f"    {entry['note']}")
+        width = max(len(item["state"]) for item in view["resources"])
+        for item in view["resources"]:
+            print(f"  {item['state']:<{width}}  {item['resource']}")
+            if item["detail"]:
+                print(f"  {'':<{width}}  {item['detail']}")
+        for entry in view["journal"]:
+            print()
+            print(f"  {entry['resource']}")
+            for op in entry["ops"]:
+                line = f"    {op['verdict']:<9} {op['key']}  ({op['where']})  row {op['row']}"
+                if op["detail"]:
+                    line += f"  {op['detail']}"
+                print(line)
+            if entry["unwalked"]:
+                print(f"    {entry['unwalked']} op(s) after the conflict were not judged")
+            if entry["note"]:
+                print(f"    {entry['note']}")
+    for item in view["unwatched"]:
+        print()
+        print(
+            f"  zone {item['zone']}: {item['ops']} op(s) but {item['resource']} is not "
+            f"fingerprinted — `camelot project populate --zones {item['zone']}`"
+        )
+    if view["clean"]:
+        return
     print()
     if decided:
-        print(f"  {decided}: written to project.json")
+        written = int(view.get("pinned_now", view.get("adopted", 0)) or 0)
+        print(f"  {decided}: {written} resource(s) written to project.json")
     else:
         print("  nothing written — --keep-ours or --adopt decides")
 

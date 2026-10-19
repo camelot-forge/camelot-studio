@@ -128,6 +128,21 @@ def test_a_moved_resource_the_journal_never_wrote_is_listed_without_ops(project,
     assert view["conflicts"] == 0
 
 
+def test_a_zone_the_project_never_fingerprinted_is_named_not_skipped(tmp_path, client):  # noqa: F811
+    """P8's promise is that nothing is absorbed in silence. A zone whose table
+    `populate` never recorded can move under the journal and `verify` would say
+    nothing, so the view says it instead."""
+    bare = pj.new(tmp_path / "bare", client=client, name="Bare")
+    _move(_editor(bare, client), row=2)
+
+    view = rebase.analysis(bare, client=client)
+
+    assert view["clean"] is True  # nothing *recorded* moved
+    assert [item["zone"] for item in view["unwatched"]] == [0]
+    assert view["unwatched"][0]["resource"].endswith("#fixtures.csv")
+    assert view["unwatched"][0]["ops"] == 1
+
+
 # -- what the log says about it (D18) ------------------------------------------
 
 
@@ -300,6 +315,22 @@ def test_the_cli_exits_one_when_something_moved(project, client, daemon, capsys)
     assert "conflict" in out and "nothing written" in out
 
 
+def test_the_cli_names_a_zone_it_cannot_watch(tmp_path, client, capsys):  # noqa: F811
+    """A zone with ops and no fingerprint is the one case where `clean` would
+    lie: the command has to say so even when nothing moved."""
+    from camelot.cli import main
+
+    bare = pj.new(tmp_path / "bare", client=client, name="Bare")
+    _move(_editor(bare, client), row=2)
+
+    code = main(["project", "rebase", "--dir", str(bare.root), "--client", str(client)])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "nothing to decide" in out
+    assert "zone 0: 1 op(s)" in out and "camelot project populate --zones 0" in out
+
+
 def test_the_cli_refuses_both_decisions_at_once(project, client, capsys):  # noqa: F811
     from camelot.cli import main
 
@@ -322,5 +353,5 @@ def test_the_cli_keeps_ours_and_says_it(project, client, capsys):  # noqa: F811
     ])
 
     assert code == 0
-    assert "keep ours: written to project.json" in capsys.readouterr().out
+    assert "keep ours: 1 resource(s) written to project.json" in capsys.readouterr().out
     assert pj.load(project.root).pinned

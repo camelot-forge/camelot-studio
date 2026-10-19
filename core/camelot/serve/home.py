@@ -268,6 +268,7 @@ def _rebase_of(path: str, decision: str = "") -> HomeRebase:
         clean=view["clean"],
         resources=view["resources"],
         journal=view["journal"],
+        unwatched=view["unwatched"],
         moved=view["moved"],
         missing=view["missing"],
         pinned=view["pinned"],
