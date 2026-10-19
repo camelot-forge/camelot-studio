@@ -486,19 +486,14 @@ live client plays for the male Troll player is still to confirm
 
 ## Next steps (priority order)
 
-1. **P8 — the re-base**: the per-file view, `keep ours` and `adopt theirs`, and
-   the ops that no longer match a base that moved — in the CLI (`camelot project
-   rebase`), the daemon (`/home/rebase`) and Home's panel. What remains is the
-   browser pass on that panel and the blog entry; the design is
-   `notes/project.md` §D16-§D18.
-2. **The delivery chain's own limits**: the loader's used-id export, the
+1. **The delivery chain's own limits**: the loader's used-id export, the
    `objects` cap-5000 recipe, and the ids above 32767 (the signed 16-bit wire)
    are the next measurements.
-3. **The NIF writer** is the gate on content that brings new geometry: a model
+2. **The NIF writer** is the gate on content that brings new geometry: a model
    the client has never read still waits on it. It runs parallel to the rest.
-4. **The players' Windows package**, built and signed on a Windows machine, with
+3. **The players' Windows package**, built and signed on a Windows machine, with
    the launcher's self-update, before the launcher is handed out widely.
-5. **Blender integration** (M2, `addon/`): a UI shell over the CLI — figures,
+4. **Blender integration** (M2, `addon/`): a UI shell over the CLI — figures,
    fig3 parts, items and `.kfa` animations imported and exported from Blender.
 
 The dated record of how each of these was reached — the slices, the UX passes,
