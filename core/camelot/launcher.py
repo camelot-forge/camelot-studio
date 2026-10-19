@@ -308,6 +308,7 @@ if errorlevel 1 exit /b 1
 move "%STAGED%" "%INSTALL%" >NUL 2>&1
 if errorlevel 1 goto restore
 start "" "%INSTALL%\\%EXE%" {launch}
+rmdir /s /q "%OLD%" >NUL 2>&1
 rmdir /s /q "%UPDATE%" >NUL 2>&1
 del "%~f0" >NUL 2>&1
 exit /b 0

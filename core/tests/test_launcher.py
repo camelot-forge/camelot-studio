@@ -684,6 +684,8 @@ def test_the_swap_script_waits_for_the_pid_then_swaps_and_can_restore(tmp_path):
     assert 'move "%OLD%" "%INSTALL%"' in windows
     assert "camelot-launcher.old-2" in windows
     assert "--no-open" in windows
+    after_start = windows.split('start ""', 1)[1]
+    assert 'rmdir /s /q "%OLD%"' in after_start
 
     posix = launcher.swap_script(
         install, staged, pid=4321, version=2, system="linux", args=["--no-open", "--port", "8799"]
