@@ -125,7 +125,12 @@ def test_the_shard_file_is_what_the_player_does_not_type(tmp_path):
     path = tmp_path / "shard.json"
     path.write_text(
         json.dumps(
-            {"name": "Avalon", "feed": "https://patch.example", "server": "fallback:1"}
+            {
+                "name": "Avalon",
+                "feed": "https://patch.example",
+                "launcher": "https://patch.example/launcher",
+                "server": "fallback:1",
+            }
         ),
         encoding="utf-8",
     )
@@ -134,10 +139,12 @@ def test_the_shard_file_is_what_the_player_does_not_type(tmp_path):
 
     assert shard["name"] == "Avalon"
     assert shard["feed"] == "https://patch.example/"
+    assert shard["launcher"] == "https://patch.example/launcher/"
     assert shard["server"] == "fallback:1"
 
     settings = launcher.configure(dict(launcher.DEFAULTS, feed="https://stale/"), shard)
     assert settings["feed"] == "https://patch.example/"
+    assert settings["launcher_url"] == "https://patch.example/launcher/"
     assert settings["shard_name"] == "Avalon"
     assert settings["shard_server"] == "fallback:1"
 
@@ -422,6 +429,11 @@ def test_the_routes_say_the_state_save_the_settings_and_refuse_what_they_should(
         with pytest.raises(urllib.error.HTTPError) as missing:
             _call(server, "/api/nothing")
         assert missing.value.code == 404
+
+        with pytest.raises(urllib.error.HTTPError) as no_package:
+            _call(server, "/api/launcher-update", method="POST", body={})
+        assert no_package.value.code == 400
+        assert "source checkout" in json.loads(no_package.value.read().decode("utf-8"))["error"]
     finally:
         server.shutdown()
         server.server_close()
@@ -459,7 +471,7 @@ def test_the_update_route_refuses_a_second_run_at_the_same_time(tmp_path, client
 # --- its own update (F §D6-§D8) ------------------------------------------------
 
 
-def _package(directory, *, version: int = 2, digest: str | None = None) -> Path:
+def _package(directory, *, version: int = 2, digest: str | None = None, binary=True) -> Path:
     """One shard's launcher URL: the zip and the manifest that names it."""
     import hashlib
     import zipfile
@@ -469,6 +481,8 @@ def _package(directory, *, version: int = 2, digest: str | None = None) -> Path:
     archive = where / "camelot-launcher-win32.zip"
     with zipfile.ZipFile(archive, "w") as bundle:
         bundle.writestr("camelot-launcher/version.txt", f"{version}\n")
+        if binary:
+            bundle.writestr("camelot-launcher/camelot-launcher", b"")
     found = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
     (where / "launcher-manifest.json").write_text(
         json.dumps(
@@ -529,3 +543,177 @@ def test_a_download_that_does_not_hash_is_refused_before_anything_is_staged(tmp_
         launcher.stage_update(tmp_path / "install", manifest)
 
     assert not (tmp_path / "install" / "update").exists()
+
+
+def test_staging_refuses_a_package_without_one_top_level_folder(tmp_path):
+    """The swap moves one folder into the install's place; a loose file or two
+    roots would leave the install half-replaced."""
+    import hashlib
+    import zipfile
+
+    base = tmp_path / "shard"
+    base.mkdir()
+    archive = base / "camelot-launcher-win32.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("version.txt", "5\n")
+    (base / launcher.MANIFEST_FILE).write_text(
+        json.dumps(
+            {
+                "version": 5,
+                "file": archive.name,
+                "sha256": "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = launcher.update_of(str(base), current=1)
+
+    with pytest.raises(launcher.LauncherError, match="one top-level folder"):
+        launcher.stage_update(tmp_path / "install", manifest)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable bit")
+def test_staging_makes_the_launcher_binary_executable(tmp_path):
+    """A zip does not carry the executable bit through `extractall`; a staged
+    binary that cannot run would be swapped in and never answer."""
+    import hashlib
+    import zipfile
+
+    base = tmp_path / "shard"
+    base.mkdir()
+    archive = base / "camelot-launcher-linux.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        info = zipfile.ZipInfo("camelot-launcher/camelot-launcher")
+        info.external_attr = 0o644 << 16
+        bundle.writestr(info, b"not a real executable")
+    (base / launcher.MANIFEST_FILE).write_text(
+        json.dumps(
+            {
+                "version": 5,
+                "file": archive.name,
+                "sha256": "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = launcher.update_of(str(base), current=1)
+
+    staged = launcher.stage_update(tmp_path / "install", manifest)
+
+    binary = Path(staged["root"]) / "camelot-launcher"
+    assert binary.stat().st_mode & 0o111
+
+
+def test_launcher_state_reads_the_manifest_of_the_package_it_runs(tmp_path, monkeypatch):
+    """The page shows the version beside the binary and the one the shard
+    publishes; a source checkout reports no update at all."""
+    install = tmp_path / "dist" / "camelot-launcher"
+    install.mkdir(parents=True)
+    (install / launcher.VERSION_FILE).write_text("2\n", encoding="utf-8")
+    base = _package(tmp_path / "shard", version=5)
+    monkeypatch.setattr(launcher, "install_directory", lambda: install)
+
+    found = launcher.launcher_state({"launcher_url": str(base)})
+
+    assert found == {"installed": 2, "published": 5, "available": True, "error": None}
+    _package(tmp_path / "shard", version=2)
+    assert launcher.launcher_state({"launcher_url": str(base)})["available"] is False
+
+    monkeypatch.setattr(launcher, "install_directory", lambda: None)
+    assert launcher.launcher_state({"launcher_url": str(base)})["installed"] == 0
+
+
+def test_state_says_the_launcher_it_runs_and_what_waits(tmp_path, client, monkeypatch):  # noqa: F811  (the fixture the import names)
+    settings, _player, _where, _report = _ready(tmp_path, client)
+    install = tmp_path / "dist" / "camelot-launcher"
+    install.mkdir(parents=True)
+    (install / launcher.VERSION_FILE).write_text("1\n", encoding="utf-8")
+    settings["launcher_url"] = str(_package(tmp_path / "shard", version=4))
+    monkeypatch.setattr(launcher, "install_directory", lambda: install)
+
+    found = launcher.state(settings)
+
+    assert found["launcher"] == {
+        "installed": 1,
+        "published": 4,
+        "available": True,
+        "error": None,
+    }
+    assert "launcher_url" not in found["settings"]
+
+
+def test_the_swap_script_waits_for_the_pid_then_swaps_and_can_restore(tmp_path):
+    """Windows cannot overwrite a running executable, so the script waits for the
+    process to be gone, parks the old folder, moves the staged one in, and puts
+    the old one back when the move fails."""
+    install = tmp_path / "dist" / "camelot-launcher"
+    staged = install.parent / "update" / "5" / "camelot-launcher"
+
+    windows = launcher.swap_script(
+        install, staged, pid=4321, version=2, system="win32", args=["--no-open", "--port", "8799"]
+    )
+    assert 'set "PID=4321"' in windows
+    assert 'PID eq %PID%' in windows
+    assert 'set "STAGED=%HERE%update\\5\\camelot-launcher"' in windows
+    assert '"--port" "8799"' in windows
+    assert 'move "%INSTALL%" "%OLD%"' in windows
+    assert 'move "%OLD%" "%INSTALL%"' in windows
+    assert "camelot-launcher.old-2" in windows
+    assert "--no-open" in windows
+
+    posix = launcher.swap_script(
+        install, staged, pid=4321, version=2, system="linux", args=["--no-open", "--port", "8799"]
+    )
+    assert 'kill -0 "$PID"' in posix
+    assert 'STAGED="$HERE/update/5/camelot-launcher"' in posix
+    assert "--port 8799" in posix
+    assert 'mv "$INSTALL" "$OLD"' in posix
+    assert 'mv "$OLD" "$INSTALL"' in posix
+    assert "camelot-launcher.old-2" in posix
+    assert "--no-open" in posix
+
+
+def test_begin_update_stages_beside_the_install_and_hands_over(tmp_path, monkeypatch):
+    install = tmp_path / "dist" / "camelot-launcher"
+    install.mkdir(parents=True)
+    (install / launcher.VERSION_FILE).write_text("2\n", encoding="utf-8")
+    base = _package(tmp_path / "shard", version=5)
+    monkeypatch.setattr(launcher, "install_directory", lambda: install)
+    seen: dict = {}
+    monkeypatch.setattr(
+        launcher, "start_swap", lambda script, **kwargs: seen.update(script=script, **kwargs)
+    )
+
+    started = launcher.begin_update(
+        {"launcher_url": str(base)}, system="linux", argv=["--port", "8799"]
+    )
+
+    root = install.parent / "update" / "5" / "camelot-launcher"
+    assert started["version"] == 5
+    assert (root / launcher.VERSION_FILE).read_text(encoding="utf-8") == "5\n"
+    script = Path(started["script"])
+    assert script.parent == install.parent and script.is_file()
+    assert seen["script"] == script
+    text = script.read_text(encoding="utf-8")
+    assert 'mv "$INSTALL" "$OLD"' in text
+    assert "--port 8799" in text and "--no-open" in text
+
+
+def test_begin_update_refuses_a_source_checkout(tmp_path):
+    base = _package(tmp_path / "shard", version=5)
+
+    with pytest.raises(launcher.LauncherError, match="source checkout"):
+        launcher.begin_update({"launcher_url": str(base)})
+
+
+def test_begin_update_refuses_a_package_without_the_launchers_binary(tmp_path, monkeypatch):
+    """The swap deletes the old install after the move: a package that carries
+    no executable would leave nothing to start."""
+    install = tmp_path / "dist" / "camelot-launcher"
+    install.mkdir(parents=True)
+    (install / launcher.VERSION_FILE).write_text("2\n", encoding="utf-8")
+    base = _package(tmp_path / "shard", version=5, binary=False)
+    monkeypatch.setattr(launcher, "install_directory", lambda: install)
+
+    with pytest.raises(launcher.LauncherError, match="has no camelot-launcher"):
+        launcher.begin_update({"launcher_url": str(base)}, system="linux", argv=[])

@@ -21,6 +21,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -33,9 +34,12 @@ from . import feed
 __all__ = [
     "DEFAULTS",
     "LauncherError",
+    "begin_update",
     "command",
     "configure",
+    "install_directory",
     "installed_version",
+    "launcher_state",
     "packaged_page",
     "play",
     "read_settings",
@@ -44,10 +48,13 @@ __all__ = [
     "shard_config_path",
     "shard_of",
     "stage_update",
+    "start_swap",
     "state",
+    "swap_script",
     "update",
     "update_of",
     "write_settings",
+    "write_swap_script",
 ]
 
 #: The distributed file that names the shard: beside the launcher binary, so a player
@@ -115,18 +122,23 @@ def shard_config_path(explicit=None) -> Path | None:
     return beside_the_launcher(SHARD_FILE)
 
 
+def install_directory() -> Path | None:
+    """The folder a packaged launcher runs from. A source checkout has none, and
+    therefore never replaces itself."""
+    if not getattr(sys, "frozen", False):
+        return None
+    executable = Path(sys.executable).expanduser()
+    return executable.resolve().parent if executable.is_file() else None
+
+
 def installed_version(directory=None) -> int:
     """The version of this build (`version.txt` beside the binary), 0 when a
     source checkout has none — any published package beats it."""
-    where = (
-        Path(directory) / VERSION_FILE
-        if directory is not None
-        else beside_the_launcher(VERSION_FILE)
-    )
-    if where is None or not where.is_file():
+    where = Path(directory) if directory is not None else install_directory()
+    if where is None or not (where / VERSION_FILE).is_file():
         return 0
     try:
-        return int(where.read_text(encoding="utf-8").strip() or 0)
+        return int((where / VERSION_FILE).read_text(encoding="utf-8").strip() or 0)
     except ValueError:
         return 0
 
@@ -141,7 +153,7 @@ def update_of(base: str, *, current=None) -> dict | None:
     """
     if not base:
         return None
-    raw = feed._fetch(base, MANIFEST_FILE)
+    raw = feed._fetch(base, MANIFEST_FILE, timeout=10)
     try:
         manifest = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -197,8 +209,220 @@ def stage_update(directory, manifest: dict) -> dict:
                 raise LauncherError(f"{archive}: {member!r} escapes the package")
         bundle.extractall(target)
     roots = [entry for entry in target.iterdir() if entry.is_dir()]
-    root = roots[0] if len(roots) == 1 else target
+    loose = [entry for entry in target.iterdir() if entry.is_file()]
+    if len(roots) != 1 or loose:
+        raise LauncherError(
+            f"{archive}: the package must hold one top-level folder, "
+            f"found {len(roots)} folder(s) and {len(loose)} file(s)"
+        )
+    root = roots[0]
+    if os.name == "posix":
+        # A zip does not carry the executable bit through `extractall`, and a
+        # staged binary that cannot run would leave the swap with no process.
+        executable = root / "camelot-launcher"
+        if executable.is_file():
+            executable.chmod(executable.stat().st_mode | 0o111)
     return {"version": int(manifest["version"]), "archive": str(archive), "root": str(root)}
+
+
+def launcher_state(settings: dict) -> dict:
+    """The launcher's own version and the update its shard publishes.
+
+    A source checkout has no package to replace, so it never reports one. A
+    manifest that cannot be read is an error on this card only: the client
+    update and Play do not depend on it.
+    """
+    found: dict = {"installed": 0, "published": None, "available": False, "error": None}
+    where = install_directory()
+    if where is None:
+        return found
+    held = installed_version(where)
+    found["installed"] = held
+    base = str(settings.get("launcher_url") or "")
+    if not base:
+        return found
+    try:
+        update = update_of(base, current=held)
+    except (LauncherError, feed.FeedError, OSError) as error:
+        found["error"] = str(error)
+        return found
+    if update is not None:
+        found["published"] = update["version"]
+        found["available"] = True
+    return found
+
+
+def _windows_arg(arg) -> str:
+    """One argument for `start`, quoted so spaces and cmd separators stay part
+    of the value."""
+    return '"' + str(arg).replace('"', '\\"') + '"'
+
+
+def swap_script(
+    install, staged, *, pid: int, version: int, system: str | None = None, args=()
+) -> str:
+    """The script that replaces *install* with *staged* after *pid* exits
+    (`deployment.md` §D8). It is written beside the install and refers to it
+    through `%~dp0` (Windows) or the script's own folder (POSIX), so the paths
+    that may carry an accent or a space never enter the file.
+
+    *version* names the folder the old install is parked under. A failed move
+    puts it back, so a half-replaced install is never what starts. *args* is
+    the command line the new process starts with.
+    """
+    where = Path(install).expanduser().resolve()
+    target = Path(staged).expanduser().resolve()
+    try:
+        relative = target.relative_to(where.parent)
+    except ValueError as error:
+        raise LauncherError(
+            f"{target}: the staged package is not beside the install"
+        ) from error
+    windows = (system or sys.platform).startswith("win")
+    old = f"{where.name}.old-{version}"
+    if windows:
+        staged_path = str(relative).replace("/", "\\")
+        launch = " ".join(_windows_arg(arg) for arg in args)
+        return f"""@echo off
+setlocal
+set "HERE=%~dp0"
+cd /d "%HERE%"
+set "INSTALL=%HERE%{where.name}"
+set "OLD=%HERE%{old}"
+set "UPDATE=%HERE%update"
+set "STAGED=%HERE%{staged_path}"
+set "EXE=camelot-launcher.exe"
+set "PID={int(pid)}"
+set "TRIES=0"
+:wait
+tasklist /FI "PID eq %PID%" /NH 2>NUL | findstr /R /C:"[ ]%PID%[ ]" >NUL
+if errorlevel 1 goto swap
+ping -n 2 127.0.0.1 >NUL
+set /a TRIES+=1
+if %TRIES% GEQ 60 exit /b 1
+goto wait
+:swap
+if exist "%OLD%" rmdir /s /q "%OLD%"
+move "%INSTALL%" "%OLD%" >NUL 2>&1
+if errorlevel 1 exit /b 1
+move "%STAGED%" "%INSTALL%" >NUL 2>&1
+if errorlevel 1 goto restore
+start "" "%INSTALL%\\%EXE%" {launch}
+rmdir /s /q "%UPDATE%" >NUL 2>&1
+del "%~f0" >NUL 2>&1
+exit /b 0
+:restore
+move "%OLD%" "%INSTALL%" >NUL 2>&1
+exit /b 1
+"""
+    staged_path = relative.as_posix()
+    launch = " ".join(shlex.quote(str(arg)) for arg in args)
+    return f"""#!/bin/sh
+set -u
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+INSTALL="$HERE/{where.name}"
+OLD="$HERE/{old}"
+UPDATE="$HERE/update"
+STAGED="$HERE/{staged_path}"
+EXE="$INSTALL/camelot-launcher"
+PID={int(pid)}
+TRIES=0
+while kill -0 "$PID" 2>/dev/null; do
+  TRIES=$((TRIES + 1))
+  if [ "$TRIES" -ge 300 ]; then exit 1; fi
+  sleep 0.2
+done
+cd /
+rm -rf "$OLD"
+mv "$INSTALL" "$OLD" || exit 1
+if mv "$STAGED" "$INSTALL"; then
+  nohup "$EXE" {launch} >/dev/null 2>&1 &
+  rm -rf "$OLD" "$UPDATE"
+  rm -f -- "$0"
+else
+  mv "$OLD" "$INSTALL"
+  exit 1
+fi
+"""
+
+
+def write_swap_script(
+    install, staged, *, pid: int, version: int, system: str | None = None, args=()
+) -> Path:
+    """Write the swap script beside the install and make it executable on POSIX.
+
+    The script is never inside the folder it renames.
+    """
+    windows = (system or sys.platform).startswith("win")
+    script = swap_script(
+        install, staged, pid=pid, version=version, system=system, args=args
+    )
+    where = Path(install).expanduser().resolve().parent / (
+        f"swap-launcher-{int(pid)}.bat" if windows else f"swap-launcher-{int(pid)}.sh"
+    )
+    where.write_text(script, encoding="utf-8", newline="\r\n" if windows else "\n")
+    if not windows:
+        where.chmod(0o755)
+    return where
+
+
+def start_swap(script, *, system: str | None = None) -> None:
+    """Start the swap script detached, so it outlives the launcher it waits on."""
+    if (system or sys.platform).startswith("win"):
+        subprocess.Popen(
+            ["cmd", "/c", str(script)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            creationflags=0x00000008,  # DETACHED_PROCESS
+        )
+        return
+    subprocess.Popen(
+        ["/bin/sh", str(script)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+    )
+
+
+def begin_update(settings: dict, *, system: str | None = None, argv=None) -> dict:
+    """Stage the launcher's next version and hand over to the swap script.
+
+    The route calls this after the page asks; the process must then stop, which
+    is the caller's job. Nothing here touches the running install. *argv* is
+    what the new process starts with, defaulting to this run's own options plus
+    `--no-open`: the page that asked is already open.
+    """
+    install = install_directory()
+    if install is None:
+        raise LauncherError("a source checkout has no package to replace")
+    base = str(settings.get("launcher_url") or "")
+    if not base:
+        raise LauncherError("this launcher has no launcher URL to update from")
+    manifest = update_of(base)
+    if manifest is None:
+        raise LauncherError("this launcher is already at the published version")
+    staged = stage_update(install.parent, manifest)
+    system = system or sys.platform
+    executable = "camelot-launcher.exe" if system.startswith("win") else "camelot-launcher"
+    if not (Path(staged["root"]) / executable).is_file():
+        raise LauncherError(f"{staged['root']}: the package has no {executable}")
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--no-open" not in args:
+        args.append("--no-open")
+    script = write_swap_script(
+        install,
+        staged["root"],
+        pid=os.getpid(),
+        version=installed_version(install),
+        system=system,
+        args=args,
+    )
+    start_swap(script, system=system)
+    return {"version": manifest["version"], "script": str(script), "root": staged["root"]}
 
 
 def _with_slash(value: str) -> str:
@@ -228,6 +452,7 @@ def read_shard(path=None) -> dict:
     return {
         "name": str(document.get("name") or ""),
         "feed": _with_slash(str(document.get("feed") or "")),
+        "launcher": _with_slash(str(document.get("launcher") or "")),
         "server": str(document.get("server") or ""),
         "path": str(where),
     }
@@ -243,6 +468,7 @@ def configure(settings: dict, shard: dict | None = None, *, feed=None, server=No
     found = dict(settings)
     found["shard_name"] = str(shard.get("name") or "")
     found["shard_server"] = str(shard.get("server") or "")
+    found["launcher_url"] = str(shard.get("launcher") or "")
     found["server_override"] = ""
     if shard.get("feed"):
         found["feed"] = _with_slash(str(shard["feed"]))
@@ -329,7 +555,7 @@ def state(settings: dict) -> dict:
     """
     where = str(settings.get("client") or "")
     client = Path(where).expanduser() if where else None
-    internal = ("wineprefix", "server_override", "shard_name", "shard_server")
+    internal = ("launcher_url", "wineprefix", "server_override", "shard_name", "shard_server")
     found = {
         "settings": {key: value for key, value in settings.items() if key not in internal},
         "settings_path": str(settings.get("path") or settings_path()),
@@ -337,6 +563,7 @@ def state(settings: dict) -> dict:
         "client_there": bool(client and client.is_dir()),
         "account": str(settings.get("account") or ""),
         "installed": settings.get("installed"),
+        "launcher": launcher_state(settings),
         "shard": {},
         "problems": [],
     }
@@ -613,6 +840,16 @@ def handler_for(settings: dict, page):
                     target=_update_in_background, args=(settings,), daemon=True
                 ).start()
                 return self._json({"progress": dict(PROGRESS)})
+            if path == "/api/launcher-update":
+                try:
+                    started = begin_update(settings)
+                except (LauncherError, feed.FeedError, OSError) as error:
+                    return self._json({"error": str(error)}, status=400)
+                # The script waits for this process to be gone before it renames
+                # the install. The answer reaches the page first (`deployment.md`
+                # §D8).
+                threading.Timer(0.5, self.server.shutdown).start()
+                return self._json({"launcher": started, "restarting": True})
             if path == "/api/play":
                 try:
                     handle = play(

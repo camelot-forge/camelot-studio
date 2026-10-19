@@ -6,11 +6,18 @@
 	 * exists at all (`C §D14`).
 	 */
 	type Shard = { shard?: string; server?: string; version?: number; feed?: string };
+	type Launcher = {
+		installed: number;
+		published: number | null;
+		available: boolean;
+		error: string | null;
+	};
 	type LauncherState = {
 		client: string;
 		client_there: boolean;
 		account: string;
 		installed: number | null;
+		launcher: Launcher;
 		shard: Shard;
 		problems: string[];
 		up_to_date?: boolean;
@@ -39,6 +46,7 @@
 	let password = $state('');
 	let client = $state('');
 	let busy = $state(false);
+	let restarting = $state(false);
 	let said = $state('');
 
 	async function call(path: string, body?: unknown) {
@@ -93,6 +101,41 @@
 		busy = false;
 	}
 
+	async function update_launcher() {
+		busy = true;
+		said = '';
+		try {
+			await call('/api/launcher-update', {});
+			restarting = true;
+			void wait_for_restart();
+		} catch (problem) {
+			said = `${problem}`;
+		}
+		busy = false;
+	}
+
+	async function wait_for_restart() {
+		// The swap script starts the new launcher with `--no-open`: this page is
+		// already open, and reloads when the new process answers.
+		const target = state?.launcher?.published ?? 0;
+		for (let tries = 0; tries < 60; tries += 1) {
+			await new Promise((done) => setTimeout(done, 1000));
+			try {
+				const answer = await fetch('/api/state', { cache: 'no-store' });
+				if (!answer.ok) continue;
+				const document = await answer.json();
+				if ((document.state?.launcher?.installed ?? 0) >= target) {
+					location.reload();
+					return;
+				}
+			} catch {
+				// the old process is gone; the new one has not bound the port yet
+			}
+		}
+		restarting = false;
+		said = 'the launcher did not come back — start it again';
+	}
+
 	async function save() {
 		read(await call('/api/settings', { client, account, remember: true }));
 	}
@@ -118,7 +161,10 @@
 <main>
 	<h1>{state?.shard?.shard || 'Camelot Forge'}</h1>
 	<p class="where">
-		{state?.shard?.server ? state.shard.server : 'no game address yet'} · launcher
+		{state?.shard?.server ? state.shard.server : 'no game address yet'} · launcher{state
+			?.launcher?.installed
+			? ` ${state.launcher.installed}`
+			: ''}
 	</p>
 
 	{#if state}
@@ -165,6 +211,35 @@
 				<p class="problems">{progress.error}</p>
 			{/if}
 		</div>
+
+		{#if state.launcher?.available || state.launcher?.error || restarting}
+			<div class="card">
+				<dl class="facts">
+					<dt>launcher</dt>
+					<dd>{state.launcher?.installed ?? 0}</dd>
+					{#if state.launcher?.published}
+						<dt>published</dt>
+						<dd>{state.launcher.published}</dd>
+					{/if}
+				</dl>
+				{#if restarting}
+					<p class="state ok">restarting to apply version {state.launcher?.published} …</p>
+				{:else if state.launcher?.available}
+					<p class="state">a launcher update is ready</p>
+					<div class="buttons">
+						<button
+							class="primary"
+							disabled={busy || progress.running}
+							onclick={update_launcher}
+						>
+							Restart and update
+						</button>
+					</div>
+				{:else if state.launcher?.error}
+					<p class="problems">{state.launcher.error}</p>
+				{/if}
+			</div>
+		{/if}
 
 		<div class="card">
 			<div class="row">

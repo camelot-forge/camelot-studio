@@ -22,6 +22,10 @@ on:
         description: "the shard's public feed URL, ending with /"
         required: true
         default: "https://patch.example/"
+      launcher:
+        description: "the launcher's own package URL, ending with / (empty: no self-update)"
+        required: false
+        default: ""
 
 jobs:
   package:
@@ -44,6 +48,7 @@ jobs:
           python packaging/launcher/build.py `
             --name "${{ inputs.name }}" `
             --feed "${{ inputs.feed }}" `
+            --launcher "${{ inputs.launcher }}" `
             --version "${{ inputs.version }}"
 
       - name: Check the package

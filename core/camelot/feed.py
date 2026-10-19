@@ -258,7 +258,7 @@ def _source_of(base_url: str) -> str:
     return "dir"
 
 
-def _fetch(base_url: str, rel: str, local_root=None) -> bytes:
+def _fetch(base_url: str, rel: str, local_root=None, *, timeout=30) -> bytes:
     """One file of a feed: from the feed's own directory when it is there (a feed is a
     folder, and a folder is the easiest thing to test against), otherwise over HTTP —
     which is what a player's launcher does."""
@@ -269,7 +269,7 @@ def _fetch(base_url: str, rel: str, local_root=None) -> bytes:
     if _source_of(base_url) == "url":
         url = base_url.rstrip("/") + "/" + rel
         try:
-            with urllib.request.urlopen(url, timeout=30) as answer:
+            with urllib.request.urlopen(url, timeout=timeout) as answer:
                 return answer.read()
         except urllib.error.URLError as error:
             raise FeedError(f"{url}: {error}") from error

@@ -30,6 +30,10 @@ def main(argv=None) -> int:
     parser.add_argument("--feed", help="the shard's public feed URL")
     parser.add_argument("--name", help="the shard's display name")
     parser.add_argument(
+        "--launcher",
+        help="the base URL the launcher's own packages are published under, ending with /",
+    )
+    parser.add_argument(
         "--version",
         type=int,
         default=1,
@@ -53,10 +57,15 @@ def main(argv=None) -> int:
         return 1
 
     example = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    launcher_url = str(args.launcher or "")
+    if launcher_url and not launcher_url.endswith("/"):
+        launcher_url += "/"
     shard = {
         "name": args.name or example["name"],
         "feed": args.feed or example["feed"],
     }
+    if launcher_url:
+        shard["launcher"] = launcher_url
     page = STUDIO / "web" / "launcher" / "dist"
     if not (page / "index.html").is_file():
         print(
