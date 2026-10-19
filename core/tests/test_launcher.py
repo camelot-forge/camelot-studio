@@ -447,6 +447,22 @@ def test_the_routes_say_the_state_save_the_settings_and_refuse_what_they_should(
         server.server_close()
 
 
+def test_the_swap_route_ends_the_process_after_stopping_the_server(monkeypatch):
+    """The swap script waits on this pid before it renames the install. A thread
+    that outlives `serve_forever` would hold it, so the exit is unconditional."""
+    calls: list = []
+
+    class FakeServer:
+        def shutdown(self):
+            calls.append("shutdown")
+
+    monkeypatch.setattr(launcher.os, "_exit", lambda code: calls.append(("exit", code)))
+
+    launcher._stop_for_the_swap(FakeServer())
+
+    assert calls == ["shutdown", ("exit", 0)]
+
+
 def test_the_update_route_refuses_a_second_run_at_the_same_time(tmp_path, client, monkeypatch):  # noqa: F811  (the fixture the import names)
     """One update at a time: two walks of the same client would fight over the same
     files. The route answers 409 while one is running."""

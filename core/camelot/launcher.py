@@ -375,7 +375,7 @@ def start_swap(script, *, system: str | None = None) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
-            creationflags=0x00000008,  # DETACHED_PROCESS
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
         )
         return
     subprocess.Popen(
@@ -764,6 +764,18 @@ def _update_in_background(settings: dict) -> None:
         PROGRESS["stage"] = ""
 
 
+def _stop_for_the_swap(server) -> None:
+    """Stop the server, then end the process.
+
+    The swap script waits for this pid before it renames the install folder. A
+    thread that outlives `serve_forever` (a keep-alive request, the browser's
+    timer) would hold the pid and leave the script waiting; `_exit` makes the
+    exit unconditional.
+    """
+    server.shutdown()
+    os._exit(0)
+
+
 def handler_for(settings: dict, page):
     """The page's own handler: static files from *page*, and the three routes a browser
     cannot do itself — say the state, run an update, start the game."""
@@ -848,7 +860,7 @@ def handler_for(settings: dict, page):
                 # The script waits for this process to be gone before it renames
                 # the install. The answer reaches the page first (`deployment.md`
                 # §D8).
-                threading.Timer(0.5, self.server.shutdown).start()
+                threading.Timer(0.5, _stop_for_the_swap, args=(self.server,)).start()
                 return self._json({"launcher": started, "restarting": True})
             if path == "/api/play":
                 try:
