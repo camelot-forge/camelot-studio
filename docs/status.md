@@ -141,19 +141,19 @@ meaningless. A target that cannot yet express a figure records it under
 silently.
 
 **Not yet done**: NIF *writing*; the Phase 5 in-client ladder has run
-(P5-A…P5-F pass — see the workspace report
+(P5-A…P5-F pass; see the workspace report
 `notes/test-p5-report.md`), with P5-F's server half still to be
-replayed through the loader with an in-band `Model`. A
-stock client cannot load the Studio-authored GLBs — it reads NIF from MPAK —
-so deploying new *assets* still waits on a NIF writer. Deploying new *server
-data* does not: the loader consumes the deployment document on a booted
-server, and a rewritten `gamedata.mpk` is accepted by the 1.127 client
-(`formats.md` §5 documents the decoded header carriers). The client
-*delivery* half is built (2026-10-08): `camelot mod build` assembles a pack
-from an authoring directory, `camelot client install/uninstall/status/verify`
-applies its payload with claims and priority — every touched file rebuilt
-from the client's own originals and read back — and the loader notes each
-pack's payload count at apply time.
+replayed through the loader with an in-band `Model`. A stock client cannot
+load the Studio-authored GLBs (it reads NIF from MPAK), so deploying new
+*assets* still waits on a NIF writer. Deploying new *server data* does not:
+the loader consumes the deployment document on a booted server, and a
+rewritten `gamedata.mpk` is accepted by the 1.127 client (`formats.md` §5
+documents the decoded header carriers). The client *delivery* half is built
+(2026-10-08): `camelot mod build` assembles a pack from an authoring
+directory, `camelot client install/uninstall/status/verify` applies its
+payload with claims and priority. Every touched file is rebuilt from the
+client's own originals and read back, and the loader notes each pack's payload
+count at apply time.
 
 **New model ids have a measured ceiling** (2026-10-10): the client's model
 table is 2500 entries wide (ids 0..2499; the shipped table tops out at 2493),
@@ -166,27 +166,26 @@ risk is measured.
 **The ceiling is liftable by a small client patch, and the patch is a payload
 kind** (measured 2026-10-10; folded into the studio the same day): two cap
 compares and four array references in the loaded `game1127.dll`, plus one
-zero-filled PE section, raise the table to **32768 entries** — a spawn at
-model 10000 renders in game. The patch travels as a **recipe** (expected
-bytes, bytes to write, the section to append — never a redistributed DLL),
-`"kind": "patch"` beside the other payload kinds; the author asks for it with
+zero-filled PE section, raise the table to **32768 entries**. A spawn at model
+10000 renders in game. The patch travels as a **recipe** (expected bytes,
+bytes to write, the section to append, never a redistributed DLL), `"kind":
+"patch"` beside the other payload kinds; the author asks for it with
 `client.patch.json`'s `"binary": [{"model_ids": 32768}]`, and `mod build`
 generates the recipe against a pristine client (refusing an already-patched
 one, or a cap outside 2501..32768). A pack **declares the capability** it
 grants and needs (`requires: ["client.modelids.32768"]`), and the installer
 verifies it by reading the bytes the client will load (the two compares, the
-four references, the section's size) — so a client patched by any means
+four references, the section's size). So a client patched by any means
 satisfies it, an unknown capability is refused, and a high-id mod is refused
 **before anything is written** when the patch is missing. `camelot client
-patch [--restore]` does the same for unmanaged clients, with a `.orig`
-backup. Field test: the built pack reproduces the validated DLL byte for byte
-(sha256), and uninstall restores the original exactly.
-Without the patch, a measured pool of **927 ids** is available (253 gaps plus
-674 shipped rows nothing references); `camelot client free-ids` lists it from
-the client itself — reading the patched ceiling out of the binary when one is
-carried — and `mod build` refuses a `monsters.csv` add at an id the measured
-server content references (`--used-models` replaces the list with a server's
-own export).
+patch [--restore]` does the same for unmanaged clients, with a `.orig` backup.
+Field test: the built pack reproduces the validated DLL byte for byte
+(sha256), and uninstall restores the original exactly. Without the patch, a
+measured pool of **927 ids** is available (253 gaps plus 674 shipped rows
+nothing references); `camelot client free-ids` lists it from the client itself
+(reading the patched ceiling out of the binary when one is carried), and `mod
+build` refuses a `monsters.csv` add at an id the measured server content
+references (`--used-models` replaces the list with a server's own export).
 
 **The client's world is readable** (Phase 6.0, 2026-10-11): `camelot/zones.py`
 reads the client's own zone index (`zones.dat`: 483 zones, 358 regions, each
@@ -206,61 +205,59 @@ workspace's `notes/phase6-world-editor.md`; the formats are in
 `formats.md` §11.
 
 **The world API and `/world`** (Phase 6.2, 2026-10-11): the daemon grows a
-world service (`serve/world.py`, `serve/models.py`) — `GET /world/index`
-(regions, zones, what the client ships), `GET /world/zone/{id}` (info,
-fixtures, catalog with mesh availability, bounds, water, jumps, the ground
-layer model, the archive directory), `GET …/terrain` (the compact `CAMT`
-planes the browser re-samples with the client's own height model),
-`GET …/mesh/{name}` (a zone object as one cached glb, each mesh carrying the
-sheet its own `NiTexturingProperty` names, alpha-cut sheets declared, and the
-LOD level the client draws only — collision hulls and far stand-ins dropped),
-`GET …/texture/{logical}/{entry}`
-`and GET /world/terraintex/{name}` (DDS → PNG, cached). The web app gains
+world service (`serve/world.py`, `serve/models.py`). `GET /world/index` lists
+the regions, the zones and what the client ships; `GET /world/zone/{id}` gives
+the zone's info, fixtures, catalog with mesh availability, bounds, water,
+jumps, the ground layer model and the archive directory; `GET …/terrain`
+serves the compact `CAMT` planes the browser re-samples with the client's own
+height model; `GET …/mesh/{name}` a zone object as one cached glb, each mesh
+carrying the sheet its own `NiTexturingProperty` names, alpha-cut sheets
+declared, and the LOD level the client draws only (collision hulls and far
+stand-ins dropped); `GET …/texture/{logical}/{entry}` and `GET
+/world/terraintex/{name}` the sheets, DDS → PNG, cached. The web app gains
 `/world` (SvelteKit + three.js): the terrain as the client triangulates it
 (33×33-vertex patch meshes on the subtile diagonal), the ground composed per
 patch from its `TerrainTex` layers and masks (below), fixtures instanced per
-catalog mesh with
-their heading (**degrees**, measured — not the server's 12-bit grid) and
-scale, bounds/water/jump overlays, a region browser, a zone picker, and
-click-to-select/recentre with a searchable fixture list and an inspector
-(6.3's first slice). The scene is the client's own map orientation — north
-up, east right, `+y` (south) mapped to scene `+Z`, fixture yaw `−A`; `A = 0`
-puts a mesh's own `+y` (the keep's gatehouse) on the north side and increasing
-`A` turns clockwise on that map, as the in-game aerials show (measured
-2026-10-12; the earlier "`A = 0` faces south" read `A` as the *server's*
-12-bit compass). The *zone meshes* take the figures' rotation
-(`(x,y,z)→(x,z,−y)`, `nifutil.WORLD_AXIS_CONVERSION`); the reflection that
+catalog mesh with their heading (**degrees**, measured, not the server's
+12-bit grid) and scale, bounds/water/jump overlays, a region browser, a zone
+picker, and click-to-select/recentre with a searchable fixture list and an
+inspector (6.3's first slice). The scene is the client's own map orientation:
+north up, east right, `+y` (south) mapped to scene `+Z`, fixture yaw `−A`. `A
+= 0` puts a mesh's own `+y` (the keep's gatehouse) on the north side, and
+increasing `A` turns clockwise on that map, as the in-game aerials show
+(measured 2026-10-12; the earlier "`A = 0` faces south" read `A` as the
+*server's* 12-bit compass). The *zone meshes* take the figures' rotation
+(`(x,y,z)→(x,z,−y)`, `nifutil.WORLD_AXIS_CONVERSION`). The reflection that
 shipped for a day (2026-10-11 → 12) fixed the map but stood every building
-180° round — caught by the user's aerial `/world`-vs-game comparison and, in
-data, by the keep's `door` nodes landing 15 units from the server's rows under
-the rotation against 357 under the reflection. The terrain patches share one
-zone-wide normal field (a
-per-patch computation drew the 8×8 grid as 64 shaded tiles) and the ground
-masks are clamped (a mask covers its patch exactly). The ground is the
-client's layer stack, not its bake: each
-patch is composed from its `TerrainTex` sheets and masks in one pass
-(`web/src/lib/world/ground.ts`), the sheets tiled across the zone
-(`tiles = 256` is a 256-unit tile), the model scored against the client's own
-`texXX-YY` composite (`formats.md` §11) — the first cuts drew that bake alone,
-then its layers 8× too densely, both flat washes where the game shows
-pebbles and grass blades — with the
-bake kept as the fallback for zones that ship no layers. Fixtures are placed
-by the viewer's rule — every `Ground = 1` row is dropped on the terrain and
-its authored `Z` is ignored, `Ground = 0` rows keep their `Z`
-(`terrain.ts::fixtureZ`, pinned by `terrain.test.ts`) — **which is the
-client's own rule, measured 2026-10-12 (W-3)**: a probe pine at `Z = 5000`
-with `Ground = 1` stood on the terrain in game while its `Ground = 0` twin
-floated at 5 000. The editor emits `z = 0` + `Ground = 1` and never copies an
-authored `Z` onto a ground row. The world reader mirrors the client's own archive
-preference since 2026-10-12 — `csv` first per entry, `dat` as the fallback
-(`Zone.data_entry`) — because taking `dat` first served an installed pack's
-pristine bytes and left its rows invisible; an archive the client ships empty
+180° round: the user's aerial `/world`-vs-game comparison caught it, and so
+did the keep's `door` nodes, landing 15 units from the server's rows under the
+rotation against 357 under the reflection. The terrain patches share one
+zone-wide normal field (a per-patch computation drew the 8×8 grid as 64 shaded
+tiles) and the ground masks are clamped (a mask covers its patch exactly). The
+ground is the client's layer stack, not its bake: each patch is composed from
+its `TerrainTex` sheets and masks in one pass (`web/src/lib/world/ground.ts`),
+the sheets tiled across the zone (`tiles = 256` is a 256-unit tile), and the
+model is scored against the client's own `texXX-YY` composite (`formats.md`
+§11). The first cuts drew that bake alone, then its layers 8× too densely;
+both were flat washes where the game shows pebbles and grass blades. The bake
+is kept as the fallback for zones that ship no layers. Fixtures are placed by
+the viewer's rule: every `Ground = 1` row is dropped on the terrain and its
+authored `Z` is ignored, and `Ground = 0` rows keep their `Z`
+(`terrain.ts::fixtureZ`, pinned by `terrain.test.ts`). That is the client's
+own rule, measured 2026-10-12 (W-3): a probe pine at `Z = 5000` with `Ground =
+1` stood on the terrain in game while its `Ground = 0` twin floated at 5 000.
+The editor emits `z = 0` + `Ground = 1` and never copies an authored `Z` onto
+a ground row. The world reader mirrors the client's own archive preference
+since 2026-10-12: `csv` first per entry, `dat` as the fallback
+(`Zone.data_entry`). Taking `dat` first served an installed pack's pristine
+bytes and left its rows invisible; an archive the client ships empty
 (`ZONE009/csv009.mpk` is 0 bytes) reads as absent rather than as an error.
-Verification: `core/tests/test_serve_world.py` (12 unit tests +
-6 corpus tests) and `web/src/lib/world/{terrain,ground}.test.ts` (sampling
-vectors generated from the Python; heading, placement, triangulation and the
-composition model pinned).
-The screenshot harness is `web/scripts/world_shot.mjs` (Playwright).
+Verification: `core/tests/test_serve_world.py` (12 unit tests + 6 corpus
+tests) and `web/src/lib/world/{terrain,ground}.test.ts` (sampling vectors
+generated from the Python; heading, placement, triangulation and the
+composition model pinned). The screenshot harness is
+`web/scripts/world_shot.mjs` (Playwright).
+
 
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the
 1.127 client under Wine: a rewritten container, modified table data and a new
@@ -332,8 +329,8 @@ for the authoritative local result. Corpus tests skip without `DAOC_CLIENT`,
 and the web suite is run separately from `core/`.
 
 Dated baselines: the V2 corpus run of 2026-10-07 was 390 passed / 4 failed
-(the failures — a changed `Boar_CATA` animation link, two legacy version
-expectations, one Ettin bbox golden — await a data/test decision). On the
+(the failures: a changed `Boar_CATA` animation link, two legacy version
+expectations, one Ettin bbox golden; they await a data/test decision). On the
 test machine's **completed corpus** (a pristine copy of the OpenDAoC 1.127
 client — the recipe and its hashes are in the workspace's
 `notes` §2.3) the suite was **535 passed / 0 failed** with
@@ -573,10 +570,10 @@ test/check/lint/build` green. Next: **slice 2b — the Unity-style gizmo back on
 the selection**, over the existing mouse grammar; then the viewer/builder
 transport, bones and equipment panels.
 
-**Slice 2b (same day): the gizmo.** The selection carries three arrows — X red
-(east), Y green (north), Z blue (up — DAoC's own height axis) — with the axis
-mapping and the ray/axis projection in `lib/world/gizmo.ts` (unit-tested). A
-drag that starts *on an arm* moves the selection along **that axis only**,
+**Slice 2b (same day): the gizmo.** The selection carries three arrows: X red
+(east), Y green (north), Z blue (up, DAoC's own height axis). The axis mapping
+and the ray/axis projection live in `lib/world/gizmo.ts` (unit-tested). A drag
+that starts *on an arm* moves the selection along **that axis only**,
 quantized by the same steps the gestures use (256 units, 16 for heights); the
 arrows keep their size on screen (scaled by the camera's distance every
 frame), the pointer turns into a `pointer` over them, and the ground grammar
@@ -798,7 +795,7 @@ the way the editor's panel counts it (`pending_counts`: distinct fixture ids,
 distinct `table:key`).
 
 The doors followed: **open** switches the running daemon to another project
-without a restart — one `Session` (`core/camelot/serve/session.py`) owns the
+without a restart. One `Session` (`core/camelot/serve/session.py`) owns the
 shared config and the checkout's lock, so a switch mutates in place and no
 router is rebuilt: the lock hands over (read-only when another live process
 holds the copy), the client is re-resolved *from the project* (`machine.json`,

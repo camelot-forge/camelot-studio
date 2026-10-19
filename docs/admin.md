@@ -254,7 +254,8 @@ it with what it installed, walks `patchlist-new.txt`, MD5s each local file and
 downloads only what differs — 25 KB here — then verifies what it wrote and
 enables Play. Play is refused while the client is behind the feed.
 
-You did nothing for them: the feed was already being served from the pull.
+The feed was already being served from the pull, so there was nothing to do
+for them.
 
 ## 5. A new local test server
 
@@ -333,7 +334,7 @@ The clients converge on N+1 like any other update, and nobody rewrites the
 `camelot-deploy` branch. The values a release replaced are in `state.json` —
 that is the evidence a reversal is written against, not a database backup.
 
-**On the server, `env reverse` is the repair, and it is not a rollback.** It
+**On the server, `env reverse` is the repair.** It
 puts back the rows one release changed (a column to the value it had, a removed
 row re-inserted whole, in one transaction), takes the release out of the state
 and out of the environment's folder, and drops it from the Console's ask:
@@ -352,10 +353,10 @@ anything else.
 
 It is refused while a **later** release is applied (its values would be written
 over), and it does **not** undo the players' side: a client whose launcher
-already took release N's half keeps it, and the feed never goes back. Use it in
-the hours after a bad apply — a row that should never have been written, a
-release withdrawn before the players took it — and use a new release for
-anything the players have already seen (`server-install.md` §D17).
+already took release N's half keeps it, and the feed never goes back. Use it
+in the hours after a bad apply, for a row that should never have been written
+or a release withdrawn before the players took it. Anything the players have
+already seen is undone by a new release (`server-install.md` §D17).
 
 ## 7. What a player receives
 
@@ -373,9 +374,9 @@ and nothing else — the game's address comes from the feed's `launcher.json`, a
 the feed service writes both on the way out.
 
 Hand out: the launcher package and the client. The client is the shard's own
-business (the game is not redistributable); what matters is that every player
-starts from the **same base client** the desk fingerprints in `project.json`,
-because the feed is a delta against it.
+business (the game is not redistributable). Every player has to start from the
+**same base client** the desk fingerprints in `project.json`, because the feed
+is a delta against it.
 
 On Linux the game runs under Wine; on Windows `connect.exe` runs directly. The
 launcher remembers the client folder and the account in
