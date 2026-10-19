@@ -288,21 +288,27 @@ def test_asset_state_endpoint_serves_the_clients_own_clip(client_dir, tmp_path):
         [
             (
                 "monnifs.csv",
-                b"Information,,NIF,Anim\nID,Textual Name,Name,Anim Set ID\n"
-                b"1,Boar,BOAR,10\n",
+                (
+                    b"Information,,NIF,Anim\nID,Textual Name,Name,Anim Set ID\n"
+                    b"1,Boar,BOAR,10\n"
+                ),
             ),
             (
                 "anims.csv",
-                b"Anim,,,,,\nAnim Set ID,Name,Idle,Walk,Death,EM Dance\n"
-                b"10,Boar,320,321,323,46\n",
+                (
+                    b"Anim,,,,,\nAnim Set ID,Name,Idle,Walk,Death,EM Dance\n"
+                    b"10,Boar,320,321,323,46\n"
+                ),
             ),
             (
                 "animnifs.csv",
-                b"Anim,,,,,base, \nNIFS,name,NIF Name,frames,fps, fps,type\n"
-                b"320,Boar Idle,boar_idle.kfa,16,3,15,loop\n"
-                b"321,Boar Walk,boar_walk.kfa,32,3,15,clamp\n"
-                b"323,Boar Death,boar_death.kfa,12,3,15,clamp\n"
-                b"46,Emote Dance,em_rvrdance.kfa,40,15,15,clamp\n",
+                (
+                    b"Anim,,,,,base, \nNIFS,name,NIF Name,frames,fps, fps,type\n"
+                    b"320,Boar Idle,boar_idle.kfa,16,3,15,loop\n"
+                    b"321,Boar Walk,boar_walk.kfa,32,3,15,clamp\n"
+                    b"323,Boar Death,boar_death.kfa,12,3,15,clamp\n"
+                    b"46,Emote Dance,em_rvrdance.kfa,40,15,15,clamp\n"
+                ),
             ),
         ],
     )
