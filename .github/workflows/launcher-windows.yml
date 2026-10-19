@@ -31,9 +31,9 @@ jobs:
   package:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -60,7 +60,7 @@ jobs:
           if ($manifest.version -ne [int]"${{ inputs.version }}") { throw "manifest version" }
           if (-not $manifest.sha256.StartsWith("sha256:")) { throw "manifest hash" }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: camelot-launcher-win32-${{ inputs.version }}
           if-no-files-found: error
