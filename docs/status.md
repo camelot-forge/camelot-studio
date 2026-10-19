@@ -283,7 +283,7 @@ in `workspace/notes/`.
 
 - **Language/stack**: Python core (pyffi ecosystem) + TypeScript/Svelte web
   viewer (M1) + Python Blender addon (M2) + artifacts bridge to the C#
-  OpenDAoC server (M2). C# never touches binaries — it consumes our
+  OpenDAoC server. C# never touches binaries — it consumes our
   glTF/JSON artifacts.
 - **Local daemon (`camelot serve`)**: FastAPI/uvicorn owns the API *and*
   serves the static SvelteKit build on one loopback origin (no CORS). It is a
@@ -497,8 +497,8 @@ live client plays for the male Troll player is still to confirm
    the client has never read still waits on it. It runs parallel to the rest.
 4. **The players' Windows package**, built and signed on a Windows machine, with
    the launcher's self-update, before the launcher is handed out widely.
-5. **Blender integration** (M2, `addon/`) and broad product features stay
-   deferred until the delivery loop is closed.
+5. **Blender integration** (M2, `addon/`): a UI shell over the CLI — figures,
+   fig3 parts, items and `.kfa` animations imported and exported from Blender.
 
 The dated record of how each of these was reached — the slices, the UX passes,
 the measurements — is the private workspace's `blog.md`.
