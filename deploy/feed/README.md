@@ -43,5 +43,5 @@ secrets.
   `CAMELOT_GAME_SERVER`.
 
 Everything else is served unchanged. A feed without `launcher.json` answers
-404 for that file — the protocol allows it, and the launcher then reports that
-the feed does not say where the game is.
+404 for that file; the launcher then reports that the feed does not say where
+the game is.

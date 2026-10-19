@@ -2,7 +2,7 @@
 
 The server side of Camelot Forge, as containers. Five services, one entry point
 (`compose.yaml`) and one environment file (`.env`). The same stack runs on a desk
-and on a VPS; what changes is three values, not a file.
+and on a VPS; three values change.
 
 ```mermaid
 flowchart LR
@@ -31,10 +31,8 @@ flowchart LR
 | `feed` | `feed/README.md` | nothing: it serves a directory read-only |
 | `console` | `console/README.md` | `<env>/server/camelot/`, the audit, the feed mirror |
 
-The Console is the only one of ours that faces the network; the database is the
-only one that does not face the machine's own network. `notes/remote.md`
-§D10 is the rule, and `docs/admin.md` is the runbook around it. `docs/install.md`
-walks the whole install, desk and server.
+`notes/remote.md` §D10 says what runs where; `docs/admin.md` is the runbook
+around it. `docs/install.md` walks the whole install, desk and server.
 
 ## Local
 
@@ -73,7 +71,7 @@ The Console is on `http://127.0.0.1:8770/`, authenticated as `operator`.
 ## Online
 
 The same commands with the real values — a public feed URL behind TLS, the game's
-public address, and real secrets. Nothing else in the stack changes:
+public address, and real secrets:
 
 ```dotenv
 CAMELOT_FEED_URL=https://patch.example/
@@ -99,15 +97,13 @@ console  Restart, or /reload in game when the release only needs a reload
 players  their launchers read the feed and update themselves
 ```
 
-The pull never applies anything, and the apply is never the Console's: the
-Console asks (`wanted.json`), the Installer writes (`S §D1`).
+The Console asks (`wanted.json`); the Installer writes (`S §D1`).
 
 A bad apply is repaired on the server with `server/camelot.sh reverse`, or from
-the Console's **Reverse** button — which asks, and lets the Installer's next run
-do the work. The rows the release changed go back, and the release leaves the
-folder and the state. It is a repair, not a rollback — the feed never goes back,
-so anything the players have already seen is undone by a **new** release
-(`S §D17`).
+the Console's **Reverse** button, which asks and lets the Installer's next run do
+the work: the rows the release changed go back, and the release leaves the folder
+and the state. The feed keeps its order, so anything the players have already
+seen is undone by a **new** release (`S §D17`).
 
 ## When something is off
 
@@ -121,6 +117,6 @@ server/camelot.sh verify                # the database and the folder, read back
 server/camelot.sh reverse               # put back the newest applied release (a repair)
 ```
 
-The Console's page says what it could not read rather than guessing: a game port
-that does not answer, an API that is off, a reload the server has no record of.
+The Console's page names what it could not read: a game port that does not
+answer, an API that is off, a reload the server has no record of.
 `docs/admin.md` §10 lists the refusals and what each one means.

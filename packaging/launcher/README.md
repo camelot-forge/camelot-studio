@@ -1,7 +1,7 @@
 # The players' launcher package
 
 Builds the only binary a player receives: `camelot.feed`, `camelot.launcher`,
-the page, and a `shard.json`. The Studio, the project and pyffi are not in it.
+the page, and a `shard.json`.
 
 ## Build
 
@@ -35,10 +35,10 @@ separator, so the same command works on both.
 { "name": "Camelot Hills", "feed": "https://patch.example/" }
 ```
 
-`feed` is the only URL the player's package needs. The game address comes from
-the feed's `launcher.json` (`C §D15`); an optional `server` is a fallback only.
-`--feed` and `--server` override for a development run, as do `CAMELOT_FEED_URL`
-and `CAMELOT_GAME_SERVER`.
+`feed` is the only URL the player's package needs; the game address comes from
+the feed's `launcher.json` (`C §D15`), and an optional `server` pins one as a
+fallback. `--feed` and `--server` override for a development run, as do
+`CAMELOT_FEED_URL` and `CAMELOT_GAME_SERVER`.
 
 ## Run
 

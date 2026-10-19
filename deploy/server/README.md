@@ -81,14 +81,13 @@ which is the supervisor here.
 only: the feed moves forward, so anything already seen is undone by a new release
 (`S §D17`).
 
-The job mounts the checkout read-write (a pull is the Console's, but a fallback
-should not need a different container), the environment folder read-write — the
-only place anything of ours writes — and the baseline read-only.
+The job mounts the checkout read-write, the environment folder read-write (the
+only place anything of ours writes), and the baseline read-only.
 
-The apply itself is the same code the desk runs (`camelot env apply`), and the
-same documents the C# plugin writes: `server-bridge/camelot-installer/` does the
-same job at boot, with no container and no command to remember. Install either
-one; the Console cannot tell them apart.
+The apply itself is the same code the desk runs (`camelot env apply`), and it
+writes the same documents as the C# plugin
+(`server-bridge/camelot-installer/`), which does the job at boot from inside the
+server. Install either one; the Console cannot tell them apart.
 
 ## Moving the emulator
 

@@ -1,10 +1,9 @@
 // Camelot Installer — the plugin.
 //
 // Runs once at boot through the server's IDatabaseUpdater extension point, after
-// the scripts are compiled and the properties are loaded: the same hook the mod
-// host used (`server-bridge/mod-loader.md`). It honours the Console's ask for a
-// reversal, applies the releases Deploy handed over that the state does not
-// record, and records them.
+// the scripts are compiled and the properties are loaded. It honours the Console's
+// ask for a reversal, applies the releases Deploy handed over that the state does
+// not record, and records them.
 //
 // Three properties hold the design together:
 //

@@ -7,10 +7,9 @@ branch — fetch, verify, hand over, mark wanted (7d). Every attempt writes one
 line to an audit log; the environment folder is read-only except for
 `server/camelot/`, where the handover and the wanted marker land.
 
-The channel was measured first (M-3, 2026-10-18). OpenDAoC's API on `:5000`
-(`atlas_api`) is read-only apart from `/utils/shutdown`; `/reload` and the
-messages are in-game GM commands, and no console stdin exists. The page states
-that boundary instead of pretending otherwise.
+The channel was measured (M-3, 2026-10-18): OpenDAoC's API on `:5000`
+(`atlas_api`) is read-only apart from `/utils/shutdown`, and the server has no
+console stdin. The page names that boundary.
 
 ## Local
 
@@ -60,8 +59,8 @@ bring the server back**: `Restart=always` in a systemd unit, a Docker
 stop. The page says this next to the button, and the audit line records who,
 what, when, the target and the result.
 
-Measured (M-3): this is the only remote action OpenDAoC exposes. `/reload`,
-messages, kicks and bans remain in-game GM commands.
+Measured (M-3): `/utils/shutdown` is the only remote action OpenDAoC exposes.
+`/reload`, messages, kicks and bans are in-game GM commands.
 
 ## Pull (7d)
 
@@ -95,16 +94,15 @@ page shows the wanted release as `pending` until the state file records it.
 
 ## Reverse (7e)
 
-The other direction, and the same rule: the Console never opens the database
-(`S §D1`), so **Reverse** writes an ask — `<env>/server/camelot/reverse.json`,
-naming the newest applied release — and stops there. The Installer's step
-(`camelot env apply`, or the C# Installer at boot) honours it first, newest
+**Reverse** writes an ask, `<env>/server/camelot/reverse.json`, naming the newest
+applied release; the Console holds no database handle (`S §D1`). The Installer's
+step (`camelot env apply`, or the C# Installer at boot) honours it first, newest
 first, then applies what is handed over, and clears the file.
 
-It is a **repair**, not a rollback (`S §D17`): the rows the release changed go
-back, the release leaves the state and the environment's folder — a pull is what
-puts it back — but the feed moves forward, so a player whose launcher already
-took that release's client half keeps it. Use it in the hours after a bad apply;
+The reversal repairs the server: the rows the release changed go back, and the
+release leaves the state and the environment's folder (a pull is what puts it
+back), while the feed moves forward, so a player whose launcher already took that
+release's client half keeps it (`S §D17`). Use it in the hours after a bad apply;
 anything the players have already seen is undone by a new release.
 
 The button is off when nothing is applied, a release the ask names that is not

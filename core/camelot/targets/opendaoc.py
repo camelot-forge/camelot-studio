@@ -79,7 +79,7 @@ CLIENT_SPELLING_ALIASES = {
 
 #: Model sub-fields other than size. The client sends them per character;
 #: the projection carries neutral defaults because the contract does not
-#: describe them yet (see `next-steps.md`, extension and dye).
+#: describe them yet.
 DEFAULT_MODEL_FIELDS = {
     "skin": -1,
     "hair": -1,

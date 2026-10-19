@@ -15,7 +15,7 @@ Three rules shape the module:
 - **Honest.** A reference the client tables did not resolve is recorded as
   :class:`Unresolved` and refuses publication rather than being guessed.
 
-See ``docs/next-steps.md`` Phases 2-4.
+See ``docs/status.md`` for the pack's own record.
 """
 from __future__ import annotations
 

@@ -185,14 +185,18 @@ Caveats:
 
 ## Docs
 
-- The docs are intentionally small:
-  - `README.md` — front page (what/why/quick start), for users.
-  - `docs/README.md` — index of the docs.
+- The doc set, and nothing else:
+  - `README.md` — the front page, and the index of everything below.
+  - `docs/install.md` — installing the desk and the server.
+  - `docs/admin.md` — the operator's runbook.
   - `docs/formats.md` — DAoC format reference; **update it when a new
     format fact is established**.
-  - `docs/status.md` — project state, limits, next steps.
-- Keep the doc set small: when a fact is settled, fold it into
-  `formats.md`/`status.md` rather than adding a new file.
+  - `docs/status.md` — project state, limits, next steps, and the evidence
+    behind each claim.
+- **One home per fact.** A fact that lives in one of these five files, or in a
+  directory's own README, stays there; the other documents link to it.
+- Keep the set small: when a fact is settled, fold it into the file that owns it
+  rather than adding a new one.
 
 ## Research workflow (binary format discovery)
 

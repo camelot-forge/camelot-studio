@@ -1,8 +1,7 @@
 # Project status
 
-State of Camelot Studio (M1 delivered; documentation audit closed Sept 2026).
-Byte-level format facts: `docs/formats.md`. If you are a new contributor or
-agent, read this, then `AGENTS.md` for repo rules.
+State of Camelot Studio. Byte-level format facts: `docs/formats.md`. A new
+contributor or agent reads this, then `AGENTS.md` for the repo rules.
 
 ## What is delivered
 
@@ -23,7 +22,7 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot server export --out F [--config C\|--dsn D]` | export the server's world rows (`mob`/`worldobject`/`door`/`path`) to a snapshot the viewer reads; needs `pymysql` (extra `mysql`) |
 | `camelot server tables` | the server tables this project owns — the map the Installer validates a release against |
 | `camelot project new\|open\|info\|verify\|import\|populate\|release\|releases\|deploy\|promote\|publish\|envs` | the project: one server's whole content in one folder (release, dry run, deploy to an environment); `publish` commits a release's payloads and its feed to the `camelot-deploy` branch — the transport a server this machine does not reach pulls (D §D2/§D5) — and **signs the release record** with `machine.json`'s `release_key` (D §D7) |
-| `camelot env provision\|status\|verify\|apply\|reverse\|reload [ENV]` | an environment's server half: its own database built from OpenDAoC's baseline, what it holds, the Installer's step, the read-back; an environment declared `"client": false` in `machine.json` is **server-only** — the client half belongs to the feed (D §D3); `reverse` puts back what one release replaced, in one transaction, and withdraws it from the folder and the ask — a **repair**, not a rollback (S §D17) |
+| `camelot env provision\|status\|verify\|apply\|reverse\|reload [ENV]` | an environment's server half: its own database built from OpenDAoC's baseline, what it holds, the Installer's step, the read-back; an environment declared `"client": false` in `machine.json` is **server-only** — the client half belongs to the feed (D §D3); `reverse` puts back what one release replaced, in one transaction, and withdraws it from the folder and the ask (S §D17) |
 | `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--db-write] [--edits D] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only; `--edits` turns on the **world editor** (6.3: select, move/rotate/scale with snap, catalog add, remove, the undo journal, `build`/`apply`/`revert`/`restore`); `--db-write` lets it also patch the server's **existing** world rows (B2: a keep's own doors move with the keep) |
 | `camelot console --root DIR [--env NAME] [--project DIR] [--feed DIR] [--game-server H:P] [--api-url U] [--api-password P] [--allow-restart] [--deploy DIR] [--deploy-remote NAME] [--release-key F] [--feed-out DIR] [--audit F] [--host H] [--port N]` | the running server's Console (P7): the applied release and rows, the reload recorded in the project's log, the feed's version, the game port and the read API; `--allow-restart` enables the one server action (shutdown + supervisor); `--deploy` enables **Pull** — fetch the `camelot-deploy` branch, check who signed the release record, verify its hashes, hand the server half over, write the wanted marker, mirror the feed (D §D4); `--release-key` is the operator's `.pub`, and without one the page says the server does not check signatures (D §D7); **Reverse** writes the ask for the other direction (`reverse.json`, honoured by the Installer's step, S §D17); one audit line per attempt; a password is required beyond loopback |
 
@@ -39,21 +38,20 @@ runbook.
 
 The Installer also exists as a **C# plugin**
 (`server-bridge/camelot-installer/`): copied once into the server's script
-folder, compiled at boot, run through `IDatabaseUpdater` like the mod host was.
+folder, compiled at boot, run through `IDatabaseUpdater`.
 It honours the Console's ask, applies what the folder holds oldest first, writes
 the same `state.json`, `applied/` and `reversed/` the desk's CLI writes, and
 never lets a failure reach `UpdateDatabase()` — a thrown exception there is a
 server that will not start (S §D10). Both ways of running it produce one folder
-and one state; the Console cannot tell them apart. Its README says what it does
-not do (no reload, no restart, no ids allocated).
+and one state; the Console cannot tell them apart.
 
 A release travels **signed** (`camelot/sign.py`, D §D7): `publish` signs the
 release record with `ssh-keygen -Y` (OpenSSH's SSHSIG, Ed25519, namespace
 `camelot-release`) and the signature rides in the branch beside it; `pull` checks
 it against the operator's `.pub` **before** it believes the hashes the record
 carries — the hashes are written in the record, so only the signature makes them
-mean anything. A server with no key is not a server that fails: it hands the
-release over and reports that it did not check, and the Console's page says so.
+mean anything. A server with no key hands the release over and reports that it
+did not check; the Console's page says so.
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
 client NIFs parsed (the two remaining are 10.1.0.0 housing files failing
@@ -133,15 +131,13 @@ have dropped two of the eighteen races — a failure that would only surface
 in-game. A projection refuses an unknown race rather than defaulting.
 
 **The deployment document** (`core/camelot/mod.py`) is what a pack carries
-for the loader, and it settles two things the XML package format could not.
-The pack declares *how many* ids it needs per table and describes its rows
+for the loader. The pack declares *how many* ids it needs per table and describes
+its rows
 as columns and values; it ships no SQL and never chooses an id. The manager
 allocates, records and writes, so overlap between writers is impossible by
 construction rather than detected, and nothing a pack carries can execute
-arbitrary statements against a database. *(2026-10-14: the third-party
-framing is retired — the pack is one release of one server's content, not a
-mod; `docs/next-steps.md`.)* The `client` section carries the pack's client
-half: the destinations it replaces on players' machines (a loose file, an
+arbitrary statements against a database. The `client` section carries the pack's
+client half: the destinations it replaces on players' machines (a loose file, an
 archive entry, a gamedata row edit), applied by `camelot client install`
 with claims resolved by priority.
 
@@ -305,9 +301,8 @@ in `workspace/notes/`.
 - **glTF axis**: vertices/normals stay in NIF space and the synthetic root
   node (`__axes__`) applies the axis conversion once (no double rotation).
   Every era composes **Z-up** in NIF world space, so the conversion is always
-  `(x,y,z)→(x,z,−y)` (`formats.md` §2 "Up axis"): the former version-based
-  "early 4.x is X-down" rule was a pre-row-major artifact and is gone. **The
-  world and the figures now share it** (`nifutil.WORLD_AXIS_CONVERSION` *is*
+  `(x,y,z)→(x,z,−y)` (`formats.md` §2 "Up axis"). **The
+  world and the figures share it** (`nifutil.WORLD_AXIS_CONVERSION` *is*
   `AXIS_CONVERSION`): the client's map is left-handed (`+y` south — the
   server's own compass, `formats.md` §11) but that decides *where a point
   goes*, not which way a NIF's own axes face — the zone meshes take the same
@@ -381,8 +376,8 @@ machine, 2026-10-11).
      Stingray, wolverine, minecarts…), keeping the same rig gates.
    - **Gamedata-linked clips map by the engine's table** (`prefer_table`):
      offset heuristics must not judge them, since animated bones (root bob,
-     clavicle breathing) drift from the bind and used to refuse
-     amazon/rat/bear/cata_lion/badger/amb_blackcat — all of which deform
+     clavicle breathing) drift from the bind and the offset gate refuses
+     amazon/rat/bear/cata_lion/badger/amb_blackcat, all of which deform
      cleanly (mean edge ratio 1.01-1.07) once mapped by name. Fallback
      (filename) links keep the conservative offset gate. The black cat's
      sitting `Idle` slot loses to its `STAND_IDLE`
@@ -442,8 +437,7 @@ material, so the client's single-sided hair styles are not lit from behind.
 **Armour** is picked from the client's `pskins.csv`: 85 of the 1953 material
 families cover the full wearable set (body, arms, gloves, lbody, legs, boots)
 and each declares its own sheet per piece and gender, so the figure is dressed
-in one coherent family instead of the mixed placeholder sheets the builder
-used before. The default is the client's first family (`Hard Leather`, pskin
+in one coherent family. The default is the client's first family (`Hard Leather`, pskin
 301). The cloak keeps its own sheet: it belongs to the equipped cloak item,
 not to the armour material.
 
@@ -492,480 +486,46 @@ live client plays for the male Troll player is still to confirm
 
 ## Next steps (priority order)
 
-The canonical roadmap is `docs/next-steps.md`. The immediate order is:
+1. **P8 — the re-base**: the banner, the per-file view, keep-ours/adopt-theirs,
+   and the ops that no longer match a base that moved. A real client update is
+   absorbed without a silent overwrite. The design is the private workspace's
+   `notes/`.
+2. **The delivery chain's own limits**: the loader's used-id export, the
+   `objects` cap-5000 recipe, and the ids above 32767 (the signed 16-bit wire)
+   are the next measurements.
+3. **The NIF writer** is the gate on content that brings new geometry: a model
+   the client has never read still waits on it. It runs parallel to the rest.
+4. **The players' Windows package**, built and signed on a Windows machine, with
+   the launcher's self-update, before the launcher is handed out widely.
+5. **Blender integration** (M2, `addon/`) and broad product features stay
+   deferred until the delivery loop is closed.
 
-1. **Phase 6 — the world editor** (decided 2026-10-11; design in the private
-   workspace, `notes/phase6-world-editor.md`): 6.0 the zone data layer
-   (`core/camelot/zones.py` — `zones.dat`, the PCX heightmaps, `fixtures.csv`,
-   `sector.dat`), then 6.1 the client experiment (which zone archive is read,
-   and whether a rewritten one is accepted) — one session, and it gates the
-   rest; then the `/world` route, the editor, and spawn publishing through the
-   existing pack chain. 6.0–6.2 are done and passed their in-game checks
-   (the world frame, the ground layer composition, the patch seams).
-   **The agreed order for what follows** (operator + agent, 2026-10-11;
-   the *why* and costs are the workspace spec's §11):
-   **(a)** the `Z` vs `Ground` experiment (W-3) — **done 2026-10-12**
-   (`Ground = 1` wins, measured in game); **(b)** the **spawn layer,
-   read-only** — **done 2026-10-12**: `/world` draws the server's `mob`,
-   `worldobject`, `door` and `path` rows from a snapshot (`--server-rows`) or
-   the live MySQL (`--db-config`), its own region's rows only (world
-   coordinates are per region — the first cut mixed seven regions into
-   Camelot Hills; corrected the same evening, rules read from the server:
-   the `Region` column, `door.InternalID / 1 000 000`, and the patrols a
-   zone's mobs walk). 2,075 mobs / 21 statics / 9 doors / 3 patrols in
-   Camelot Hills (counts and shots in the workspace report);
-   **(c)** the editor (gizmos, snap, add/remove, the undo journal,
-   the authoring directory) **plus the publish path** — **done 2026-10-12**:
-   `--edits DIR` opens an editing session (the journal lives in the
-   project's authoring directory; `build` runs the same `mod build` path and
-   `apply` the same `client install`); the viewer carries the gizmo and the
-   panel (the workspace report has the byte-level proof and the W-5 recipe);
-   **(c2)** editing the server's own rows — **done 2026-10-12**: a fixture
-   move carries the rows that stand inside its own meshes (B2, the case W-1
-   measured — Camelot Hills' keep carries its two doors, and, as measured,
-   the 27 NPCs and 2 banners its court holds, which the panel names before
-   anything is written); a row is moved or removed on its own too, and both
-   land through the same journal: `apply` patches the database behind the
-   explicit `--db-write`, recording every original it read, and `revert` puts
-   them back exactly. Such an edit is server-only — no pack, no client half.
-   **A publish commits**: the client carries the journal's ops afterwards, so
-   they leave it and the next edit starts from what the client holds (an op
-   recorded before a publish could no longer apply against the published base
-   — the operator hit exactly that). The rows the session writes are recorded
-   in a per-session ledger the first time they are touched, so `revert` and
-   `restore` always mean *the state the session started from*, whatever was
-   published in between;
-   **What the game shows is a fourth layer**: a running server reads its rows
-   once, at startup, so a written patch is in the database but not on screen
-   until the server's own `/reload doors`, `/reload mob`, `/reload object`
-   (region-scoped, admin) or a restart — measured from the server's own
-   commands on 2026-10-12, and the panel says so. And because the installed
-   client half belongs to the *client*, a journal-only `revert` leaves it
-   behind: `restore` is the call that puts the client's half, the rows and
-   the journal back together (the uninstall first, so a refusal changes
-   nothing);
-   **(d)** the sky, fog and
-   the day/night time (a slider first — the server owns the real clock,
-   `formats.md` §11), then terrain/texture editing and the dungeon/city
-   variants.
-
-**The UX pass (2026-10-12, after B2's in-game check).** The editor moved out
-of the viewer's sidebar into its own floating, draggable panel, and the mouse
-grammar was rewritten: **left is selection** (click, box, shift adds) — and a
-drag that starts *on the selection* grabs it, because the middle button is not
-guaranteed to exist; the **middle button** does the same (shift+middle rotate,
-alt+middle lift, ctrl+middle scale). Right orbits, shift+right pans, the wheel
-zooms, and the scene never shows the browser's own menu. The panel reads like
-a repository: the publish button carries the count of unpublished changes, and
-the client's own installed half, the journal and the written rows are named
-separately. Verified by `web/scripts/world_mouse_probe.mjs` (real pointer
-events through the page's own path).
-
-**The UI modernization, slice 1 (2026-10-14): the shared shell.** The three
-pages now wear the same frame: a 60 px **app bar** (brand, context chip, the
-**Figures · Builder · World** switch, page actions) and a 28 px **status
-bar**; the rule that maps a pathname to its section is `lib/nav.ts`
-(unit-tested), and the design tokens the drafts asked for (axis colors, the
-control/size/radius/type scale) live in `app.css`. The old one-off headers
-are gone (`Header.svelte` deleted; the builder's hand-rolled header and the
-world's `h1` replaced). Verified in the real browser against the running
-daemon (figures, builder, world, and a loaded figure + Camelot Hills) with
-zero console errors; `pnpm test/check/lint/build` all green. The Penpot
-reference is the file's “Drafts” and “Design system” pages; decisions in
-`workspace/notes/ui-modernization.md`.
-
-**Slice 2a (same day): the world editor's tools.** The panel gave two jobs
-away: a floating **View/Edit chip above a vertical tool strip** on the canvas
-(Select, Move, Rotate, Scale, Add, Measure + the snap magnet, with
-V/W/E/R/A/M shortcuts — View steps the strip back to select + measure and
-hides the panel) and a docked **status bar** that took the cursor's ground
-readout, the gesture reminder, the measure line, the journal summary and the
-build stamp out of the panel. Mono left this page too (the zero-mono
-decision; `code` stays mono on purpose). Verified against the running daemon:
-Edit = 7 tools + the panel, View = 2 tools, no panel; the readout tracks the
-ground (`37838, 24981 · z 2135`); zero console errors; `pnpm
-test/check/lint/build` green. Next: **slice 2b — the Unity-style gizmo back on
-the selection**, over the existing mouse grammar; then the viewer/builder
-transport, bones and equipment panels.
-
-**Slice 2b (same day): the gizmo.** The selection carries three arrows: X red
-(east), Y green (north), Z blue (up, DAoC's own height axis). The axis mapping
-and the ray/axis projection live in `lib/world/gizmo.ts` (unit-tested). A drag
-that starts *on an arm* moves the selection along **that axis only**,
-quantized by the same steps the gestures use (256 units, 16 for heights); the
-arrows keep their size on screen (scaled by the camera's distance every
-frame), the pointer turns into a `pointer` over them, and the ground grammar
-is untouched (drag the selection, the middle button, shift-pan, the wheel).
-A ground row refuses the vertical arrow the way the grammar always has (W-3:
-its `z` belongs to the terrain, never invented); **holding shift during a
-gizmo drag** holds the snap off — whole units, the way Blender's own fine
-move works (the status bar says `free (shift)` while it holds), and the
-arrows win over the ground's shift+left pan *on the arrows only*: everywhere
-else shift still pans the map. Verified in the browser
-against the running daemon: a drag on the red arrow moved the Keep **+512 on
-`x` only** (2×256 — the snap) and journaled **one fixture op + the 31 carried
-rows** (the `carry` behaviour, B2), and the same drag under shift moved it
-**+178** (off the grid, y untouched); hover shows the pointer; zero console
-errors; `pnpm test/check/lint/build` green. Next: the viewer/builder
-transport, bones and equipment panels.
-
-**Slice 3a (same day): the figure viewer.** The read-only page now has the
-drafts' shell and tools. A **vertical strip in the same column as the
-editor's** (grip, fit, turntable, wireframe, grid, axes, snapshot | ↺ / axis
-chip / ↻) floats over the viewport and **drags by its grip** (a click puts it
-back at 12,12; the spot is remembered). A **floating animation transport**
-bottom-centre: play/pause, `1.24 / 2.40 s` read-out, a scrubber ticked with
-the clip's **own key times**, a loop switch and a speed chip — and the client's
-`clamp` rule is obeyed: a one-shot **stops on its last frame**, its loop switch
-is refused (not silently overridden) and it restarts when played again. The
-right dock is now **Inspect**: Model (file, meshes, triangles, bones, skins —
-the sidecar's count when there is one), **Animation** (the figure's *own* anim
-set, surfaced by a new `/assets/{id}/states` + `?state=` pair on the daemon:
-the client's `monnifs → anims → animnifs` chain, the slot's `loop`/`clamp`
-flag and its **game timing** — a boar's idle is 5.33 s, not its file's
-1.07 s), Bones (search by name *or* channel index, the canonical table behind
-a disclosure, the eye that overlays `SkeletonHelper`) and Skins (per-slot
-sheets), plus the Character card for figures that carry one. The status bar
-reads **fps · tris · meshes · bones**, the gestures and the clip on screen;
-`F` frames, space plays. Refusals are the daemon's own: a clip whose channels
-do not bind comes back `404 no tracks for state: X` and the row says so
-(measured: **64 of the boar's 96 slots** are refused this way), which is what
-the draft's “pair refusé” meant. Verified in the browser against the running
-daemon by `web/scripts/viewer_probe.mjs` — **46 checks**, all green (strip
-order and width, transport clock/scrub/ticks/clamp/speed, the four cards,
-the refused pair, one lit row per clip, the grip drag + reload, wireframe,
-the bones eye, snapshot PNG and a **glTF export re-parsed as a real GLB**).
-Three bugs the browser found and that are fixed: the scene effect re-read its
-own `$state` handles (1001 rebuilds per figure — it now works on locals and
-only writes them), a synchronous first render-loop call had made the clock a
-dependency of the scene's setup, and the transport's play button on a
-finished one-shot did nothing (it now starts over). `web/src/lib/transport.ts`
-and `lib/inspect.ts` are unit-tested (105 web tests). Next: **slice 3b — the
-builder's rail and its own inspector**, then the journal tab and the dock
-system (resize grip + pin).
-
-**Slice 3b (same day): the character builder.** The rail is now a dock of the
-same grammar (head, sections, foot) with the drafts' four sections: the gender
-segment, **the 18 races** with their realm tags (the draft said 15 — the
-daemon's roster has 18, so the meta reads what the list holds), the appearance
-steppers as a `− value +` row (`1 / 7`), and gear & state. The foot carries the
-operator's **Randomize / Reset** (new) and the size of the space they sample:
-“114,688 combinations — every pick re-assembles the figure”, computed per race
-by `lib/appearance.ts` (`combinationCount`, `randomAppearance`,
-`clampAppearance` — a race switch pulls every pick back into the new range
-instead of leaving a face index pointing nowhere; 13 unit tests). The
-inspector shows the **Character** summary (race, gender, face, hair + colour,
-skin, eye, cloak) and **Equipment**, which lists the pieces the assembled
-figure actually carries (Eye / Head / Hair / Gloves / Arms / Boots / Legs /
-Body) in the material asked for — read-only on purpose: the assembly picks one
-piece per slot, and the per-variant picker belongs to a *base* figure (the
-figures page still offers it). The viewport is the viewer's own: same strip,
-same transport, same gestures, same status-bar grammar, and **Export glTF is
-the primary action** (the shared `lib/gltf/export.ts` now serves both pages).
-The three pre-existing `svelte-check` warnings are gone: the race list is real
-buttons and two dead selectors left. The daemon's character route now names a
-refused state the way the asset route does (measured on race 4/true: 0 of its
-164 slots are refused — the fig3 rig binds them all, so the builder's refusal
-note is a safety net, not a common case). Verified in the browser by
-`web/scripts/builder_probe.mjs` — **32 checks**, all green (sections and race
-list, the gender switch, a stepper re-assembling, a colour pick only
-re-forming its sheet, Randomize inside every range, Reset, the armour material
-re-assembling, the state select, the count in the foot, the two cards, the
-strip/transport/status bar shared with the viewer, a snapshot PNG and the
-GLB export re-parsed). `pnpm test/check/lint/build` green — **check is now 0
-errors and 0 warnings**.
-
-**The dock system, and the world editor's Journal (same day).** “My UI, not
-ours” is now a mechanism: one `Dock.svelte` carries every panel — the figures'
-library and inspector, the builder's rail and inspector, the world's navigator
-and editor — with a **resize grip** on its inner edge (260–640 px, drag;
-double-click resets), a **pin** that lets it float over the scene (dragged by
-its head) and a per-dock memory in `camelot.dock.<id>` (width, pin, spot), so
-a layout survives a reload. `app.css` gained the frame, the tab strip and the
-badge. Two things the browser taught it: a press on a dock's head started a
-**native text drag**, whose `pointercancel` ended the gesture after one move
-(fixed with `preventDefault`, `user-select: none`, and treating
-`pointercancel` as a release) — and a floating dock needs its own track, so
-the world's navigator and the figures' docks now live beside the stage, not
-over it.
-
-**The world page was rebuilt around them, as draft 1 drew it.** The left
-column is the **Navigator** (client status, region, zone search and list, the
-go-to and region search, the zone's own counts, layers, fixtures, the lint
-check); the right one is the **Editor**, a dock with two tabs — **Inspect**
-(the selection's own fields, its ground-row z rule spelled out, the rows it
-carries, the add flow) and **Journal** — and the app bar carries the session
-chip, **undo** and **save**. The journal tab is the readable history the
-draft asked for: one line per op, with **both sides** (`expect` / `originals`
-on one side, what was written on the other), grouped per zone, the server
-rows beside them, the count in the tab's badge, and the publish chain
-(build / revert / restore all) with the reload hints and the pack line under
-it. *(2026-10-14: the pivot replaces this chain with **releases** — one
-server package and one client update — and **environments** (`local`,
-optional `staging`, `production`) with promotion between them; phases P3–P5
-of the private workspace's `notes/`. None of that is implemented
-yet.)* `lib/world/journal.ts` holds the reading, unit-tested (11 tests). The
-last hex palette went with it: the page now uses the same tokens and dock
-grammar as the rest of the studio, mono included.
-
-Verified in the browser: `web/scripts/dock_probe.mjs` — **28 checks**, all
-green (head/grip/pin on both pages, the width floor and the remembered width,
-floating out of the flow, dragging by the head, the spot surviving a reload,
-the world's tabs and their badge, a fixture picked in the navigator landing
-in the inspector, a typed field journaling one fixture op **and the 31 rows
-it carries**, the head's count matching the daemon's, the journal line read
-with both sides, Delete removing and journaling, and the session left clean).
-The three older harnesses still pass (46 viewer + 32 builder + the world
-grammar probe, whose tool clicks now go through the keys the strip
-documents).
-**The project's first slice (2026-10-15).** The spec set in the private
-workspace (`notes/`) makes the product the content suite of one server;
-its first phase is the container. `camelot project new|info|verify`
-(`core/camelot/project.py`) create and read a project: `project.json` (the
-schema `camelot.project/1`, the base fingerprints, the cache policy, the
-environments), the git scaffolding (a `.gitignore` for the derived data and
-for this machine's own file, a `.gitattributes` with the LFS rules and the
-union merge of the deploy log) and `machine.json` — untracked on purpose,
-because nothing tracked may be machine-specific. The base is **referenced by
-fingerprint** and never copied: the three resources a real client is read
-through (`game1127.dll`, `gamedata.mpk`, `zones/zones.mpk#zones.dat` — 5.9 MB,
-582 KB and 9.8 KB) hash in **0.4 s** on the operator's rig, which answers M-4;
-`verify` reads them back as `ok` / `moved` / `missing`, naming the resource
-that moved. 22 unit tests, none of which needs a client (the synthetic base is
-three files a fixture writes); `ruff check` and `ruff format --check` clean.
-
-**The journal's kernel (same day).** `core/camelot/journal.py` holds the
-concurrency model the whole team story rests on: **one append-only shard per
-author-session** (`journal/<at>-<author>.jsonl`, never shared — two sessions in
-the same second get two files), a **total order** (timestamp, ties broken by
-the shard's name, the shard's own `seq` inside), a **cut** a release can cover
-(`shard -> last seq`, so "pending" is computed and never stored), and **drops
-as history**: undo and revert append a `drop` naming an op (`shard:seq`) and
-the replay skips it — a shard is only ever appended to. `replay()` applies the
-ops in that order and requires each one's `expect` to be what the state holds
-at its own point: two sessions that moved two fixtures merge without a word,
-two blind edits on *one* fixture are refused with the shard, the line, the row
-and both values, and an op on an existing row that carries no `expect` is
-refused rather than trusted. 19 tests, including the semantic half of the team
-test (the git half is a harness); the suite is 471 passed.
-
-**The editor consumes it (same day).** `serve/editor.py` keeps no mutable
-`journal.json` any more: the ops are appended to their shard, a **publish is a
-fact** recorded in `deploy/log.jsonl` (the keys it covered, the rows it wrote),
-and what is *pending* is computed from the two. So **nothing about a session is
-mutable on disk**: the `originals` ledger is derived (the first patch of a row,
-in journal order — what `revert` restores to) and the panel's `applied` flag is
-derived too (a line the log covers), instead of being written back into the
-journal. Undo **appends a drop**; a line a publish covered is refused instead
-("the client and the server's rows carry it — use revert"), because dropping it
-would leave a live change with no journal entry behind it. A legacy single-file
-`journal.json` (6.3) is **migrated once**, on first read: every op becomes a
-line, every patch a `rows` line with the originals it already carried, the
-patches that were already written become a *publish* fact, and the file is moved
-aside as `journal.json.migrated` — a session is never read from two places.
-The flag is now `--project DIR`; `--edits` stays as the older name of the same
-directory. Measured on the operator's own client: a legacy session migrates,
-reads back with its op and its patch, and the deploy log records what happened;
-the editor's 26 tests pass.
-
-**Populate, import, and the team test (same day).** `camelot project populate`
-records the resources an *edit* depends on — a zone's placements, its catalogue
-and its metadata, read through `csv` first and `dat` for what only it carries,
-the resolution the reader itself uses — and a table whole out of
-`gamedata.mpk`. Nothing the viewer only *looks* at is fingerprinted (the
-heightmaps, the ground patches): a drift check that cried wolf on every visual
-asset would be noise, and M-2 is the measurement that could change that.
-Measured on the operator's client: **565 resources over 402 zone folders in
-0.64 s**, a 65 KB `project.json`, and `camelot project verify` reads all 568
-back in **0.61 s** — so the drift check is silent at every scale we have.
-Resource names are written *canonically* and read through the client's own case
-rule (`zone000` beside `ZONE008`), so a project populated on one machine opens
-on another. A recorded resource whose bytes moved is **refused by name** unless
-`--update` says otherwise: adopting a moved base silently is what re-base (P8)
-exists for.
-
-`camelot project import DIR` makes a 6.3 authoring directory a project **in
-place**: the same scaffolding `new` writes (and never over an operator's own
-notes, `.gitignore` or machine file), the legacy journal migrated to a shard by
-the kernel's own converter, the facts it implies (what 6.3 said was written,
-then the migration) recorded in the deploy log, the mod identity written to
-`mod.json` when the journal was its only home, and `journal.json.migrated` left
-beside the shard. Measured on a copy of the operator's session: imported, the
-scaffolding in place, and the daemon opens it (`--project`, `available: true`)
-with nothing lost.
-
-The **team test** is `core/tests/test_project_team.py`: two clones of one
-project, a commit each, a `git pull` — two shards merge as a union with no
-conflict, the deploy log keeps both sides' lines (its `.gitattributes` rule),
-the merged journal reads in the timestamp order, and a line another session
-wrote blind against the same row is **refused by name** when the journal is
-read back. That closes P1's exit criteria: the container, the base, the shards,
-the refusals, and a session that opens as a project.
-
-**Home, the front door (2026-10-16, P2 of the workspace's `notes/`).**
-Two slices. The daemon now serves `/home`: what *it* reads (the client, its
-zone folders, the port, the build), the projects this machine has opened —
-five at most, from `recent.json` in the per-user config directory
-(`~/.config/camelot-studio`; never in a project, never in git) — and one
-`verify` per row when the page asks (0.61 s for 565 resources, so the page
-paints first and the rows fill in). A row carries the work waiting too, counted
-the way the editor's panel counts it (`pending_counts`: distinct fixture ids,
-distinct `table:key`).
-
-The doors followed: **open** switches the running daemon to another project
-without a restart. One `Session` (`core/camelot/serve/session.py`) owns the
-shared config and the checkout's lock, so a switch mutates in place and no
-router is rebuilt: the lock hands over (read-only when another live process
-holds the copy), the client is re-resolved *from the project* (`machine.json`,
-then `$DAOC_CLIENT`, then the current root — and that last fallback says so),
-the per-project caches are dropped (the asset index, the zone index, the
-server-rows snapshot, the editor's journal and its live connection) while the
-exported artefacts stay (they are keyed by path and mtime), the file watch
-follows the new root, and the visit is recorded. Leaving a project with
-unpublished edits is a **warning line, never a wall** — the journal *is* the
-save, so an Alt+F4 costs nothing but the lock. **Create** writes
-`project.new` then records the whole client (`populate` over every zone folder
-plus the tables it ships: `items.csv`, `monsters.csv`, `objects.csv`),
-**import** turns a 6.3 edits folder into a project where it stands, and
-**clone** runs `git clone` inside the daemon (the operator's own credentials;
-no key ever reaches the browser) and writes this machine's untracked
-`machine.json` into the fresh clone. `web/scripts/home_probe.mjs` drives all
-four against a real client — **55 checks, green** (a project created from the
-browser, an edit surviving a switch away and back, a clone that carries its
-journal) — and the four older harnesses still pass. 531 tests.
-
-**Releases, first slice (2026-10-17, P3 of the same spec set).**
-`core/camelot/release.py` cuts a release and nothing else — a deploy is the
-next slice. A release **is its range**: the journal lines beyond the previous
-release's cut, an op *and* a drop (`journal.cut()`/`pending()` were written for
-exactly this), and a range that is empty is refused with "nothing to release"
-instead of producing a twin of the release before it (`pipeline.md` §D5).
-`releases/NNNN/release.json` is the record and it is committed: the cut, the
-base it was built against, the families, the ids the range allocated, the two
-artifacts with their `sha256`, the publication **order** (§D6: the client half
-first whenever the release carries one) and the tables a row patch will make
-the server re-read. The payloads are not committed — `.gitignore` already
-excluded `releases/*/server/` and `releases/*/client/` — because the record
-plus the journal plus the base rebuild them: `camelot project verify --rebuild
-N` is what a CI job runs, and the test proves a **second clone** (a real `git
-clone`, payloads absent) rebuilds release 1 byte for byte. The server half is
-the pack `camelot mod build` already produces; the client half is what that
-pack would install on a client, named with its hashes in a `patchlist.json` —
-the material the feed will publish. Measured on the operator's client: one
-edit cut to release 0001 in one call, the rebuild reads the same `sha256`
-back, a second cut says there is nothing to release. 540 tests. Two kernel
-bugs fell out of it, both fixed with their tests: two journal shards opened in
-the same second sorted the *later* one first (a chain of ops replayed out of
-order), and the pack's identity came from the project's **folder** instead of
-its name (a clone in another directory built different bytes).
-2. Keep the delivery chain honest while it grows: the loader's own used-id
-   export, the `objects` cap-5000 recipe, and the ids above 32767 (the signed
-   16-bit wire) are the next measurements.
-3. The NIF writer (P5-B) is the gate on mods that *bring* new geometry; it
-   runs parallel to Phase 6, not inside it.
-4. Blender integration and broad product features stay deferred until the
-   world editor can publish a map mod end to end.
+The dated record of how each of these was reached — the slices, the UX passes,
+the measurements — is the private workspace's `blog.md`.
 
 ## Command cheat sheet
 
+The contributor's own loop. The operator's commands, in the order they run, are
+`docs/install.md` §5, and the daily flow is `docs/admin.md` §4.
+
 ```sh
-# Run from the camelot-studio repository root.
-export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
-# Corpus validation (read-only; long-running). The manifest is a list of
-# client paths; `core/tests/manifest.example.txt` shows the format and the
-# one the workshop uses is not shipped here.
-.venv/bin/camelot batch /path/to/manifest.txt \
-  --read-only --out /tmp/camelot-corpus-report.txt
+export DAOC_CLIENT="/path/to/DAOC CLIENT V2"
+
+# The corpus: read-only, long-running. `core/tests/manifest.example.txt` shows
+# the manifest's format.
+.venv/bin/camelot batch /path/to/manifest.txt --read-only --out /tmp/report.txt
+
 # Inspect and export a client asset.
 .venv/bin/camelot info "$DAOC_CLIENT/figures/Ettin.NIF"
 .venv/bin/camelot gltf "$DAOC_CLIENT/figures/Boar.NIF" --out /tmp/boar
-# Build a mod pack and apply its client half (build against a *pristine*
-# copy of the client; `client patch` is the unmanaged ceiling lift).
-.venv/bin/camelot mod build --dir mymod --client /path/to/clean-client \
-  --out mymod.tar.gz
-.venv/bin/camelot client install mymod.tar.gz --client "$DAOC_CLIENT"
-.venv/bin/camelot client verify --client "$DAOC_CLIENT"
-.venv/bin/camelot client free-ids --client "$DAOC_CLIENT"
-# The server's own world rows (mob/worldobject/door/path) in /world: export
-# them once from the server's MySQL (needs pymysql: pip install '.[mysql]'),
-# then serve the snapshot — or read the live DB through the server's config.
-.venv/bin/camelot server export --config /path/to/serverconfig.xml \
-  --out server-rows.json
-.venv/bin/camelot serve --root "$DAOC_CLIENT" --server-rows server-rows.json
-# The project (P1 of the private workspace's `notes/`): the whole content
-# of one server in one folder. `new` records the base by fingerprint (three
-# resources, ~0.4 s on the operator's rig) and writes the git scaffolding; the
-# derived data (ids.json, the cache, the release payloads, the feed) stays out
-# of git, and this machine's own paths live in the untracked machine.json.
-.venv/bin/camelot project new camelot-hills --client "$DAOC_CLIENT" --git
-.venv/bin/camelot project info --dir camelot-hills
-.venv/bin/camelot project verify --dir camelot-hills
-# Releases (P3): cut the next one, read the history, rebuild one from the
-# journal plus the base and compare the bytes (what a CI job runs). The record
-# is committed; the payloads under releases/NNNN/ are not.
-.venv/bin/camelot project release --dir camelot-hills
-.venv/bin/camelot project releases --dir camelot-hills
+
+# The server's own world rows, in /world: export them once from the server's
+# MySQL (needs `pymysql`), or read the live database through its config.
+.venv/bin/camelot server export --config /path/to/serverconfig.xml --out rows.json
+.venv/bin/camelot serve --root "$DAOC_CLIENT" --server-rows rows.json
+.venv/bin/camelot server tables            # the tables this project owns
+
+# A release, rebuilt from the journal and compared byte for byte: what a CI job
+# runs.
 .venv/bin/camelot project verify --dir camelot-hills --rebuild 1
-# An environment's server half (P5 of `notes/`): `provision` drops the
-# environment's *own* database and imports OpenDAoC's baseline into it (110
-# files, 72 MB, ~15 s on the operator's machine), then starts the Installer's
-# record over; the environment never gets the database the authoring server
-# edits. `deploy` hands the release over, `apply` writes its rows from here
-# (what the C# Installer does at boot on a real server), `reload` records the
-# in-game ritual the release named, `verify` reads it all back. This machine's
-# answers (the folder, the database, the baseline, the connection) live in the
-# untracked machine.json.
-.venv/bin/camelot env provision local --yes --dir camelot-hills
-.venv/bin/camelot env status local --dir camelot-hills
-.venv/bin/camelot project deploy 1 --env local --dir camelot-hills
-.venv/bin/camelot env apply local --dir camelot-hills
-.venv/bin/camelot env reload local --dir camelot-hills
-.venv/bin/camelot env verify local --dir camelot-hills
-# A bad apply is repaired on the server, and it is a repair, not a rollback: the
-# originals the release recorded go back in one transaction (a column to the
-# value it had, a removed row re-inserted whole), the release leaves the folder
-# and the state — a pull is what puts it back — and `wanted.json` loses it. The
-# feed does not go back: a step back for the players is a new release (S §D17).
-.venv/bin/camelot env reverse local --dir camelot-hills
-.venv/bin/camelot env reverse local --release 6 --dir camelot-hills   # or name one
-.venv/bin/camelot server tables                      # the tables this project owns
-# Home is the front door (P2 of `notes/`): the daemon serves it at /home.
-# The browser lands there when the daemon was started without a project, and on
-# /world when it was started with one. From the page, Open / New project /
-# Import a folder / Clone a repository switch the *running* daemon to another
-# project — the checkout's lock hands over, the client is re-resolved from the
-# project, and the page says what the project being left still holds. No
-# restart, and no door ever writes into a client.
-.venv/bin/camelot project open camelot-hills        # verify it, then serve it
-# The world editor (6.3): the project's directory (--edits is its older name).
-# The journal's shards, the build outputs and the deploy log live in DIR;
-# `apply` installs through the same path as `camelot client install` (and
-# refuses while the game runs). Open /world, click an object, move it.
-.venv/bin/camelot serve --root "$DAOC_CLIENT" --project /path/to/project
-# To let a move carry the rows inside a fixture (a keep's own doors, a gate on
-# a wall) or to edit a server row on its own, the daemon needs the server's
-# database: `--db-config` reads it, `--db-write` is the explicit permission to
-# write it. Every patch records the originals it read, so `revert` is exact.
-.venv/bin/camelot serve --root "$DAOC_CLIENT" --edits /path/to/authoring \
-  --db-config /path/to/serverconfig.xml --db-write
-# A running game server reads its own rows once, at startup — a written patch
-# is in the database but not on screen until it is told (in game, admin):
-#   /reload doors      (DoorMgr.Init, all zones)
-#   /reload mob        (the region you stand in)   /reload object  (same)
-# `restore` (the panel's "restore all") puts the installed client half, the
-# written rows and the journal back together; `client uninstall MOD` does the
-# client's half alone.
 ```
-# The server, as containers (`deploy/`): the database, OpenDAoC (pinned by
-# digest) and the `camelot-core` job — the Installer's step — plus the feed
-# service and the Console. One `.env` for the whole stack; the three values that
-# differ between a desk and a VPS are the public feed URL, the game's address
-# and the secrets. `docs/admin.md` is the runbook.
-cp deploy/.env.example deploy/.env && $EDITOR deploy/.env
-docker compose up -d db
-deploy/server/camelot.sh provision     # the baseline, then the releases the
-                                       # checkout already carries
-docker compose up -d                   # db, core, feed, console
-deploy/server/camelot.sh api '<the api password>'   # atlas_api + api_password
-deploy/server/camelot.sh restart       # the API host starts at boot only
-docker compose logs -f core            # the game server's own output

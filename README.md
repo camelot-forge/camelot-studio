@@ -1,228 +1,157 @@
 # Camelot Studio
 
-An **open-source** tool suite for inspecting, converting, validating and
-previewing DAoC client content (models, textures, animations) — built for the
-private-server community.
+An open-source tool suite for authoring, versioning, releasing and shipping the
+content of **one** OpenDAoC server and its client.
 
-> **Status: M1 delivered; documentation audit closed (Sept 2026)** — core v0.1
-> (NIF/KFA reading, glTF export, round-trip, batch validation, a **100% legacy
-> reader** for NetImmerse 4.x), MPAK reader/writer, the client's canonical KFA
-> bone table (`animnode.dat`, 0..174), and a **SvelteKit + three.js figure
-> viewer** (`web/`) that plays a selected idle. Animation links come from the
-> client's tables and are mapped through the engine's bone table; risky pairs
-> are refused by an empirical deformation check and remain in the bind pose.
-> State: `docs/status.md`. Format reference: `docs/formats.md`.
+One project folder holds a shard's whole content. Every edit lands in a journal;
+a **release** is cut from a range of that journal and travels unchanged through
+environments (`local`, optional `staging`, `production`) to the players'
+launcher. The current state is `docs/status.md`.
 
-> **Where this is going (2026-10-14).** The intent, in one line: make
-> Camelot Forge **the Unity of DAoC servers** — one project folder a shard's
-> team opens to author, version, release and ship the content of its server,
-> the way a game team works on a game project. Concretely: this tool becomes
-> the content suite for **one** OpenDAoC server and its client; one project
-> holds the whole content of one shard, and content leaves it as numbered,
-> immutable **releases** — a server package and a client update — promoted
-> unchanged through environments (`local`, optional `staging`, `production`)
-> and published as a feed the players' launcher reads. The project, releases,
-> environments, the local test server and the players' launcher are built
-> (P1–P6); the Console's read-only phase (P7a) is built; the re-base (P8) is
-> next. The design lives in the private workspace's `notes/`.
+**Principle: engine fidelity.** The suite reproduces the client's own behaviour,
+same tables, order and values, and documents every approximation it still makes.
+`docs/formats.md` is the format reference and `docs/status.md` the evidence
+boundaries.
 
-**Principle: engine fidelity.** The project aims to reproduce the client's
-own behaviour — same tables, order and values — and to make every approximation
-explicit. Animation channels are applied absolute (statics included, following
-the engine's transform overwrite). When a client material stage is not yet
-reproduced, the current limitation is documented rather than silently faked;
-see `docs/status.md` and `docs/formats.md` for the verified scope.
+## Quick start
 
-## Why this project?
+```sh
+git clone git@github.com:camelot-forge/camelot-studio.git
+cd camelot-studio
+./bootstrap.sh                             # .venv, pyffi patched, core/ installed
+.venv/bin/camelot --help
+export DAOC_CLIENT="/path/to/DAOC CLIENT V2"
+```
 
-The Niftools ecosystem (official Blender addon) has been inactive since 2024
-and no longer supports Blender ≥ 4.0. Camelot Studio focuses on the DAoC
-semantic layer that generic NetImmerse/Gamebryo tooling does not cover:
-`.kfa` animations address the client's bone table, fig3 pieces attach through
-`bonelist`, and the MPAK archives plus `gamedata.mpk` tables glue everything
-together. Camelot Studio covers that layer on top of formats handled by pyffi
-(BSD-3).
+The suite runs on Linux and macOS. `docs/install.md` walks the whole install,
+desk and server; `docs/admin.md` is the runbook once it is done.
 
 ## Architecture
 
 ```
 camelot-studio/
-├── core/            # Python 3.11+: camelot CLI (NIF/KFA, glTF, roundtrip, batch…)
-├── web/             # (M1) Svelte + three.js viewer: figures & animations
-│   └── launcher/    # (P6) the players' page: one feed, Update, Play
-├── deploy/          # (F, P7) the feed and Console containers
-├── packaging/       # (P6) the players' launcher package
-├── addon/           # (M2) Blender addon: UI shell around core/
-├── server-bridge/   # (M2) artifacts/integration with the OpenDAoC emulator (C#)
-└── docs/            # DAoC format specs & journals (contract between layers)
+├── core/            # Python 3.11+: the camelot CLI, and every binary format
+├── web/             # Svelte + three.js: the world editor, the figure viewer
+│   └── launcher/    # the players' page: one feed, Update, Play
+├── deploy/          # the server stack: MariaDB, OpenDAoC, the feed, the Console
+├── packaging/       # the players' launcher package (PyInstaller)
+├── server-bridge/   # the Installer: the C# plugin an OpenDAoC server runs
+├── addon/           # (M2) Blender addon: a UI shell around core/
+└── docs/            # format specs, the runbook, the status
 ```
 
-Layer contract: **glTF + JSON** (core exports, web/Blender consumes). DAoC
-binary formats live only in `core/`.
+Layer contract: **glTF + JSON**. Binary formats live only in `core/`; `web/`,
+`addon/` and `server-bridge/` consume artifacts.
 
-## Quick start
+## The desk
 
 ```sh
-./bootstrap.sh            # creates .venv (pyffi + numpy + setuptools, patches pyffi)
-.venv/bin/python -m pip install -e ./core   # optional; bootstrap does it
-.venv/bin/camelot --help
+# a project: the whole content of one server in one folder
+.venv/bin/camelot project new camelot-hills --client "$DAOC_CLIENT" --git
+.venv/bin/camelot project populate --all-zones --dir camelot-hills
+
+# the browser: the world editor, the asset library, Deploy, the Journal
+.venv/bin/camelot serve --project camelot-hills --db-write
 ```
 
-Examples:
+`--db-config` reads the server's own database and `--db-write` is the explicit
+permission to patch its existing world rows. Every patch records the originals it
+read, so a revert is exact.
 
 ```sh
-# info + glTF export of a figure (bind pose, skinned)
-.venv/bin/camelot gltf "$DAOC_CLIENT/figures/Boar.NIF" --out work/boar
-
-# channels of a .kfa animation file
-.venv/bin/camelot kfa "$DAOC_CLIENT/anims/BOAR_idle.kfa"
-
-# roundtrip (read → write → read) validation
-.venv/bin/camelot roundtrip "$DAOC_CLIENT/figures/Boar.NIF"
-
-# bulk validation from a manifest of files
-.venv/bin/camelot batch core/tests/manifest.example.txt --out work/batch.txt
-
-# local asset library + viewer (daemon; serves the built web/ UI + API)
-.venv/bin/camelot serve
+.venv/bin/camelot project release --dir camelot-hills      # cut the next release
+.venv/bin/camelot project deploy 1 --env local --dir camelot-hills --dry-run
+.venv/bin/camelot project publish 1 --remote origin --dir camelot-hills
 ```
 
-### The players' launcher
+`publish` builds the feed and commits the release's payloads to a
+**`camelot-deploy`** branch, signed with the desk's release key. The commit is
+built with git's plumbing, so the working branch and its index stay as they are.
 
-`camelot launcher` is the players' own surface: a page on `127.0.0.1` and the
-two things a browser cannot do — update the client and start the game. A
-distributed launcher carries `shard.json` beside the executable:
+## The players' launcher
+
+The launcher's page runs on `127.0.0.1`; the process around it updates the
+client and starts the game. A distributed launcher carries `shard.json` beside
+the executable:
 
 ```json
 { "name": "Camelot Hills", "feed": "https://patch.example/" }
 ```
 
-The page never asks for the feed URL. `--feed` / `CAMELOT_FEED_URL` override it
-for a development run; the game address comes from the feed's `launcher.json`,
-with `--server` / `CAMELOT_GAME_SERVER` as an override. `Play` is refused while
-the client is behind the feed — the page disables it and the process re-checks
-(`C §D17`); `Update` is the only way through.
+`--feed` and `--server` override the feed's own values for a development run.
+`Play` is refused while the client is behind the feed.
 
 ```sh
 .venv/bin/camelot launcher --feed /path/to/feed/ --client "$DAOC_CLIENT"
 ```
 
 The page's source is `web/launcher/`; its built `dist/` is what the command
-serves, and `cd web/launcher && pnpm install && pnpm build` rebuilds it. On
-Linux the game runs under Wine (`wine` and `wineprefix` in the launcher's
-settings); on Windows, directly.
+serves. On Linux the game runs under Wine (`wine` and `wineprefix` in the
+launcher's settings); on Windows it runs natively. The package is built by
+`packaging/launcher/`.
 
-The player package (`camelot-launcher`, PyInstaller) is built by
-`packaging/launcher/`; see its README for the output and `shard.json`.
+## The Console
 
-### The Console
-
-`camelot console` is the read-only face of a **running** server (P7a). It
-reads the Installer's `server/camelot/state.json` and applied evidence, the
-feed's version, the game port and, when given, OpenDAoC's read API on `:5000`
-(`atlas_api`). It writes nothing.
+`camelot console` is the running server's face: what is applied, what is wanted,
+and the actions — Pull, Restart, Reverse.
 
 ```sh
 .venv/bin/camelot console --root /path/to/env --env production \
   --project /path/to/project --feed /path/to/project/feed \
-  --game-server 127.0.0.1:10300
+  --game-server 127.0.0.1:10300 --deploy /path/to/checkout \
+  --release-key /keys/camelot-release.pub
 ```
 
 The page is on `http://127.0.0.1:8770/`; `/api/live` is the same document as
-JSON. Beyond loopback a password is required (`--password` or
-`CAMELOT_CONSOLE_PASSWORD`). The container is `deploy/console/`; M-3's verdict
-(what the server can actually be told) is in `notes/console.md` §D5.
-Measured 2026-10-18: OpenDAoC exposes a read API and `/utils/shutdown`;
-`/reload` and the messages remain in-game GM commands.
+JSON. Beyond loopback a password is required (`CAMELOT_CONSOLE_PASSWORD`).
 
-### The remote channel (first pieces)
+**Pull** fetches the `camelot-deploy` branch, checks the release's signature and
+its hashes, hands the server half over, writes `wanted.json` and mirrors the
+feed. It stops there: the Installer applies the rows.
 
-`camelot project publish N` builds the feed (the one step that needs a client)
-and commits the release's payloads and that feed to a **`camelot-deploy`**
-branch of the project's repository — the transport a server this machine does
-not reach will pull (`D §D2`). The commit is built with git's plumbing, so the
-working branch and its index are never touched; the branch carries
-`publish.json` (release, feed version, bytes, author) and one `publish` line
-lands in the deploy log.
+**Restart** needs `--allow-restart`, the server's API (`--api-url`,
+`--api-password`) and a supervisor to start the server again. **Reverse** writes
+an ask; the Installer's next run puts back the rows one release changed.
 
-An environment declared `"client": false` in `machine.json` is **server-only**:
-the dry run names the release's client half as the feed's and writes only the
-server half, and `verify` does not look for a client. That is what unblocks a
-VPS deploy.
+## The server, as containers
 
-The server side of the same flow is in: `camelot project pull` (and the
-Console's **Pull** action, phase 7d) fetches that branch, recomputes the
-release's hashes and refuses a mismatch, copies the server half into
-`<env>/server/camelot/releases/NNNN/`, writes `wanted.json` for the Installer
-and mirrors the feed into the served directory. It never applies rows; the
-page shows the wanted release as `pending` until the state file records it.
-
-The one action (7b) is **Restart**, off unless `--allow-restart` is passed;
-it needs the server's API (`--api-url`, `--api-password`) and a writable audit
-log (`--audit`, default `<root>/server/camelot/console/audit.jsonl`). It sends
-`GET /utils/shutdown`, so a supervisor (systemd `Restart=always`, a Docker
-restart policy) must start the server again; without one the action is a stop.
-Each attempt — refused or not — writes one audit line, and the page shows them.
-
-### The server, as containers
-
-`deploy/` is the server side: `deploy/compose.yaml` includes three parts —
+`deploy/compose.yaml` includes three parts, each of which also runs alone:
 `server/` (MariaDB 10.6, OpenDAoC **pinned by digest**, and the `camelot-core`
-job that applies a release), `feed/` (`feedserve`) and `console/`. Each part
-also runs alone, with its own `.env.example` and README. One `.env` drives the
-whole stack, and the same files run on a desk and on a VPS: what changes is the
-public feed URL, the game's address and the secrets.
+job), `feed/` (`feedserve`) and `console/`. One `.env` drives the whole stack,
+and the same files run on a desk and on a VPS: what changes is the public feed
+URL, the game's address and the secrets.
 
 ```sh
 cp deploy/.env.example deploy/.env && $EDITOR deploy/.env
 docker compose up -d db
 deploy/server/camelot.sh provision     # the baseline, then the releases it carries
-docker compose up -d                   # db, core, feed, console
+docker compose up -d
 ```
 
-The job runs the same `camelot` CLI the desk runs, and importing it pulls
-neither `pyffi` nor `fastapi`: a server writes rows, and has no client to parse
-and no page to serve. `docs/admin.md` is the operator's runbook — the desk, the
-server, the daily flow from an edit to a player's update, backups, refusals;
-`deploy/README.md` maps the containers.
-
-Set `DAOC_CLIENT` to your client directory to validate against the real
-corpus (`camelot batch` rewrites `DAOC CLIENT/...` manifest paths from it).
-
-## Setting up a new machine (Linux/macOS)
-
-```sh
-# 1. Python ≥ 3.11 (macOS: `brew install python@3.12` or python.org installer)
-# 2. SSH key + git identity (add the public key to GitHub > Settings > SSH keys)
-ssh-keygen -t ed25519 -C "you@machine"
-git config --global user.name "Your Name"
-git config --global user.email "you@users.noreply.github.com"
-
-# 3. Clone, bootstrap, test (corpus tests skip without DAOC_CLIENT)
-git clone git@github.com:camelot-forge/camelot-studio.git
-cd camelot-studio && ./bootstrap.sh
-.venv/bin/python -m pytest core/tests -q
-
-# 4. Point at your local DAoC client copy (synced separately — not in git)
-export DAOC_CLIENT="/path/to/DAOC CLIENT V2"   # add to ~/.zshrc / ~/.bashrc
-```
-
-The game client itself is never in git — sync it between your machines with
-your usual tool (Syncthing, NAS, external drive).
+The Installer also runs as a **C# plugin** inside the server itself
+(`server-bridge/camelot-installer/`), where the server's own boot applies the
+release.
 
 ## Documentation
 
-- `docs/install.md` — **installing the suite**: the desk and the server, from two
-  empty machines to a shard whose players update themselves. Start here if you
-  are setting it up for the first time.
-- `docs/admin.md` — **running a shard**: the desk, the server, the daily flow
-  from an edit to a player's update, a new VPS, backups, refusals. The runbook
-  you keep open once the install is done.
-- `docs/formats.md` — DAoC client format reference (tables, NIF versions,
-  KFA architecture, MPAK, legacy 4.x block layout, remaining cases).
-- `docs/status.md` — project state, limits and evidence boundaries.
-- `docs/next-steps.md` — documentation audit and server-pack roadmap.
+- `docs/install.md` — installing the suite: the desk and the server.
+- `docs/admin.md` — running a shard: the daily flow, backups, and what each
+  refusal means.
+- `docs/formats.md` — DAoC client format reference.
+- `docs/status.md` — project state, limits, and the evidence behind each claim
+  (a path under `workspace/` names the private repository where it was
+  measured).
 - `AGENTS.md` — repo rules for contributors and agents.
+
+## Contributing
+
+```sh
+.venv/bin/python -m pytest core/tests -q     # corpus tests skip without DAOC_CLIENT
+cd web && pnpm install && pnpm test && pnpm check && pnpm lint
+```
+
+`AGENTS.md` is the rulebook: engine fidelity, a test per feature, the document
+voice, and what may be committed.
 
 ## License
 

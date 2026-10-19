@@ -1,12 +1,23 @@
-# web — figure viewer and character builder
+# web — the Studio's browser app
 
-SvelteKit (Svelte 5, runes) + three.js viewer for the artifacts exported by
-`core`. It can run as a static drop-in viewer for `.gltf`/`.glb` files and, when
-served by `camelot serve`, also provides the client asset library and the
-native fig3 character builder.
+SvelteKit (Svelte 5, runes) + three.js. It runs two ways: as a static drop-in
+viewer for `.gltf`/`.glb` files, and served by `camelot serve`, where it reads
+the daemon's API as well — the client's asset library, the world editor, the
+character builder and Deploy.
 
-Design system: vanilla CSS, adapted from Pictiúr's tokens (dark theme,
+Design system: vanilla CSS adapted from Pictiúr's tokens (dark theme,
 `Space Grotesk`, accent `#2dd4a7`), organised in Svelte components.
+
+## Destinations
+
+| Route | What it is |
+|---|---|
+| `/home` | what the daemon serves, the machine's projects, the ways in |
+| `/world` | the world editor: regions, zones, terrain, fixtures, placements |
+| `/` | Figures: the asset library, the drop zone, the viewer, the inspector |
+| `/builder` | the native fig3 character builder |
+| `/deploy` | the releases the project cut, the dry run against an environment, the feed |
+| `/render` | offscreen renders, for the screenshot harness |
 
 ## Stack
 
@@ -26,110 +37,62 @@ pnpm lint        # prettier --check + eslint
 pnpm format      # prettier --write
 ```
 
-## The launcher's page (`launcher/`)
+## Running it
 
-`launcher/` is a separate build from the Studio's app: the players' page reads
-one feed and starts the game, and shares the design tokens by file
-(`src/app.css`). `cd launcher && pnpm install && pnpm build` writes `dist/`,
-which `camelot launcher` serves. It is not a route of the Studio and never
-ships in `build/`.
+`camelot serve` serves the built app and the API on one loopback origin, which
+is the supported arrangement:
 
-## Verifying in a browser
+```sh
+.venv/bin/camelot serve --no-open     # terminal 1
+pnpm build                            # then reload the page
+```
 
-The app is served from `build/` by `camelot serve`: `pnpm build`, then reload —
-no daemon restart (static files are read per request).
+For front-end work, Vite proxies `/api` to the daemon
+(`CAMELOT_API=http://127.0.0.1:8763 pnpm dev` points it at a scratch one):
 
-Two levels, and they do not replace each other:
+```sh
+.venv/bin/camelot serve --no-open     # terminal 1
+pnpm dev                              # terminal 2 (localhost:5173)
+```
 
-- **The probes are the contract** — `scripts/dock_probe.mjs`,
-  `world_mouse_probe.mjs`, `viewer_probe.mjs`, `builder_probe.mjs`, driven
-  headless with `--use-gl=swiftshader --enable-unsafe-swiftshader` so the
-  canvas renders on a machine with no GPU:
-  `node scripts/dock_probe.mjs http://127.0.0.1:8763 /tmp/camelot-ux`.
-  Versioned and deterministic; a copy pass does not need the gesture probes,
-  but `dock_probe` asserts labels and does.
-- **The Playwright MCP is for reading** — the agent drives a real browser from
-  its own tool list (snapshot, click, console, network) for a question the
-  probes do not assert. Setup, the Chrome-channel pitfall and the WebGL
-  caveat: `../AGENTS.md` § The Playwright MCP.
+The daemon reads `build/` per request, so a rebuild needs no restart.
 
-Either way: port 8762 is the operator's own daemon — read it, never edit
-through it; anything that writes gets a scratch daemon and its own project
-(`--project /tmp/<name>`, port 8763+), which is what the probes do.
-
-## How to use
+## Using it
 
 Export a figure with the core CLI, then drop the artifacts into the viewer:
 
 ```sh
-cd ../.. && .venv/bin/camelot gltf "/path/to/Boar.NIF" --out work/boar
+cd .. && .venv/bin/camelot gltf "/path/to/Boar.NIF" --out work/boar
 ```
 
-Open the viewer and drop `work/boar.gltf` together with `work/boar.bin` (and
-optionally `work/boar.skin.json` for the bone rig). A single `.glb` also works.
+`work/boar.gltf` and `work/boar.bin` together are one drop; `work/boar.skin.json`
+adds the bone rig, and a single `.glb` also works. The left **Library** panel
+does the same from the daemon, with search, a type filter and live refresh over
+SSE.
 
-### Library mode (`camelot serve`)
+## The launcher's page (`launcher/`)
 
-Start the local daemon on your client directory; it serves this viewer _and_
-the API on one origin, so there is no CORS to configure:
-
-```sh
-.venv/bin/camelot serve            # root = $DAOC_CLIENT, opens the browser
-```
-
-The left **Library** panel lists figures (search + type filter, paginated),
-loads a `.glb` from the daemon when you click one, and refreshes live over SSE
-when the client changes. Drag & drop still works when no daemon is running.
-
-For development, run the daemon and Vite side by side — Vite proxies `/api` to
-`http://127.0.0.1:8760` (override with `CAMELOT_API`):
-
-```sh
-.venv/bin/camelot serve --no-open     # terminal 1
-pnpm dev                              # terminal 2 (browser: localhost:5173)
-```
-
-The supported daemon mode is same-origin (`camelot serve` serves the built
-web app) or the Vite development proxy. The daemon intentionally does not
-enable CORS for an arbitrary static-build origin.
-
-## Native builder scope
-
-`/builder` previews the current fig3 player pipeline: race/gender, face, hair
-style/color, eye color, skin tone, cloak and a selected idle. A freshly loaded
-route waits for a race selection before assembling the first model. It exposes
-the 18 playable races; hair styles are positional (`Bald` included) and the
-hair `S/T/M` triplet is served with the `M` decal baked in. Complete
-`pskins`/equipment resolution and explicit animation-state selection are not
-implemented yet. A successful preview is not a complete asset or server-payload
-validation.
+A separate Vite build: the players' page reads one feed and starts the game, and
+shares the design tokens with the Studio by file (`src/app.css`).
+`cd launcher && pnpm install && pnpm build` writes `dist/`, which
+`camelot launcher` serves.
 
 ## Structure
 
 ```text
 src/
-├── app.css                       # design system (tokens, buttons, inputs)
+├── app.css                     # design system (tokens, buttons, inputs)
 ├── lib/
-│   ├── api/client.ts             # typed client for the `camelot serve` API
-│   ├── anim.ts                   # sampled animation tracks and timing
-│   ├── character.ts              # classic/class-NPC mesh classification
-│   ├── gltf/load.ts              # glTF/GLB -> THREE.Scene
-│   ├── skeleton.ts               # structural skeleton reference only
-│   └── components/
-│       ├── Header.svelte
-│       ├── DropZone.svelte       # drag & drop / browse
-│       ├── Library.svelte        # daemon browser: search, filters, SSE
-│       ├── Viewer.svelte         # scene, orbit, wireframe, axes
-│       ├── Sidebar.svelte
-│       ├── CharacterPanel.svelte # classic/class-NPC variant picker
-│       └── Stepper.svelte
-└── routes/
-    ├── +layout.svelte
-    ├── +page.svelte              # library + drop zone
-    └── builder/+page.svelte      # native fig3 appearance preview
+│   ├── api/client.ts           # typed client for the `camelot serve` API
+│   ├── nav.ts home.ts          # the destinations, and Home's own facts
+│   ├── anim.ts appearance.ts races.ts character.ts   # figure data
+│   ├── inspect.ts transport.ts # the inspector's cards, the transport bar
+│   ├── world/                  # terrain, ground, gizmo, carried, journal, viewer
+│   ├── gltf/load.ts            # glTF/GLB -> THREE.Scene
+│   └── components/             # AppBar, Dock, Inspector, Library, Viewer, …
+└── routes/                     # home, world, builder, deploy, render, figures
 ```
 
-The KFA channel table is loaded by `core` from the client's
-`figures/animnode.dat` and contains 175 names. `src/lib/skeleton.ts` is only a
-structural DFS reference for the human skeleton; it is not the canonical KFA
-index table and must not be described as one.
+`AGENTS.md` § Browser verification and § The Playwright MCP cover how a change
+here gets checked: the probes under `scripts/` are the contract, and the MCP
+drives a real browser for what they do not assert.

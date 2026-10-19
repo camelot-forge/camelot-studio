@@ -487,7 +487,7 @@ What the VPS holds outside the containers:
 Two things to get right on a fresh VPS:
 
 - `atlas_api` must be true in the server's `serverproperty` table, or the
-  Console has no read API and no Restart (the page says so instead of guessing);
+  Console has no read API and no Restart (the page names what it could not read);
   `api_password` is what the Console sends. `deploy/server/camelot.sh api` sets
   both, and the API host is started **at boot only** — a
   `/serverproperties refresh` in game does not bring it up, so the server has to

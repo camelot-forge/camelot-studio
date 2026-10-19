@@ -62,11 +62,6 @@ Ettin 5.3e-03). Quadrupeds (wolves) stand on +Z with a horizontal spine along
 ±Y; serpents lie horizontally with +Z still up. `feet_below_pelvis` in
 `core/tests/_bbox.py` locks this in the render-regression tests.
 
-History: an earlier version rule ("4.1.0.12/4.2.1.0 geometry is X-down, use
-`(x,y,z) → (y, −x, z)`") was written while legacy matrices were read
-transposed; once the row-major fix landed it exported Zombie/Ettin/Ogre lying
-down. Removed (commit: "Drop the stale X-up axis rule…").
-
 ## 3. Figures & fig3 architecture
 
 - Figures (humans AND creatures) are **vertex-skinned** (`NiSkinInstance`/
@@ -220,8 +215,7 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
   bones, a root at the origin) break by first-key rotation; `Scene Root` and
   `Bip01 Footsteps` are never targets. Pairs that score < 0.3 (wolf/lynx/giant
   idles authored on another bind) are refused entirely — bind pose beats a
-  wrong pose. The old "shared 0..53 DFS = KFA space" claim is superseded
-  (Boar Pelvis rides channel 1, not 2).
+  wrong pose. Boar's Pelvis rides channel 1.
 - **Grounding: the root translation track is not decoration.** In a vetted
   pair, **all** KFA translations replace the bind locals (absolute, engine-
   faithful; rotations too); scales stay at the bind (never animated). The
@@ -296,9 +290,9 @@ down. Removed (commit: "Drop the stale X-up axis rule…").
 - **KFA rotations come in two storages**: quaternion keys and **type-4
   per-axis Euler float tracks** (`xyz_rotations`). DAoC uses both, sometimes
   within the same clip, and some classic mobs are Euler-only (Beetle, sharks,
-  snakes, ballistas…: 116 KFAs xyz-only, 1578 mixed). The viewer used to drop
-  every Euler channel (Beetle "not animated"); `anims._channel_rotation_keys`
-  now samples the three axis tracks at union key times plus 1/30 s steps
+  snakes, ballistas…: 116 KFAs xyz-only, 1578 mixed).
+  `anims._channel_rotation_keys` samples the three axis tracks at union key times
+  plus 1/30 s steps
   (the engine interpolates per axis and composes; slerping between sparse
   composed quaternions made feet drift), composes a quaternion with
   `kfa.evaluate`, and emits a normal `{times, quats}` track. `native_fps`
