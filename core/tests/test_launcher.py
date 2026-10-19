@@ -59,7 +59,15 @@ def _ready(tmp_path, client, *, server="play.example:10300", feed_url=None):  # 
     feedbuild._link_tree(client, player)
     _plant(player / "connect.exe", b"MZ fake client")
     settings = dict(launcher.DEFAULTS)
-    settings.update({"feed": base_url, "client": str(player), "account": "forge"})
+    settings.update(
+        {
+            "feed": base_url,
+            "client": str(player),
+            "account": "forge",
+            # The tests must not depend on the host's Wine: the CI runner has none.
+            "wine": "/opt/wine-staging/bin/wine",
+        }
+    )
     return settings, player, where, report
 
 

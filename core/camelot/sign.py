@@ -168,19 +168,20 @@ def _sign_refusal(where: Path, result: subprocess.CompletedProcess) -> str:
     """What `ssh-keygen` said, said again so an operator can act on it.
 
     One failure is worth translating. A key protected by a passphrase, with no
-    terminal to prompt on and no `ssh-askpass` installed, answers
-    `ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory` — which
-    names a program nobody has heard of, and not the key that was protected. The
-    raw line is dropped rather than quoted: once the message says what happened,
-    echoing it only buries the three ways out.
+    terminal to prompt on and no `ssh-askpass` installed, answers either
+    `ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory` or
+    `incorrect passphrase supplied to decrypt private key` — OpenSSH versions
+    differ, and both name nothing the operator can act on. The raw line is
+    dropped rather than quoted: once the message says what happened, echoing it
+    only buries the three ways out.
     """
     text = (result.stderr or result.stdout).decode("utf-8", "replace")
     detail = _lines(result)
     said = detail[0] if detail else f"exited {result.returncode}"
-    if "askpass" in text:
+    if "askpass" in text or "incorrect passphrase" in text:
         return (
-            f"{where}: this key is protected by a passphrase and ssh-keygen had nowhere "
-            f"to ask for it. Publish from a terminal, load the key into an agent "
+            f"{where}: this key is protected by a passphrase, and ssh-keygen could not "
+            f"read it. Publish from a terminal, load the key into an agent "
             f"(`ssh-add {where}`), or use a key without a passphrase"
         )
     if "passphrase" in text:
