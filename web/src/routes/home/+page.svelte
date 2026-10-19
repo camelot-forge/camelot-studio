@@ -17,10 +17,12 @@
 		type HomeDoor,
 		type HomeHealth,
 		type HomePayload,
+		type HomeRebase,
 		type HomeRecent
 	} from '$lib/api/client';
 	import AppBar from '$lib/components/AppBar.svelte';
 	import ProjectModal from '$lib/components/ProjectModal.svelte';
+	import RebasePanel from '$lib/components/RebasePanel.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import { healthLabel, leftNotice, publishLabel, since } from '$lib/home';
 
@@ -31,6 +33,8 @@
 	let opener = $state('');
 	/** The door's modal, when one is open. */
 	let door = $state<'new' | 'import' | 'clone' | null>(null);
+	/** The re-base panel's row, when one is open (`project.md` §D17). */
+	let rebasing = $state<{ path: string; name: string } | null>(null);
 	let cloneUrl = $state('');
 	let busy = $state(false);
 	/** Per row, filled one at a time: the page paints first, the health
@@ -108,6 +112,22 @@
 		show(answer);
 		await load();
 		if (openIt && answer.opened) await goto(resolve('/world'));
+	}
+
+	/** The re-base panel closed: say which decision ran, and read the row back
+	 * (the health chip has to stop saying what it said before). */
+	async function rebaseDone(found: HomeRebase | null) {
+		rebasing = null;
+		if (!found) return;
+		notice = {
+			tone: found.conflicts > 0 ? 'warn' : 'info',
+			text:
+				found.decision === 'keep-ours'
+					? `kept ours: ${found.written} resource(s) pinned — every deploy will say so`
+					: `adopted theirs: ${found.written} resource(s) moved, ` +
+						`${found.conflicts} op(s) no longer fit the base`
+		};
+		await load();
 	}
 
 	onMount(load);
@@ -225,6 +245,16 @@
 										<span class="dot"></span>{found.text}
 									</span>
 									<span class="chip" class:warn={pending > 0}>{publishLabel(pending)}</span>
+									{#if found.tone === 'warn' && health[row.path]?.state !== 'no-client'}
+										<button
+											class="chip action"
+											type="button"
+											title="the client moved under this project — see what it touches"
+											onclick={() => (rebasing = { path: row.path, name: row.name })}
+										>
+											re-base…
+										</button>
+									{/if}
 								{/if}
 							</div>
 							<span class="when" title={row.opened}>{since(row.opened)}</span>
@@ -263,6 +293,15 @@
 			cloneUrl = '';
 		}}
 		ondone={done}
+	/>
+{/if}
+
+{#if rebasing}
+	<RebasePanel
+		path={rebasing.path}
+		name={rebasing.name}
+		onclose={() => (rebasing = null)}
+		ondone={rebaseDone}
 	/>
 {/if}
 
@@ -485,6 +524,15 @@
 	}
 	.chip.warn .dot {
 		background: var(--warn);
+	}
+	/* The re-base door (`project.md` §D17): the same chip, and it is a button. */
+	.chip.action {
+		cursor: pointer;
+		color: var(--text-3);
+	}
+	.chip.action:hover {
+		border-color: var(--border-hover);
+		color: var(--text);
 	}
 	.when {
 		font-size: var(--fs-small);

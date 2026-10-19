@@ -502,17 +502,47 @@ class HomePayload(BaseModel):
 
 class HomeHealth(BaseModel):
     """One project's `verify` (`home.md` §D2): `ok`, `changed`, `missing`,
-    `no-client`, or `not-a-project` with the refusal's own words — plus the
-    work waiting, so a row can say both things in one answer."""
+    `pinned`, `no-client`, or `not-a-project` with the refusal's own words —
+    plus the work waiting, so a row can say both things in one answer."""
 
     path: str
     name: str = ""
     state: str
     detail: str = ""
     findings: list[dict[str, Any]] = []
+    #: How many of the findings the operator chose to keep ours (P8,
+    #: `project.md` §D17) — a row says `pinned` without hiding the rest.
+    pinned: int = 0
     #: `{"fixtures": n, "rows": m}` — the same count the chip shows, read from
     #: the project (`home.md` §D1). Empty when the project cannot be read.
     pending: dict[str, int] = {}
+
+
+class HomeRebase(BaseModel):
+    """One project's re-base (`project.md` §D17): what moved, and the journal
+    against the base as it stands. `decision` is what was written — empty for
+    a read, which writes nothing at all."""
+
+    path: str
+    name: str = ""
+    client: str = ""
+    clean: bool = False
+    resources: list[dict[str, Any]] = []
+    journal: list[dict[str, Any]] = []
+    moved: int = 0
+    missing: int = 0
+    pinned: int = 0
+    conflicts: int = 0
+    decision: str = ""
+    written: int = 0
+
+
+class HomeRebaseBody(BaseModel):
+    """`keep-ours` or `adopt` (`project.md` §D17) — the two decisions, and
+    nothing else. An empty decision is a read."""
+
+    path: str
+    decision: str = ""
 
 
 class HomeClient(BaseModel):

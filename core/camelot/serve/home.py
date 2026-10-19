@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException
 from .. import __version__, recent
 from .. import journal as journal_mod
 from .. import project as project_mod
+from .. import rebase as rebase_mod
 from .api import build_id
 from .config import ServeConfig
 from .editor import Editor
@@ -40,6 +41,8 @@ from .models import (
     HomeNewBody,
     HomeOpenBody,
     HomePayload,
+    HomeRebase,
+    HomeRebaseBody,
     HomeRecent,
 )
 from .session import Session
@@ -223,6 +226,57 @@ def _write_machine(root: Path, client: Path) -> None:
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _rebase_of(path: str, decision: str = "") -> HomeRebase:
+    """One project's re-base view, and — with a decision — the write it makes.
+
+    The client is resolved the way every other read resolves it
+    (`machine.json`, then `$DAOC_CLIENT`), never the daemon's own root: a
+    re-base is about the project's base, not about what this daemon serves.
+    """
+    folder = Path(path).expanduser()
+    if not folder.is_dir():
+        raise HTTPException(status_code=400, detail=f"{folder}: no such directory")
+    try:
+        project = project_mod.load(folder)
+    except project_mod.ProjectError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    client = project_mod.client_root(project)
+    if client is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{project.name}: no client resolved — write {project_mod.MACHINE_FILE}, "
+                "set $DAOC_CLIENT, or open it with --client"
+            ),
+        )
+    written = 0
+    try:
+        if decision == "keep-ours":
+            view = rebase_mod.keep_ours(project, client=client)
+            written = int(view.get("pinned_now") or 0)
+        elif decision == "adopt":
+            view = rebase_mod.adopt(project, client=client)
+            written = int(view.get("adopted") or 0)
+        else:
+            view = rebase_mod.analysis(project, client=client)
+    except (rebase_mod.RebaseError, project_mod.ProjectError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return HomeRebase(
+        path=str(project.root),
+        name=view["name"],
+        client=view["client"],
+        clean=view["clean"],
+        resources=view["resources"],
+        journal=view["journal"],
+        moved=view["moved"],
+        missing=view["missing"],
+        pinned=view["pinned"],
+        conflicts=view["conflicts"],
+        decision=decision,
+        written=written,
+    )
+
+
 def build_home_router(config: ServeConfig, world, session: Session) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
 
@@ -297,8 +351,12 @@ def build_home_router(config: ServeConfig, world, session: Session) -> APIRouter
             )
         findings = project_mod.verify(project, client)
         changed = [finding for finding in findings if finding["state"] != "ok"]
+        pinned = sum(1 for finding in changed if finding["state"] == "pinned")
         if not changed:
             state, detail = "ok", f"{len(findings)} resources unchanged"
+        elif pinned == len(changed):
+            state = "pinned"
+            detail = f"{pinned} resource(s) moved, kept ours"
         else:
             missing = any(finding["state"] == "missing" for finding in changed)
             state = "missing" if missing else "changed"
@@ -309,8 +367,26 @@ def build_home_router(config: ServeConfig, world, session: Session) -> APIRouter
             state=state,
             detail=detail,
             findings=changed[:50],
+            pinned=pinned,
             pending=pending,
         )
+
+    @router.get("/home/rebase", response_model=HomeRebase)
+    def home_rebase(path: str) -> HomeRebase:
+        """D17's view: what moved, and the journal against the base as it
+        stands. Read-only — the decision is the POST below."""
+        return _rebase_of(path)
+
+    @router.post("/home/rebase", response_model=HomeRebase)
+    def home_rebase_decide(body: HomeRebaseBody) -> HomeRebase:
+        """The two decisions, and nothing else: `keep-ours` pins the recorded
+        fingerprints, `adopt` moves them to what the client holds now. Both
+        answer with the view they were decided on."""
+        if body.decision not in ("keep-ours", "adopt"):
+            raise HTTPException(
+                status_code=400, detail="decision must be keep-ours or adopt"
+            )
+        return _rebase_of(body.path, decision=body.decision)
 
     @router.get("/home/client", response_model=HomeClient)
     def home_client(path: str) -> HomeClient:

@@ -279,11 +279,54 @@ export interface DeployPage {
 export interface HomeHealth {
 	path: string;
 	name: string;
-	state: 'ok' | 'changed' | 'missing' | 'no-client' | string;
+	state: 'ok' | 'changed' | 'missing' | 'pinned' | 'no-client' | string;
 	detail: string;
 	findings: Array<Record<string, unknown>>;
+	/** How many of the findings the operator chose to keep ours (P8). */
+	pinned: number;
 	/** `{fixtures, rows}` — the work waiting, read from the project (`home.md` §D1). */
 	pending: Record<string, number>;
+}
+
+/** One resource the base moved, and the ops that write it (`project.md` §D17). */
+export interface HomeRebaseResource {
+	resource: string;
+	state: 'moved' | 'missing' | 'pinned' | string;
+	ours: string;
+	theirs: string | null;
+	detail: string;
+}
+
+export interface HomeRebaseOp {
+	key: string;
+	where: string;
+	row: number | string | null;
+	verdict: 'holds' | 'shows' | 'conflict' | string;
+	detail: string;
+}
+
+export interface HomeRebaseEntry {
+	resource: string;
+	ops: HomeRebaseOp[];
+	conflicts: number;
+	unwalked: number;
+	note: string;
+}
+
+/** The re-base view, and — after a POST — the decision it wrote. */
+export interface HomeRebase {
+	path: string;
+	name: string;
+	client: string;
+	clean: boolean;
+	resources: HomeRebaseResource[];
+	journal: HomeRebaseEntry[];
+	moved: number;
+	missing: number;
+	pinned: number;
+	conflicts: number;
+	decision: '' | 'keep-ours' | 'adopt' | string;
+	written: number;
 }
 
 export interface HomeBrowse {
@@ -837,6 +880,14 @@ export const api = {
 	home: (signal?: AbortSignal) => get<HomePayload>('/home', signal),
 	homeHealth: (path: string, signal?: AbortSignal) =>
 		getDetailed<HomeHealth>(`/home/health?path=${encodeURIComponent(path)}`, signal),
+	/** P8's view: what moved, and the journal against the base as it stands.
+	 * Read-only — the decision is `homeRebaseDecide`. */
+	homeRebase: (path: string, signal?: AbortSignal) =>
+		getDetailed<HomeRebase>(`/home/rebase?path=${encodeURIComponent(path)}`, signal),
+	/** The two decisions (`project.md` §D17): `keep-ours` pins the recorded
+	 * fingerprints, `adopt` moves them to what the client holds now. */
+	homeRebaseDecide: (path: string, decision: 'keep-ours' | 'adopt') =>
+		send<HomeRebase>('POST', '/home/rebase', { path, decision }),
 	homeBrowse: (path: string, signal?: AbortSignal) =>
 		getDetailed<HomeBrowse>(`/home/browse?path=${encodeURIComponent(path)}`, signal),
 	/** The create modal's own check, before anything is written. */

@@ -20,6 +20,8 @@ export function healthLabel(found: HomeHealth | undefined): HealthLabel | null {
 			return { text: found.detail || 'client changed', tone: 'warn' };
 		case 'missing':
 			return { text: 'client missing', tone: 'warn' };
+		case 'pinned':
+			return { text: found.detail || 'client pinned', tone: 'warn' };
 		case 'no-client':
 			return { text: 'no client resolved', tone: 'warn' };
 		default:

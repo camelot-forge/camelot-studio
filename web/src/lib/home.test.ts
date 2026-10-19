@@ -8,6 +8,7 @@ const found = (state: string, detail = ''): HomeHealth => ({
 	state,
 	detail,
 	findings: [],
+	pinned: 0,
 	pending: {}
 });
 
@@ -26,6 +27,12 @@ describe('healthLabel', () => {
 		const label = healthLabel(found('changed', '2 of 565 resources no longer match'));
 		expect(label?.tone).toBe('warn');
 		expect(label?.text).toBe('2 of 565 resources no longer match');
+	});
+
+	it('says a pinned base is a decision, not a problem (P8)', () => {
+		const label = healthLabel(found('pinned', '1 resource(s) moved, kept ours'));
+		expect(label?.text).toBe('1 resource(s) moved, kept ours');
+		expect(label?.tone).toBe('warn');
 	});
 });
 

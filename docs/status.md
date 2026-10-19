@@ -486,10 +486,11 @@ live client plays for the male Troll player is still to confirm
 
 ## Next steps (priority order)
 
-1. **P8 — the re-base**: the banner, the per-file view, keep-ours/adopt-theirs,
-   and the ops that no longer match a base that moved. A real client update is
-   absorbed without a silent overwrite. The design is the private workspace's
-   `notes/`.
+1. **P8 — the re-base**: the per-file view, `keep ours` and `adopt theirs`, and
+   the ops that no longer match a base that moved — in the CLI (`camelot project
+   rebase`), the daemon (`/home/rebase`) and Home's panel. What remains is the
+   browser pass on that panel and the blog entry; the design is
+   `notes/project.md` §D16-§D18.
 2. **The delivery chain's own limits**: the loader's used-id export, the
    `objects` cap-5000 recipe, and the ids above 32767 (the signed 16-bit wire)
    are the next measurements.

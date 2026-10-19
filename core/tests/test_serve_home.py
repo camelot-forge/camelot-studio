@@ -158,6 +158,51 @@ def test_health_refuses_what_is_not_a_project_by_name(world, machine):  # noqa: 
     assert "not a project" in response.json()["detail"]
 
 
+def test_rebase_reads_the_base_and_the_two_decisions_write_it(base, machine, tmp_path):  # noqa: F811
+    """P8: the view is read-only, `keep-ours` pins, and the row says so after."""
+    project = pj.new(tmp_path / "camelot-hills", client=base)
+    (project.root / pj.MACHINE_FILE).write_text(json.dumps({"client": str(base)}), encoding="utf-8")
+    client = home_client(base, config_dir=machine)
+
+    clean = client.get("/api/v1/home/rebase", params={"path": str(project.root)}).json()
+    assert clean["clean"] is True and clean["decision"] == ""
+
+    (base / "gamedata.mpk").write_bytes(b"moved under us")
+    view = client.get("/api/v1/home/rebase", params={"path": str(project.root)}).json()
+    assert view["clean"] is False and view["moved"] == 1
+    assert [item["resource"] for item in view["resources"]] == ["gamedata.mpk"]
+    assert view["journal"] == []  # nothing in the journal wrote it
+
+    kept = client.post(
+        "/api/v1/home/rebase", json={"path": str(project.root), "decision": "keep-ours"}
+    ).json()
+    assert kept["decision"] == "keep-ours" and kept["written"] == 1
+
+    found = client.get("/api/v1/home/health", params={"path": str(project.root)}).json()
+    assert found["state"] == "pinned" and found["pinned"] == 1
+    assert "kept ours" in found["detail"]
+
+
+def test_rebase_adopts_and_refuses_a_decision_it_does_not_know(base, machine, tmp_path):  # noqa: F811
+    project = pj.new(tmp_path / "camelot-hills", client=base)
+    (project.root / pj.MACHINE_FILE).write_text(json.dumps({"client": str(base)}), encoding="utf-8")
+    client = home_client(base, config_dir=machine)
+    (base / "gamedata.mpk").write_bytes(b"moved under us")
+
+    refused = client.post(
+        "/api/v1/home/rebase", json={"path": str(project.root), "decision": "maybe"}
+    )
+    assert refused.status_code == 400
+    assert "keep-ours" in refused.json()["detail"]
+
+    adopted = client.post(
+        "/api/v1/home/rebase", json={"path": str(project.root), "decision": "adopt"}
+    ).json()
+    assert adopted["written"] == 1
+    health = client.get("/api/v1/home/health", params={"path": str(project.root)}).json()
+    assert health["state"] == "ok" and health["pinned"] == 0
+
+
 def test_browse_lists_folders_and_flags_the_projects(world, machine, tmp_path):  # noqa: F811
     """The daemon is local, so a path field needs no native picker: it lists
     the folders, flags the ones that are projects, and hides the dotfolders."""
