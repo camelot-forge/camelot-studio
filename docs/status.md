@@ -491,10 +491,10 @@ live client plays for the male Troll player is still to confirm
    are the next measurements.
 2. **The NIF writer** is the gate on content that brings new geometry: a model
    the client has never read still waits on it. It runs parallel to the rest.
-3. **The players' Windows package**: build it on Windows and run the swap
-   there. The launcher's self-update is implemented and walked on Linux
-   (2026-10-19: a packaged v3 replaced itself with v4 on the same port); the
-   Authenticode signature waits for the repository to become public.
+3. **The players' Windows package**: the swap was walked on a Windows 11 VM
+   on 2026-10-19 — a v1 package replaced itself with v2 from a local HTTP
+   server, the old folder was removed, and no console opened. The Authenticode
+   signature waits for the repository to become public.
 4. **Blender integration** (M2, `addon/`): a UI shell over the CLI — figures,
    fig3 parts, items and `.kfa` animations imported and exported from Blender.
 

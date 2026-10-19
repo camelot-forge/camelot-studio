@@ -83,3 +83,5 @@ remembered in the player's config (`~/.config/camelot-launcher/settings.json`
 on Linux); the password is never stored. `--no-open` is for a test harness.
 
 On Linux the game runs under Wine; on Windows, `connect.exe` runs directly.
+The Windows build is windowed: the page is the only window the player sees, and
+the swap script runs hidden.
