@@ -5,6 +5,9 @@ is, and what each refusal means. It is written for the person who runs **one**
 OpenDAoC server and its client — the admin of a shard — and not for a
 contributor (that is `AGENTS.md`, `docs/formats.md`, `docs/status.md`).
 
+`docs/install.md` is the way in. This document is what you keep open once it is
+done.
+
 The worked example is the workshop's own walk of 2026-10-18: a keep moved in
 the world editor, released, published, pulled on a second server, and installed
 by a player's launcher. Every path and number below is from that walk.

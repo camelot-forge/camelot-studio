@@ -8,6 +8,9 @@
   decisions, known limits, environment gotchas, next steps, cheat sheet.
 - **`next-steps.md`** — documentation/code truth audit and roadmap toward a
   reproducible DAoC server content pack.
+- **`install.md`** — installing the suite: the desk and the server, from two
+  empty machines to a shard whose players update themselves. The way in, and
+  the document to read before `admin.md`.
 - **`admin.md`** — the operator's runbook: the desk, the server, the daily flow
   from an edit to a player's update, a new VPS, backups, and what each refusal
   means. Different audience from the three above: it describes what to *run*,

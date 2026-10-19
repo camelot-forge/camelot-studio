@@ -212,9 +212,12 @@ your usual tool (Syncthing, NAS, external drive).
 
 ## Documentation
 
+- `docs/install.md` — **installing the suite**: the desk and the server, from two
+  empty machines to a shard whose players update themselves. Start here if you
+  are setting it up for the first time.
 - `docs/admin.md` — **running a shard**: the desk, the server, the daily flow
-  from an edit to a player's update, a new VPS, backups, refusals. Start here
-  if you are the operator, not a contributor.
+  from an edit to a player's update, a new VPS, backups, refusals. The runbook
+  you keep open once the install is done.
 - `docs/formats.md` — DAoC client format reference (tables, NIF versions,
   KFA architecture, MPAK, legacy 4.x block layout, remaining cases).
 - `docs/status.md` — project state, limits and evidence boundaries.

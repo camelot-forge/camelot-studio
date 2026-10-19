@@ -33,7 +33,8 @@ flowchart LR
 
 The Console is the only one of ours that faces the network; the database is the
 only one that does not face the machine's own network. `notes/remote.md`
-§D10 is the rule, and `docs/admin.md` is the runbook around it.
+§D10 is the rule, and `docs/admin.md` is the runbook around it. `docs/install.md`
+walks the whole install, desk and server.
 
 ## Local
 
