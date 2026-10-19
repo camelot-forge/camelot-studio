@@ -302,11 +302,17 @@ def handed_over(env_root) -> list[int]:
 
 
 def applied_releases(env_root) -> list[int]:
-    """The releases this environment carries a written record for, in order."""
-    root = folder(env_root) / APPLIED
-    if not root.is_dir():
-        return []
-    return sorted(int(path.parent.name) for path in root.glob("*/applied.json"))
+    """The releases this environment's state records, in order.
+
+    Read from the state, never from which `applied/NNNN/` folders happen to be on
+    disk: "applied" is a recorded fact (§D8), and the folder answers a different
+    question than the one every caller is asking. The C# Installer writes an
+    evidence document for a release it **refused** too (§D10), and a reversal
+    leaves the evidence of the release it undid — both are on disk, neither is
+    applied.
+    """
+    state = read_state(env_root)
+    return sorted(int(name) for name in (state.get("releases") or {}))
 
 
 def reversed_releases(env_root) -> list[int]:

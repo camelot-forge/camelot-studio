@@ -2,8 +2,10 @@
 # server, and the only container that opens the environment's database.
 #
 # It runs the same `camelot` CLI the desk runs — `env provision`, `env status`,
-# `env apply`, `env verify` — so the Console's calls do not change the day the
-# C# Installer takes over (S §D10).
+# `env apply`, `env verify`. It is one of the two ways to run the Installer on a
+# server; the other is the C# plugin (`server-bridge/camelot-installer/`), which
+# writes the same documents, so the Console's calls do not change between them
+# (S §D10). This job is the one that also provisions a fresh machine.
 FROM python:3.13-slim
 
 WORKDIR /app

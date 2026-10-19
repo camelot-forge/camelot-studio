@@ -7,7 +7,7 @@ the database, OpenDAoC, and the job that applies a release.
 |---|---|
 | `db` | MariaDB 10.6, the environment's own database. Publishes on **loopback only** (`127.0.0.1:3307`). |
 | `core` | OpenDAoC, pinned by digest. Host network: the game's ports are the host's, and its API binds `127.0.0.1:5000` where the Console reads it. |
-| `camelot-core` | A one-shot job running the `camelot` CLI — the Installer's step until the C# Installer exists (S §D10). It is the only container that opens the database. |
+| `camelot-core` | A one-shot job running the `camelot` CLI — one of the two ways to run the Installer on a server (S §D10). It is the only container that opens the database. |
 
 The feed service and the Console are their own directories; `deploy/compose.yaml`
 includes all four, and this file runs alone for a server that wants only these.
@@ -85,8 +85,10 @@ The job mounts the checkout read-write (a pull is the Console's, but a fallback
 should not need a different container), the environment folder read-write — the
 only place anything of ours writes — and the baseline read-only.
 
-The apply itself is the same code the desk runs (`camelot env apply`), so the day
-the C# Installer takes over, nothing else changes.
+The apply itself is the same code the desk runs (`camelot env apply`), and the
+same documents the C# plugin writes: `server-bridge/camelot-installer/` does the
+same job at boot, with no container and no command to remember. Install either
+one; the Console cannot tell them apart.
 
 ## Moving the emulator
 

@@ -1,7 +1,9 @@
 # The server stack (`remote.md` §D5, §D10): the database, OpenDAoC, and the
-# `camelot-core` job that is the Installer's step until the C# Installer exists
-# (S §D10). The feed and the Console are their own files; `deploy/compose.yaml`
-# includes all four, and this file runs alone for a server that wants only these.
+# `camelot-core` job that runs the Installer's step (S §D10). The feed and the
+# Console are their own files; `deploy/compose.yaml` includes all four, and this
+# file runs alone for a server that wants only these. The other way to run the
+# Installer is the C# plugin (`server-bridge/camelot-installer/`), which needs no
+# container: this job is the one that also provisions a fresh machine.
 #
 # Networking: every service but the database joins the host's network. OpenDAoC's
 # API binds `127.0.0.1:5000` and the Console reads it there, so the two must share

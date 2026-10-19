@@ -966,6 +966,49 @@ def test_a_stale_ask_is_skipped_and_cleared(tmp_path, client):
     assert installer.read_reverse_ask(env_root) == {}
 
 
+def test_the_evidence_folder_is_not_the_applied_set(tmp_path, client):
+    """`applied/NNNN/` is what an *attempt* left behind, not the set of releases
+    this environment holds. The C# Installer writes one for a release it refused
+    (§D10), and a reversal leaves the evidence of the release it undid. What the
+    state records is the answer — which is what `released` already says (§D8)."""
+    project, env_root, server = _applied(
+        tmp_path,
+        client,
+        rows={("door", "d1"): {"Door_ID": "d1", "X": "32768", "Y": "32768"}},
+        patch=[{"table": "door", "key": "d1", "values": {"X": "30000"}}],
+    )
+    # a release the Installer refused at boot: the evidence is there, the state is not
+    installer.write_applied(
+        env_root,
+        8,
+        {
+            "format": installer.APPLIED_FORMAT,
+            "release": 8,
+            "at": "2026-10-19T07:50:30Z",
+            "rows": [
+                {
+                    "table": "character",
+                    "key": "x",
+                    "action": "refused",
+                    "why": "this project does not own that table",
+                }
+            ],
+            "written": 0,
+            "removed": 0,
+            "skipped": 0,
+            "refused": 1,
+        },
+    )
+    assert installer.applied_releases(env_root) == [7]
+    assert envs.describe(project, "local")["installer"]["applied"] == [7]
+
+    installer.reverse(env_root, connect=server.connect, project=project.name, number=7)
+
+    # the reversal left `applied/0007/` in place: the release is not applied either
+    assert installer.applied_path(env_root, 7).is_file()
+    assert installer.applied_releases(env_root) == []
+
+
 def test_the_direct_verb_takes_the_ask_down_with_it(tmp_path, client):
     """`camelot env reverse` and the Console's ask are the same intention: whichever
     runs first leaves the other nothing to do."""

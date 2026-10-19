@@ -29,13 +29,23 @@ agent, read this, then `AGENTS.md` for repo rules.
 
 The server side also ships as containers: `deploy/compose.yaml` is one entry
 point that `include`s the three parts, and each part runs alone — `server/`
-(MariaDB 10.6, OpenDAoC **pinned by digest**, and the `camelot-core` job that is
-the Installer's step), `feed/` (`feedserve`), `console/`. The job runs the same
-`camelot` CLI the desk runs, so importing `camelot.cli` pulls neither `pyffi`
-nor `fastapi` (a server writes rows: it has no client to parse and no page to
-serve — `test_the_server_needs_no_client_reader_and_no_daemon`).
+(MariaDB 10.6, OpenDAoC **pinned by digest**, and the `camelot-core` job that
+runs the Installer's step), `feed/` (`feedserve`), `console/`. The job runs the
+same `camelot` CLI the desk runs, so importing `camelot.cli` pulls neither
+`pyffi` nor `fastapi` (a server writes rows: it has no client to parse and no
+page to serve — `test_the_server_needs_no_client_reader_and_no_daemon`).
 `deploy/README.md` maps the containers; `docs/admin.md` is the operator's
 runbook.
+
+The Installer also exists as a **C# plugin**
+(`server-bridge/camelot-installer/`): copied once into the server's script
+folder, compiled at boot, run through `IDatabaseUpdater` like the mod host was.
+It honours the Console's ask, applies what the folder holds oldest first, writes
+the same `state.json`, `applied/` and `reversed/` the desk's CLI writes, and
+never lets a failure reach `UpdateDatabase()` — a thrown exception there is a
+server that will not start (S §D10). Both ways of running it produce one folder
+and one state; the Console cannot tell them apart. Its README says what it does
+not do (no reload, no restart, no ids allocated).
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
 client NIFs parsed (the two remaining are 10.1.0.0 housing files failing
@@ -893,10 +903,10 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"        # optional but recommended
 # files, 72 MB, ~15 s on the operator's machine), then starts the Installer's
 # record over; the environment never gets the database the authoring server
 # edits. `deploy` hands the release over, `apply` writes its rows from here
-# (what the server's own Installer will do), `reload` records the in-game
-# ritual the release named, `verify` reads it all back. This machine's answers
-# (the folder, the database, the baseline, the connection) live in the untracked
-# machine.json.
+# (what the C# Installer does at boot on a real server), `reload` records the
+# in-game ritual the release named, `verify` reads it all back. This machine's
+# answers (the folder, the database, the baseline, the connection) live in the
+# untracked machine.json.
 .venv/bin/camelot env provision local --yes --dir camelot-hills
 .venv/bin/camelot env status local --dir camelot-hills
 .venv/bin/camelot project deploy 1 --env local --dir camelot-hills

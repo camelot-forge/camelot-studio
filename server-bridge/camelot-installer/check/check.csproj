@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>CamelotInstallerCheck</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0618;CS8632</NoWarn>
+    <WarningLevel>2</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../InstallerContract.cs" />
+    <Compile Include="../InstallerRows.cs" />
+    <Compile Include="../CamelotInstaller.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="GameServer"><HintPath>$(DaocServerRelease)/GameServer.dll</HintPath></Reference>
+    <Reference Include="CoreBase"><HintPath>$(DaocServerRelease)/CoreBase.dll</HintPath></Reference>
+    <Reference Include="CoreDatabase"><HintPath>$(DaocServerRelease)/CoreDatabase.dll</HintPath></Reference>
+    <Reference Include="CoreServer"><HintPath>$(DaocServerRelease)/CoreServer.dll</HintPath></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>$(DaocServerRelease)/Newtonsoft.Json.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

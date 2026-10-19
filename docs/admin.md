@@ -17,7 +17,7 @@ by a player's launcher. Every path and number below is from that walk.
 | **Deploy** | the desk | cuts releases and hands them to an environment (`camelot project release`, `project deploy`, `project promote`) |
 | **Feed** | built on the desk, served on the server | what the players' launcher reads (`camelot project feed`, then `feedserve`) |
 | **Console** | the server | the running server's face: what is applied, what is wanted, Pull, Restart (`camelot console`) |
-| **Installer** | the server | the only writer of the server's own rows (`camelot env apply`, the C# Installer later) |
+| **Installer** | the server | the only writer of the server's own rows (`camelot env apply`, or the C# plugin at boot) |
 
 One more piece, which is not an admin surface: the **players' launcher** is a
 package you hand out (§7). The player never types a URL.
@@ -117,14 +117,42 @@ ours:
 │   └── camelot/          OURS — the Installer's folder, and the only thing we write
 │       ├── state.json            what each release wrote, and the values it replaced
 │       ├── releases/NNNN/        what Deploy (or the Console's Pull) handed over
-│       ├── applied/NNNN/applied.json   one line per row: written / skipped / removed
+│       ├── applied/NNNN/applied.json    one line per row: written / skipped / removed
+│       ├── reversed/NNNN/reversed.json  the same, for a reversal
 │       ├── wanted.json           the Console's ask: "apply release N"
+│       ├── reverse.json          the Console's ask: "put release N back"
 │       └── console/audit.jsonl   one line per Console action, refused or not
 └── client/               only on a desk; a server-only environment has none
 ```
 
 `state.json` is the single truth every other surface reads. Nothing else on the
 server keeps a copy of "what is applied" — not the Console, not the feed.
+
+### Who writes the rows
+
+Two ways to run the Installer on a server. The choice changes nothing else: the
+folder, the documents and the Console's calls are the same either way.
+
+- **the `camelot-core` job** (`deploy/server/`): the desk's own `camelot env
+  apply`, in a container, run by hand or by `camelot.sh`. It provisions and
+  verifies too, which is why it stays on a fresh machine;
+- **the C# plugin** (`server-bridge/camelot-installer/`): copied once into the
+  server's script folder, compiled by the server at boot, run by it. Nothing has
+  to be asked to apply a release, and a release that fails is recorded instead of
+  stopping the boot.
+
+The plugin is a manual step, once: the server compiles its scripts *before* any
+hook runs, so a release cannot carry it.
+
+```sh
+cp -r server-bridge/camelot-installer /srv/forge/env/server/scripts/
+# and add Newtonsoft.Json to <ScriptAssemblies> in config/serverconfig.xml
+systemctl restart camelot-server
+```
+
+It reads `<server>/camelot/` by default; the server property
+`installer_directory` moves it. On the container stack the same thing is a
+read-only volume into `core` plus `SCRIPT_ASSEMBLIES: Newtonsoft.Json`.
 
 Around that folder, a server also has:
 
@@ -490,6 +518,9 @@ already there.
 | `deploy/log.jsonl` | one line per release, deploy, apply, reload, publish | yes |
 | `<env>/server/camelot/state.json` | what the environment applied | on the server |
 | `<env>/server/camelot/applied/NNNN/applied.json` | row-by-row evidence | on the server |
+| `<env>/server/camelot/reversed/NNNN/reversed.json` | row-by-row evidence of a reversal | on the server |
 | `<env>/server/camelot/wanted.json` | the Console's ask | on the server |
+| `<env>/server/camelot/reverse.json` | the Console's ask for the other direction | on the server |
+| `<env>/server/scripts/camelot-installer/` | the C# Installer, copied in once | on the server |
 | `<env>/server/camelot/console/audit.jsonl` | every Console action | on the server |
 | `~/.config/camelot-launcher/settings.json` | a player's client folder, account, installed version | on the player's machine |
