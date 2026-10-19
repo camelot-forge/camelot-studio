@@ -730,8 +730,9 @@ def cmd_project(args) -> int:
             f"recorded {len(found)} resource(s) from {len(zones)} zone(s) "
             f"and {len(tables)} table(s): {len(updated.fingerprints)} in the project"
         )
-        for prefix, count in sorted(groups.items()):
-            print(f"  {prefix}: {count} entr{'y' if count == 1 else 'ies'}")
+        if not args.quiet:
+            for prefix, count in sorted(groups.items()):
+                print(f"  {prefix}: {count} entr{'y' if count == 1 else 'ies'}")
         if adopted:
             print(f"adopted (the base had moved): {', '.join(adopted)}")
         return 0
@@ -2101,6 +2102,11 @@ def main(argv=None) -> int:
     pop.add_argument("--dir", default=".", help="the project's directory (default: .)")
     pop.add_argument("--client", help="the client to read (default: this machine's own answers)")
     pop.add_argument("--zones", default="", help="zone ids to record, comma-separated (e.g. 0,12)")
+    pop.add_argument(
+        "--quiet",
+        action="store_true",
+        help="the total only, not one line per archive (what --all-zones needs)",
+    )
     pop.add_argument(
         "--all-zones",
         action="store_true",

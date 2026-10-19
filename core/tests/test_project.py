@@ -546,3 +546,16 @@ def test_cli_populate_and_import_round_trip(tmp_path, base, capsys, monkeypatch)
     assert "zones/zone000/dat000.mpk: 1 entry" in shown and "zones/zone008/csv008.mpk" in shown
     assert main(["project", "verify", "--dir", str(session), "--client", str(base)]) == 0
     assert "7 resource(s): 7 ok" in capsys.readouterr().out
+
+
+def test_populate_quiet_prints_the_total_and_not_one_line_per_archive(project, base, capsys):
+    """`--all-zones` on a real client is 400 lines; the total is what a script reads."""
+    code = main(
+        ["project", "populate", "--client", str(base), "--zones", "0", "--quiet",
+         "--dir", str(project.root)]
+    )
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "recorded" in out and "in the project" in out
+    assert "entry" not in out
