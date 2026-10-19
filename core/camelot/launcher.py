@@ -16,13 +16,16 @@ player's machine has no business with any of those.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import threading
+import zipfile
 from pathlib import Path
 
 from . import feed
@@ -32,6 +35,7 @@ __all__ = [
     "LauncherError",
     "command",
     "configure",
+    "installed_version",
     "packaged_page",
     "play",
     "read_settings",
@@ -39,14 +43,23 @@ __all__ = [
     "settings_path",
     "shard_config_path",
     "shard_of",
+    "stage_update",
     "state",
     "update",
+    "update_of",
     "write_settings",
 ]
 
 #: The distributed file that names the shard: beside the launcher binary, so a player
 #: never types the feed's URL. `launcher.json` is the *feed's* own file, a different one.
 SHARD_FILE = "shard.json"
+
+#: The version this build carries, beside the binary: what its own update compares
+#: against (`deployment.md` §D7). A source checkout has none and reads as 0.
+VERSION_FILE = "version.txt"
+
+#: What the shard's `launcher` URL publishes: the package to fetch and its version.
+MANIFEST_FILE = "launcher-manifest.json"
 
 #: What a launcher remembers between runs. The *shard's* settings are not here: they come
 #: from the feed (`launcher.json`) or the distributed `shard.json`.
@@ -81,6 +94,14 @@ def settings_path(explicit=None) -> Path:
     return base / "camelot-launcher" / "settings.json"
 
 
+def beside_the_launcher(name: str) -> Path | None:
+    """A file distributed beside the binary: `shard.json`, `version.txt`."""
+    executable = Path(sys.argv[0]).expanduser()
+    if executable.is_file():
+        return executable.resolve().parent / name
+    return None
+
+
 def shard_config_path(explicit=None) -> Path | None:
     """Where the distributed shard file is: the one a run names, then
     `$CAMELOT_SHARD`, then `shard.json` beside the launcher binary. A source
@@ -91,10 +112,93 @@ def shard_config_path(explicit=None) -> Path | None:
     named = os.environ.get("CAMELOT_SHARD")
     if named:
         return Path(named).expanduser()
-    executable = Path(sys.argv[0]).expanduser()
-    if executable.is_file():
-        return executable.resolve().parent / SHARD_FILE
-    return None
+    return beside_the_launcher(SHARD_FILE)
+
+
+def installed_version(directory=None) -> int:
+    """The version of this build (`version.txt` beside the binary), 0 when a
+    source checkout has none — any published package beats it."""
+    where = (
+        Path(directory) / VERSION_FILE
+        if directory is not None
+        else beside_the_launcher(VERSION_FILE)
+    )
+    if where is None or not where.is_file():
+        return 0
+    try:
+        return int(where.read_text(encoding="utf-8").strip() or 0)
+    except ValueError:
+        return 0
+
+
+def update_of(base: str, *, current=None) -> dict | None:
+    """The launcher's own update, read from the shard's `launcher` URL
+    (`deployment.md` §D6-§D7), or None when there is none to take.
+
+    *current* is the version to compare against, defaulting to this build's. A
+    manifest that does not parse, names a path instead of a file, or carries a
+    hash of the wrong shape is refused by name — never read as "no update".
+    """
+    if not base:
+        return None
+    raw = feed._fetch(base, MANIFEST_FILE)
+    try:
+        manifest = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise LauncherError(f"{base}: the launcher manifest does not parse: {error}") from error
+    if not isinstance(manifest, dict):
+        raise LauncherError(f"{base}: the launcher manifest is not an object")
+    try:
+        version = int(manifest["version"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise LauncherError(f"{base}: the launcher manifest has no version") from error
+    name = str(manifest.get("file") or "")
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        raise LauncherError(f"{base}: the launcher manifest names no usable file: {name!r}")
+    digest = str(manifest.get("sha256") or "")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise LauncherError(f"{base}: the launcher manifest's sha256 is not sha256:<64 hex>")
+    held = int(current if current is not None else installed_version())
+    if version <= held:
+        return None
+    return {"version": version, "file": name, "sha256": digest, "base": base}
+
+
+def stage_update(directory, manifest: dict) -> dict:
+    """Download the package the manifest names, check its hash, and unpack it
+    beside the install (`deployment.md` §D8).
+
+    Nothing is swapped here: the caller hands over to the swap script once this
+    folder is *complete*, so a failed download or a short hash leaves the
+    running launcher untouched.
+    """
+    base = str(manifest.get("base") or "")
+    name = str(manifest.get("file") or "")
+    if not base or not name:
+        raise LauncherError("stage_update needs the manifest `update_of` returned")
+    payload = feed._fetch(base, name)
+    found = "sha256:" + hashlib.sha256(payload).hexdigest()
+    if found != manifest.get("sha256"):
+        raise LauncherError(
+            f"{name}: the download does not hash what the manifest says "
+            f"({found} != {manifest.get('sha256')})"
+        )
+    where = Path(directory) / "update"
+    where.mkdir(parents=True, exist_ok=True)
+    archive = where / name
+    archive.write_bytes(payload)
+    target = where / str(manifest["version"])
+    shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True)
+    with zipfile.ZipFile(archive) as bundle:
+        for member in bundle.namelist():
+            parts = Path(member).parts
+            if Path(member).is_absolute() or ".." in parts:
+                raise LauncherError(f"{archive}: {member!r} escapes the package")
+        bundle.extractall(target)
+    roots = [entry for entry in target.iterdir() if entry.is_dir()]
+    root = roots[0] if len(roots) == 1 else target
+    return {"version": int(manifest["version"]), "archive": str(archive), "root": str(root)}
 
 
 def _with_slash(value: str) -> str:

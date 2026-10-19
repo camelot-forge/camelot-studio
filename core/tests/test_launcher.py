@@ -454,3 +454,78 @@ def test_the_update_route_refuses_a_second_run_at_the_same_time(tmp_path, client
         launcher.PROGRESS["running"] = False
         server.shutdown()
         server.server_close()
+
+
+# --- its own update (F §D6-§D8) ------------------------------------------------
+
+
+def _package(directory, *, version: int = 2, digest: str | None = None) -> Path:
+    """One shard's launcher URL: the zip and the manifest that names it."""
+    import hashlib
+    import zipfile
+
+    where = Path(directory)
+    where.mkdir(parents=True, exist_ok=True)
+    archive = where / "camelot-launcher-win32.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("camelot-launcher/version.txt", f"{version}\n")
+    found = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+    (where / "launcher-manifest.json").write_text(
+        json.dumps(
+            {"version": version, "file": archive.name, "sha256": digest or found}
+        ),
+        encoding="utf-8",
+    )
+    return where
+
+
+def test_the_launcher_reads_its_own_version_beside_the_binary(tmp_path):
+    """`version.txt` is what the package carries and what its own update reads; a
+    source checkout has none, and any published package beats it."""
+    (tmp_path / "version.txt").write_text("7\n", encoding="utf-8")
+
+    assert launcher.installed_version(tmp_path) == 7
+    assert launcher.installed_version(tmp_path / "not-there") == 0
+
+
+def test_an_update_is_taken_only_when_the_remote_version_is_greater(tmp_path):
+    """The rule the client's protocol already uses (`C §3`): a re-published
+    package with the same version is invisible to a player who has it."""
+    base = _package(tmp_path / "shard", version=3)
+
+    found = launcher.update_of(str(base), current=2)
+    assert found["version"] == 3 and found["file"].endswith(".zip")
+    assert launcher.update_of(str(base), current=3) is None
+    assert launcher.update_of("", current=0) is None
+
+
+def test_a_manifest_that_names_a_path_instead_of_a_file_is_refused(tmp_path):
+    base = _package(tmp_path / "shard")
+    (base / launcher.MANIFEST_FILE).write_text(
+        json.dumps({"version": 9, "file": "../evil.zip", "sha256": "sha256:" + "0" * 64}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(launcher.LauncherError, match="usable file"):
+        launcher.update_of(str(base), current=1)
+
+
+def test_staging_checks_the_hash_and_unpacks_beside_the_install(tmp_path):
+    base = _package(tmp_path / "shard", version=4)
+    manifest = launcher.update_of(str(base), current=1)
+
+    staged = launcher.stage_update(tmp_path / "install", manifest)
+
+    assert Path(staged["root"]).name == "camelot-launcher"
+    assert (Path(staged["root"]) / "version.txt").read_text(encoding="utf-8") == "4\n"
+    assert not (tmp_path / "install" / "camelot-launcher").exists()
+
+
+def test_a_download_that_does_not_hash_is_refused_before_anything_is_staged(tmp_path):
+    base = _package(tmp_path / "shard", version=4, digest="sha256:" + "0" * 64)
+    manifest = launcher.update_of(str(base), current=1)
+
+    with pytest.raises(launcher.LauncherError, match="does not hash"):
+        launcher.stage_update(tmp_path / "install", manifest)
+
+    assert not (tmp_path / "install" / "update").exists()

@@ -10,6 +10,7 @@ Python, and no pyffi are needed on a player's machine.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -28,6 +29,12 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="build-launcher")
     parser.add_argument("--feed", help="the shard's public feed URL")
     parser.add_argument("--name", help="the shard's display name")
+    parser.add_argument(
+        "--version",
+        type=int,
+        default=1,
+        help="the launcher's own version: a package with a greater one replaces this one",
+    )
     parser.add_argument("--python", default=sys.executable, help="the interpreter with PyInstaller")
     args = parser.parse_args(argv)
 
@@ -87,14 +94,29 @@ def main(argv=None) -> int:
     (built / "shard.json").write_text(
         json.dumps(shard, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+    # The launcher's own version, beside the binary (`deployment.md` §D7): a
+    # package with a greater one is what replaces this one.
+    (built / "version.txt").write_text(f"{args.version}\n", encoding="utf-8")
     archive = shutil.make_archive(
         str(DIST / f"{NAME}-{sys.platform}"),
         "zip",
         root_dir=str(DIST),
         base_dir=NAME,
     )
+    # The manifest the launcher fetches from the shard's `launcher` URL. Signed
+    # by nothing: the hash binds the file it names, and the URL is the shard's
+    # own (`deployment.md` §D7).
+    payload = Path(archive).read_bytes()
+    manifest = {
+        "version": args.version,
+        "file": Path(archive).name,
+        "sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+    }
+    manifest_path = DIST / "launcher-manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
     print(f"package: {built}")
     print(f"archive: {archive}")
+    print(f"manifest: {manifest_path}  (version {args.version})")
     return 0
 
 
