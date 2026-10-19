@@ -1,7 +1,7 @@
 # Camelot Studio
 
 An open-source tool suite for authoring, versioning, releasing and shipping the
-content of **one** OpenDAoC server and its client.
+content of an OpenDAoC server and its client.
 
 One project folder holds a shard's whole content. Every edit lands in a journal;
 a **release** is cut from a range of that journal and travels unchanged through

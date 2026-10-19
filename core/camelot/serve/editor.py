@@ -326,11 +326,11 @@ class Editor:
         carries, so it is not.
         """
         cut = self._release_cut()
-        if cut is None:
-            return self.journal().live_except(self.published_keys())
         journal = self.journal()
-        dropped = journal.dropped()
-        return [line for line in journal.pending(cut) if line.key not in dropped]
+        keys = journal_mod.pending_keys(
+            journal, published=self.published_keys(), cut=cut
+        )
+        return [line for line in journal.ordered() if line.key in keys]
 
     def _release_cut(self) -> dict[str, int] | None:
         """The newest release's cut, when the project has one. The import is
@@ -569,78 +569,16 @@ class Editor:
         table = self.base_table(zone)
         lines = self.live_op_lines(zone.info.zone_id)
         ops = [line.op for line in lines]
-        # The ops a publish or a release already covers: the run heuristic below
-        # may only swallow *those* (the base can legitimately show their last
+        # The ops a publish or a release already covers: the run heuristic may
+        # only swallow *those* (the base can legitimately show their last
         # step), never a pending one.
         pending = {line.key for line in self.pending_lines()}
         covered = {index for index, line in enumerate(lines) if line.key not in pending}
-        index = 0
-        while index < len(ops):
-            op = ops[index]
-            if self._already_applied(table, op):
-                index += 1
-                continue
-            try:
-                table = gamedata.apply_row_ops(table, [op])
-                index += 1
-            except gamedata.TableError as error:
-                carried = self._published_run(table, ops, index, covered)
-                if carried is None:
-                    raise EditorError(str(error)) from error
-                index += carried
+        table, findings = gamedata.apply_ops(table, ops, covered=covered)
+        conflict = next((item for item in findings if item["verdict"] == "conflict"), None)
+        if conflict is not None:
+            raise EditorError(conflict["detail"])
         return table
-
-    def _published_run(self, table: gamedata.Table, ops: list[dict], index: int,
-                       covered: set[int]) -> int | None:
-        """How many ops to skip when the run that starts here was published.
-
-        A run is the consecutive ops on one row. It counts as published when
-        every op in it is covered (a publish or a release wrote it) *and* its
-        last step is a state the table already shows — whatever the
-        intermediate steps asked for, a covered chain ends where the base
-        stands. A pending op anywhere in the run ends the question: a real
-        conflict must be refused, not swallowed.
-        """
-        row_id = ops[index].get("id")
-        if row_id is None or index not in covered:
-            return None
-        end = index
-        while (
-            end + 1 < len(ops)
-            and ops[end + 1].get("id") == row_id
-            and (end + 1) in covered
-        ):
-            end += 1
-        if end == index:
-            return None
-        return end - index + 1 if self._already_applied(table, ops[end]) else None
-
-    @staticmethod
-    def _already_applied(table: gamedata.Table, op: dict) -> bool:
-        """Does the table already show what the op would write?"""
-        action = op.get("action")
-        try:
-            row_id = int(op["id"])
-        except (KeyError, TypeError, ValueError):
-            return False
-        index = table.row_index(row_id)
-        if action == "remove":
-            return index is None
-        if index is None:
-            return False
-        columns = {name: int(position) for name, position in (op.get("columns") or {}).items()}
-        values = {name: str(value) for name, value in (op.get("values") or {}).items()}
-        if not values:
-            return False
-        row = table.rows[index]
-        for name, wanted in values.items():
-            position = columns.get(name)
-            if position is None:
-                return False
-            current = row[position] if len(row) > position else ""
-            if current != wanted:
-                return False
-        return True
 
     def fixtures(self, zone: Zone) -> list[Fixture]:
         """The placements as the journal leaves them — what the viewer shows."""

@@ -540,6 +540,121 @@ def edit_table(raw: bytes, name: str, ops) -> bytes:
     return encode_table(apply_row_ops(parse_table(name, raw), ops))
 
 
+def row_shows(table: Table, op: dict) -> bool:
+    """Does the table already hold what this op would write?
+
+    True for a `remove` whose row is gone and for a `set` whose named columns
+    already carry the op's values. An op that names no value never counts as
+    shown: there would be nothing to compare.
+    """
+    action = op.get("action")
+    try:
+        row_id = int(op["id"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    index = table.row_index(row_id)
+    if action == "remove":
+        return index is None
+    if index is None:
+        return False
+    columns = {name: int(position) for name, position in (op.get("columns") or {}).items()}
+    values = {name: str(value) for name, value in (op.get("values") or {}).items()}
+    if not values:
+        return False
+    row = table.rows[index]
+    for name, wanted in values.items():
+        position = columns.get(name)
+        if position is None:
+            return False
+        current = row[position] if len(row) > position else ""
+        if current != wanted:
+            return False
+    return True
+
+
+def _carried_run(table: Table, ops: list[dict], index: int, covered) -> int | None:
+    """How many ops to skip when the run that starts here is already written.
+
+    A run is the consecutive ops on one row. It counts as carried when every
+    op in it is *covered* (a publish or a release wrote it) **and** its last
+    step is a state the table already shows — whatever the intermediate steps
+    asked for, a carried chain ends where the base stands. A pending op
+    anywhere in the run ends the question: a real conflict must be refused,
+    not swallowed.
+    """
+    row_id = ops[index].get("id")
+    if row_id is None or index not in covered:
+        return None
+    end = index
+    while (
+        end + 1 < len(ops)
+        and ops[end + 1].get("id") == row_id
+        and (end + 1) in covered
+    ):
+        end += 1
+    if end == index:
+        return None
+    return end - index + 1 if row_shows(table, ops[end]) else None
+
+
+def apply_ops(
+    table: Table, ops, *, covered=frozenset()
+) -> tuple[Table, list[dict]]:
+    """Apply a journal's ops to a base table, recording each one's verdict.
+
+    *covered* names the op indices a publish or a release already wrote. The
+    walk **stops at the first conflict**: the ops that follow were written
+    against a state that never happened, so judging them would be a lie.
+
+    Returns the table and one finding per op walked — `shows` when the table
+    already holds the op's values, `holds` when it applied as written,
+    `conflict` with both values when it did not. A caller that applies ops
+    raises on the conflict; a caller that reports reads it (P8).
+    """
+    result = table
+    findings: list[dict] = []
+    index = 0
+    while index < len(ops):
+        op = ops[index]
+        row_id = op.get("id")
+        if row_shows(result, op):
+            findings.append(
+                {"index": index, "row": row_id, "verdict": "shows", "detail": ""}
+            )
+            index += 1
+            continue
+        try:
+            result = apply_row_ops(result, [op])
+        except TableError as error:
+            carried = _carried_run(result, ops, index, covered)
+            if carried is None:
+                findings.append(
+                    {
+                        "index": index,
+                        "row": row_id,
+                        "verdict": "conflict",
+                        "detail": str(error),
+                    }
+                )
+                break
+            for offset in range(carried):
+                findings.append(
+                    {
+                        "index": index + offset,
+                        "row": ops[index + offset].get("id"),
+                        "verdict": "shows",
+                        "detail": "",
+                    }
+                )
+            index += carried
+            continue
+        findings.append(
+            {"index": index, "row": row_id, "verdict": "holds", "detail": ""}
+        )
+        index += 1
+    return result, findings
+
+
 def read_table_bytes(client_dir: str, name: str) -> bytes:
     """The exact bytes of one table inside the client's gamedata.mpk."""
     archive = MpakArchive(os.path.join(client_dir, GAMEDATA_ARCHIVE))

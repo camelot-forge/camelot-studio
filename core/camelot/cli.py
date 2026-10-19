@@ -538,6 +538,8 @@ def print_plan(table: dict) -> None:
     if checked:
         held = len((table.get("ids") or {}).get("collisions") or [])
         print(f"  {'ids':<9} {checked} checked, {held} already held here")
+    for note in table.get("notes") or ():
+        print(f"  {'note':<9} {note}")
     print()
     width = max((len(item["verdict"]) for item in table["items"]), default=0)
     for item in table["items"]:
@@ -547,6 +549,51 @@ def print_plan(table: dict) -> None:
     summary = ", ".join(f"{count} {name}" for name, count in counts.items() if count)
     print()
     print(f"  {len(table['items'])} item(s): {summary or 'none'}")
+
+
+def _decision(args) -> str:
+    if args.keep_ours:
+        return "keep ours"
+    if args.adopt:
+        return "adopt theirs"
+    return ""
+
+
+def print_rebase(view: dict, decided: str = "") -> None:
+    """The re-base as the operator reads it (`project.md` §D17): what moved,
+    then the journal against the base as it stands."""
+    print(f"{view['name']}  {view['root']}")
+    print(f"  {'client':<9} {view['client']}")
+    if view["clean"]:
+        print("  the base is the one this project recorded: nothing to decide")
+        return
+    print(
+        f"  {len(view['resources'])} resource(s) no longer match: "
+        f"{view['moved']} moved, {view['missing']} missing, {view['pinned']} pinned"
+    )
+    print()
+    width = max(len(item["state"]) for item in view["resources"])
+    for item in view["resources"]:
+        print(f"  {item['state']:<{width}}  {item['resource']}")
+        if item["detail"]:
+            print(f"  {'':<{width}}  {item['detail']}")
+    for entry in view["journal"]:
+        print()
+        print(f"  {entry['resource']}")
+        for op in entry["ops"]:
+            line = f"    {op['verdict']:<9} {op['key']}  ({op['where']})  row {op['row']}"
+            if op["detail"]:
+                line += f"  {op['detail']}"
+            print(line)
+        if entry["unwalked"]:
+            print(f"    {entry['unwalked']} op(s) after the conflict were not judged")
+        if entry["note"]:
+            print(f"    {entry['note']}")
+    print()
+    if decided:
+        print(f"  {decided}: written to project.json")
+    else:
+        print("  nothing written — --keep-ours or --adopt decides")
 
 
 def cmd_project(args) -> int:
@@ -961,6 +1008,28 @@ def cmd_project(args) -> int:
             return 0
         print("  DIFFERENT — this release is not reproducible from what is here")
         return 1
+
+    if args.project_cmd == "rebase":
+        from . import rebase as rebase_mod
+
+        if args.keep_ours and args.adopt:
+            print(
+                "error: --keep-ours and --adopt are two different decisions",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            if args.keep_ours:
+                view = rebase_mod.keep_ours(project, client=args.client)
+            elif args.adopt:
+                view = rebase_mod.adopt(project, client=args.client)
+            else:
+                view = rebase_mod.analysis(project, client=args.client)
+        except (rebase_mod.RebaseError, projects.ProjectError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print_rebase(view, decided=_decision(args))
+        return 0 if (args.keep_ours or args.adopt) else (1 if view["resources"] else 0)
 
     try:
         findings = projects.verify(project, args.client)
@@ -2047,6 +2116,22 @@ def main(argv=None) -> int:
         "bytes (pipeline.md §D5: what a CI job runs)",
     )
     vp.add_argument("--env", help="read that environment back instead of the base")
+    rb = pp.add_parser(
+        "rebase", help="the base moved under the project: what it touches, and what to do"
+    )
+    rb.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    rb.add_argument("--client", help="the client to read (default: this machine's own answers)")
+    rb.add_argument(
+        "--keep-ours",
+        dest="keep_ours",
+        action="store_true",
+        help="pin the recorded fingerprints: the base is ours, and every deploy warns",
+    )
+    rb.add_argument(
+        "--adopt",
+        action="store_true",
+        help="move the fingerprints to what the client holds now",
+    )
     rp = pp.add_parser("release", help="cut the next release (the range since the last one)")
     rp.add_argument("--dir", default=".", help="the project's directory (default: .)")
     rp.add_argument("--client", help="the client the build is against (default: this machine's)")

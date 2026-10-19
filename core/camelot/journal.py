@@ -56,6 +56,7 @@ __all__ = [
     "Line",
     "migrate_legacy",
     "now",
+    "pending_keys",
     "replay",
     "stamp_from_epoch",
 ]
@@ -613,3 +614,23 @@ def replay(
         else:
             result[row_id] = {**current, **values}
     return result, findings
+
+
+def pending_keys(
+    journal: Journal,
+    *,
+    published: Iterable[str] = (),
+    cut: dict[str, int] | None = None,
+) -> set[str]:
+    """The keys of the lines a working copy still holds beyond what is written
+    (`project.md` §D5).
+
+    A release's `cut` is the coarse answer — every line beyond it is pending,
+    and a drop below it is not, since it is part of what that release carries.
+    While no release exists, the finer one is the ops no publish covers yet.
+    One rule, read by the editor and by the re-base.
+    """
+    if cut is None:
+        return {line.key for line in journal.live_except(published)}
+    dropped = journal.dropped()
+    return {line.key for line in journal.pending(cut) if line.key not in dropped}

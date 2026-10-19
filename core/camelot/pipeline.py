@@ -394,6 +394,11 @@ def plan(root, number, *, env, adopt=False) -> dict:
     only_server = server_only(project, env)
 
     notes: list[str] = []
+    if project.pinned:
+        notes.append(
+            f"the base is pinned: {len(project.pinned)} resource(s) moved and you chose "
+            "keep ours — this release was authored against the older bytes"
+        )
     items: list[dict] = []
     if only_server:
         if (record.get("artifacts") or {}).get("client"):

@@ -69,6 +69,7 @@ __all__ = [
     "lock_state",
     "machine",
     "new",
+    "pin_resources",
     "populate",
     "read_resource",
     "record_deploy",
@@ -265,6 +266,17 @@ class Project:
     @property
     def fingerprints(self) -> dict[str, str]:
         return dict(self.client.get("fingerprints") or {})
+
+    @property
+    def pinned(self) -> dict[str, str]:
+        """The resources the operator chose to **keep ours**, and the value each
+        had moved to (P8, `project.md` §D17).
+
+        A pin is per resource *and per value*: the fingerprints stay ours, and
+        the value we refused is kept so `verify` can tell a deliberate pin from
+        a base that moved a second time.
+        """
+        return dict(self.client.get("pinned") or {})
 
     @property
     def build(self) -> str | None:
@@ -869,6 +881,13 @@ def add_fingerprints(
     base = dict(data.get("base") or {})
     client = dict(base.get("client") or {})
     client["fingerprints"] = dict(sorted(recorded.items()))
+    # Adopting a value supersedes the decision to keep ours against it: the
+    # pin only ever names what is *not* adopted (P8, `project.md` §D17).
+    pinned = {name: value for name, value in project.pinned.items() if name not in found}
+    if pinned:
+        client["pinned"] = dict(sorted(pinned.items()))
+    else:
+        client.pop("pinned", None)
     base["client"] = client
     data["base"] = base
     path = project.root / PROJECT_FILE
@@ -876,16 +895,43 @@ def add_fingerprints(
     return load(project.root), moved
 
 
+def pin_resources(root: str | os.PathLike, values: dict[str, str]) -> Project:
+    """Record a **keep ours** decision (`project.md` §D17): the fingerprints
+    stay as they are, and the values the operator refused are written beside
+    them, so the next `verify` says `pinned` rather than shouting about a base
+    they have already ruled on.
+
+    Merges: a resource pinned before and moved again is pinned to the value
+    the operator has just seen, which is a new fact about the same file.
+    """
+    project = load(root)
+    if not values:
+        return project
+    pinned = dict(project.pinned)
+    pinned.update({str(name): str(value) for name, value in values.items()})
+    data = dict(project.data)
+    base = dict(data.get("base") or {})
+    client = dict(base.get("client") or {})
+    client["pinned"] = dict(sorted(pinned.items()))
+    base["client"] = client
+    data["base"] = base
+    path = project.root / PROJECT_FILE
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return load(project.root)
+
+
 def verify(project: Project, client=None) -> list[dict]:
     """Read the base back: one finding per recorded resource.
 
     States: `ok` (the bytes are the ones we recorded), `moved` (the client's
     file changed under us — a game update, another tool), `missing` (the file
-    or the archive entry is gone). Nothing is repaired here: the report is what
-    the operator and `re-base` (P8) act on.
+    or the archive entry is gone), `pinned` (it moved and the operator chose
+    `keep ours` against that very value — `project.md` §D17). Nothing is
+    repaired here: the report is what the operator and `rebase` (P8) act on.
     """
     directory = client_root(project, client)
     recorded = project.fingerprints
+    pinned = project.pinned
     if directory is None:
         raise ProjectError(
             f"{project.name}: no client resolved — write {MACHINE_FILE}, set $DAOC_CLIENT, "
@@ -898,13 +944,14 @@ def verify(project: Project, client=None) -> list[dict]:
         except ProjectError as error:
             findings.append({"resource": resource, "state": "missing", "detail": str(error)})
             continue
-        findings.append(
-            {
-                "resource": resource,
-                "state": "ok" if found == want else "moved",
-                "detail": "" if found == want else f"recorded {want[:15]}…, found {found[:15]}…",
-            }
-        )
+        if found == want:
+            state, detail = "ok", ""
+        elif pinned.get(resource) == found:
+            state, detail = "pinned", f"kept ours against {found[:15]}…"
+        else:
+            state = "moved"
+            detail = f"recorded {want[:15]}…, found {found[:15]}…"
+        findings.append({"resource": resource, "state": state, "detail": detail})
     return findings
 
 
