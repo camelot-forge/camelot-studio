@@ -801,6 +801,7 @@ def cmd_project(args) -> int:
                 feed_url=args.feed_url,
                 server=args.server,
                 remote=args.remote,
+                release_key=args.release_key,
             )
         except publish_mod.PublishError as error:
             print(f"error: {error}", file=sys.stderr)
@@ -816,6 +817,14 @@ def cmd_project(args) -> int:
             f"{feed_report['bytes']:,} bytes (the patchlist lists "
             f"{feed_report['listed']:,})"
         )
+        signature = report["signature"]
+        if signature:
+            print(f"  signed {signature['key'] or 'a key ssh-keygen would not fingerprint'}")
+        else:
+            print(
+                "  signed no — set release_key in machine.json, or --release-key, and a "
+                "server that checks signatures will refuse this release"
+            )
         if report["pushed"]:
             print(f"  pushed {report['pushed']}")
         else:
@@ -830,6 +839,7 @@ def cmd_project(args) -> int:
                 args.env,
                 remote=args.remote,
                 feed=args.feed,
+                release_key=args.release_key,
             )
         except (remote_mod.PullError, projects.ProjectError) as error:
             print(f"error: {error}", file=sys.stderr)
@@ -839,6 +849,11 @@ def cmd_project(args) -> int:
             f"{report['head'][:12]}"
         )
         print(f"  env     {report['root']}")
+        signature = report["signature"]
+        if signature["checked"]:
+            print(f"  signed  {signature['key'] or 'checked'}")
+        else:
+            print(f"  signed  not checked — {signature['why']}")
         for path in report["wrote"]:
             print(f"  wrote   {path}")
         for path in report["unchanged"]:
@@ -1407,6 +1422,8 @@ def cmd_console(args) -> int:
             deploy=args.deploy or os.environ.get("CAMELOT_CONSOLE_DEPLOY"),
             deploy_remote=args.deploy_remote
             or os.environ.get("CAMELOT_CONSOLE_DEPLOY_REMOTE"),
+            release_key=args.release_key
+            or os.environ.get("CAMELOT_CONSOLE_RELEASE_KEY"),
             feed_out=args.feed_out or os.environ.get("CAMELOT_CONSOLE_FEED_OUT"),
             host=args.host,
             port=args.port,
@@ -1946,6 +1963,12 @@ def main(argv=None) -> int:
         help="the git remote the Pull action fetches from (default: none)",
     )
     p.add_argument(
+        "--release-key",
+        dest="release_key",
+        help="the operator's public key (.pub): with it, Pull refuses a release whose "
+        "signature does not check out (D §D7). Default: $CAMELOT_CONSOLE_RELEASE_KEY",
+    )
+    p.add_argument(
         "--feed-out",
         help="the directory the feed service serves; the Pull mirrors the feed into it",
     )
@@ -2090,6 +2113,12 @@ def main(argv=None) -> int:
         help="the game's host:port (default: CAMELOT_GAME_SERVER, or the feed's own)",
     )
     pub.add_argument("--remote", help="push the branch to this remote after committing")
+    pub.add_argument(
+        "--release-key",
+        dest="release_key",
+        help="the private key that signs the release record (default: machine.json's "
+        "release_key; without either, the release is published unsigned)",
+    )
     pl = pp.add_parser(
         "pull", help="fetch the deploy branch, verify it, hand it over (D §D4)"
     )
@@ -2097,6 +2126,13 @@ def main(argv=None) -> int:
     pl.add_argument("--env", help="the environment to hand over to (default: the only one)")
     pl.add_argument("--remote", help="fetch and fast-forward from this remote first")
     pl.add_argument("--feed", help="mirror the pulled feed into this directory")
+    pl.add_argument(
+        "--release-key",
+        dest="release_key",
+        help="the operator's public key, checked against the release's signature "
+        "(default: machine.json's release_key, then $CAMELOT_RELEASE_KEY; without "
+        "one, nothing is checked)",
+    )
     p.set_defaults(func=cmd_project)
 
     args = ap.parse_args(argv)

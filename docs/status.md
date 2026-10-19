@@ -22,10 +22,10 @@ agent, read this, then `AGENTS.md` for repo rules.
 | `camelot client patch [--max-id N] [--restore]` | raise the client's model-id ceiling in place (unmanaged clients; `.orig` backup, byte-exact restore) |
 | `camelot server export --out F [--config C\|--dsn D]` | export the server's world rows (`mob`/`worldobject`/`door`/`path`) to a snapshot the viewer reads; needs `pymysql` (extra `mysql`) |
 | `camelot server tables` | the server tables this project owns — the map the Installer validates a release against |
-| `camelot project new\|open\|info\|verify\|import\|populate\|release\|releases\|deploy\|promote\|publish\|envs` | the project: one server's whole content in one folder (release, dry run, deploy to an environment); `publish` commits a release's payloads and its feed to the `camelot-deploy` branch — the transport a server this machine does not reach pulls (D §D2/§D5) |
+| `camelot project new\|open\|info\|verify\|import\|populate\|release\|releases\|deploy\|promote\|publish\|envs` | the project: one server's whole content in one folder (release, dry run, deploy to an environment); `publish` commits a release's payloads and its feed to the `camelot-deploy` branch — the transport a server this machine does not reach pulls (D §D2/§D5) — and **signs the release record** with `machine.json`'s `release_key` (D §D7) |
 | `camelot env provision\|status\|verify\|apply\|reverse\|reload [ENV]` | an environment's server half: its own database built from OpenDAoC's baseline, what it holds, the Installer's step, the read-back; an environment declared `"client": false` in `machine.json` is **server-only** — the client half belongs to the feed (D §D3); `reverse` puts back what one release replaced, in one transaction, and withdraws it from the folder and the ask — a **repair**, not a rollback (S §D17) |
 | `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--db-write] [--edits D] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only; `--edits` turns on the **world editor** (6.3: select, move/rotate/scale with snap, catalog add, remove, the undo journal, `build`/`apply`/`revert`/`restore`); `--db-write` lets it also patch the server's **existing** world rows (B2: a keep's own doors move with the keep) |
-| `camelot console --root DIR [--env NAME] [--project DIR] [--feed DIR] [--game-server H:P] [--api-url U] [--api-password P] [--allow-restart] [--deploy DIR] [--deploy-remote NAME] [--feed-out DIR] [--audit F] [--host H] [--port N]` | the running server's Console (P7): the applied release and rows, the reload recorded in the project's log, the feed's version, the game port and the read API; `--allow-restart` enables the one server action (shutdown + supervisor); `--deploy` enables **Pull** — fetch the `camelot-deploy` branch, verify the release's hashes, hand the server half over, write the wanted marker, mirror the feed (D §D4); **Reverse** writes the ask for the other direction (`reverse.json`, honoured by the Installer's step, S §D17); one audit line per attempt; a password is required beyond loopback |
+| `camelot console --root DIR [--env NAME] [--project DIR] [--feed DIR] [--game-server H:P] [--api-url U] [--api-password P] [--allow-restart] [--deploy DIR] [--deploy-remote NAME] [--release-key F] [--feed-out DIR] [--audit F] [--host H] [--port N]` | the running server's Console (P7): the applied release and rows, the reload recorded in the project's log, the feed's version, the game port and the read API; `--allow-restart` enables the one server action (shutdown + supervisor); `--deploy` enables **Pull** — fetch the `camelot-deploy` branch, check who signed the release record, verify its hashes, hand the server half over, write the wanted marker, mirror the feed (D §D4); `--release-key` is the operator's `.pub`, and without one the page says the server does not check signatures (D §D7); **Reverse** writes the ask for the other direction (`reverse.json`, honoured by the Installer's step, S §D17); one audit line per attempt; a password is required beyond loopback |
 
 The server side also ships as containers: `deploy/compose.yaml` is one entry
 point that `include`s the three parts, and each part runs alone — `server/`
@@ -46,6 +46,14 @@ never lets a failure reach `UpdateDatabase()` — a thrown exception there is a
 server that will not start (S §D10). Both ways of running it produce one folder
 and one state; the Console cannot tell them apart. Its README says what it does
 not do (no reload, no restart, no ids allocated).
+
+A release travels **signed** (`camelot/sign.py`, D §D7): `publish` signs the
+release record with `ssh-keygen -Y` (OpenSSH's SSHSIG, Ed25519, namespace
+`camelot-release`) and the signature rides in the branch beside it; `pull` checks
+it against the operator's `.pub` **before** it believes the hashes the record
+carries — the hashes are written in the record, so only the signature makes them
+mean anything. A server with no key is not a server that fails: it hands the
+release over and reports that it did not check, and the Console's page says so.
 
 **Coverage snapshot**: a retained full-corpus run reported **5087/5089**
 client NIFs parsed (the two remaining are 10.1.0.0 housing files failing

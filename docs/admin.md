@@ -346,6 +346,48 @@ Restart, which needs a supervisor to bring the server back). `/reload`, messages
 and kicks are in-game GM commands; there is no console stdin. That boundary is
 measured, not assumed (`notes/console.md` §D5).
 
+### Who signed the release
+
+The branch travels over a git remote and lands on a machine you may not own. The
+hashes in `release.json` are recorded in the same commit as the files they
+describe, so they catch a half-copied file and nothing else: whoever can write
+the branch can rewrite both.
+
+A signature is what a server can check without trusting the branch. One key, on
+the desk:
+
+```sh
+ssh-keygen -t ed25519 -C camelot-release -f ~/daoc/keys/camelot-release
+# and in machine.json:  "release_key": "/home/you/daoc/keys/camelot-release"
+```
+
+`camelot project publish` then signs the release **record** — which carries the
+sha256 of every artifact, so one signature covers the whole release — and the
+signature rides in the branch beside it. Nothing appears in your working tree.
+
+On the server, copy the `.pub` and name it:
+
+```sh
+scp ~/daoc/keys/camelot-release.pub forge:/srv/forge/keys/
+# Console:   --release-key /keys/camelot-release.pub   (or CAMELOT_CONSOLE_RELEASE_KEY)
+# the job:   CAMELOT_RELEASE_KEY=/keys/camelot-release.pub
+```
+
+A pull then checks the signature **before** it believes the hashes, and refuses
+with the reason named:
+
+```text
+error: release 0001: the signature does not check out against
+/srv/forge/keys/camelot-release.pub (Signature verification failed: incorrect
+signature) — refusing to hand it over
+```
+
+**A server with no key is not a server that fails.** It hands the release over
+and says so — `signed not checked — no release key is configured` — and the
+Console's page carries the same line. That is the state every server was in
+before there was a key, and the state to leave in a hurry: until you set one,
+the deploy key's scope is the whole trust boundary.
+
 ### Going back
 
 There is no rollback verb, on purpose: the launcher's protocol only moves
@@ -495,6 +537,8 @@ already there.
 | `no release carries a client half yet` | `project feed` with no release: cut one first |
 | `N file(s) the base has are not in the staged tree` | the protocol cannot remove a file from a player's client; a feed that lost a file is refused |
 | `the checkout's bytes do not hash what the release record says` | the branch is not what the release recorded — do not hand it over; publish again |
+| `the signature does not check out against <key>` | the record moved after it was signed, or the wrong key is configured; publish again, or point the server at the right `.pub` |
+| `the branch carries no release.json.sig` | this server checks signatures and the publish was unsigned: set `release_key` on the desk and publish again |
 | `the environment holds bytes this release does not record` | someone edited the server's files by hand; the pull refuses rather than overwrite |
 | `an update is waiting — the client is at N, the shard publishes M` | the player's launcher refused Play until Update runs |
 | `release 0006 cannot be reversed while release 0007 is applied` | the newer release's values would be written over: reverse the newest first (`S §D17`) |

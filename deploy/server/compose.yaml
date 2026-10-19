@@ -107,6 +107,10 @@ services:
       CAMELOT_DB_PORT: ${CAMELOT_DB_PORT:-3307}
       CAMELOT_DB_USER: root
       CAMELOT_DB_PASSWORD: ${CAMELOT_DB_PASSWORD:?set CAMELOT_DB_PASSWORD}
+      # For the fallback pull (`project pull --remote …`, `remote.md` §D4): the
+      # operator's public key, so that path checks a signature like the Console's
+      # does (§D7). Empty means nothing is checked, and the pull says so.
+      CAMELOT_RELEASE_KEY: ${CAMELOT_RELEASE_KEY:-}
     volumes:
       # The checkout of the deploy branch: the project this job reads.
       - ${CAMELOT_DEPLOY_CHECKOUT:?set CAMELOT_DEPLOY_CHECKOUT}:/deploy
@@ -114,6 +118,9 @@ services:
       - ${CAMELOT_SERVER_ENV:?set CAMELOT_SERVER_ENV}:/env
       # OpenDAoC's database checkout, for `env provision` alone.
       - ${CAMELOT_BASELINE_SOURCE:?set CAMELOT_BASELINE_SOURCE}:/baseline:ro
+      # The directory holding the release keys, when one is configured. The path
+      # in CAMELOT_RELEASE_KEY is the one inside the container (/keys/…).
+      - ${CAMELOT_KEYS_DIR:-./keys}:/keys:ro
     command:
       - env
       - status

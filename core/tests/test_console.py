@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from camelot import console, feed, installer
+from camelot import console, feed, installer, publish
 
 
 def _environment(tmp_path, *, needs=("reload",)):
@@ -362,6 +362,41 @@ def test_the_pull_action_is_disabled_without_a_checkout(tmp_path):
     assert document["remote"] is None
 
 
+def test_the_page_says_whether_a_signature_is_checked(tmp_path):
+    """`remote.md` §D7: a server that does not check who signed a release says so,
+    and one that does says which key it will check against — before Pull is pressed,
+    not after it refuses."""
+    root = _environment(tmp_path)
+    checkout = tmp_path / "checkout"
+    (checkout / "releases" / "0001").mkdir(parents=True)
+    (checkout / publish.MARKER).write_text(
+        json.dumps({"format": "camelot.publish/1", "release": 1}), encoding="utf-8"
+    )
+
+    unchecked = console.live(root, env="staging", deploy=checkout)
+    assert unchecked["remote"]["release_key"] is None
+    assert unchecked["remote"]["signature"]["present"] is False
+    assert "signature: not checked" in console.page(unchecked)
+
+    # a signature the branch carries, and no key to check it with: still not checked
+    (checkout / "releases" / "0001" / "release.json.sig").write_text("x", encoding="utf-8")
+    still = console.live(root, env="staging", deploy=checkout)
+    assert still["remote"]["signature"]["present"] is True
+    assert "signature: not checked" in console.page(still)
+
+    checked = console.live(
+        root, env="staging", deploy=checkout, release_key="/srv/forge/keys/release.pub"
+    )
+    assert checked["remote"]["release_key"] == "/srv/forge/keys/release.pub"
+    assert "checked against <code>/srv/forge/keys/release.pub</code>" in console.page(checked)
+
+    (checkout / "releases" / "0001" / "release.json.sig").unlink()
+    unsigned = console.live(
+        root, env="staging", deploy=checkout, release_key="/srv/forge/keys/release.pub"
+    )
+    assert "Pull will refuse it" in console.page(unsigned)
+
+
 def test_the_pull_action_hands_over_and_audits(tmp_path, monkeypatch):
     root = _environment(tmp_path)
     audit = tmp_path / "audit.jsonl"
@@ -371,7 +406,12 @@ def test_the_pull_action_hands_over_and_audits(tmp_path, monkeypatch):
 
     def fake(deploy, env=None, **kwargs):
         calls.append((str(deploy), env, kwargs))
-        return {"release": 1, "wrote": ["a", "b"], "feed": {"files": 3}}
+        return {
+            "release": 1,
+            "wrote": ["a", "b"],
+            "feed": {"files": 3},
+            "signature": {"checked": True, "key": "SHA256:abc", "why": ""},
+        }
 
     monkeypatch.setattr(console.remote_mod, "pull", fake)
     bound = _serving(
@@ -380,6 +420,7 @@ def test_the_pull_action_hands_over_and_audits(tmp_path, monkeypatch):
         deploy=checkout,
         env="staging",
         token="t",
+        release_key=tmp_path / "release.pub",
     )
     try:
         status, location, _body = _post(
@@ -391,10 +432,13 @@ def test_the_pull_action_hands_over_and_audits(tmp_path, monkeypatch):
         bound.shutdown()
         bound.server_close()
     assert calls and calls[0][1] == "staging"
+    # the Console's key is the pull's: the check is not something the page runs
+    assert calls[0][2]["release_key"] == tmp_path / "release.pub"
     entry = json.loads(audit.read_text(encoding="utf-8").splitlines()[-1])
     assert entry["action"] == "pull"
     assert entry["result"] == "pulled"
     assert "release 0001" in entry["detail"]
+    assert "signed SHA256:abc" in entry["detail"]
 
 
 def test_the_pull_action_reports_a_refusal(tmp_path, monkeypatch):

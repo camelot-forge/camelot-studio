@@ -25,6 +25,10 @@ services:
       CAMELOT_CONSOLE_DEPLOY: /deploy
       CAMELOT_CONSOLE_DEPLOY_REMOTE: ${CAMELOT_CONSOLE_DEPLOY_REMOTE:-origin}
       CAMELOT_CONSOLE_FEED_OUT: /feed-out
+      # The operator's public key (`remote.md` §D7). With it, Pull refuses a
+      # release whose signature does not check out; without it, this server
+      # trusts whatever the branch carries, and the page says so.
+      CAMELOT_CONSOLE_RELEASE_KEY: ${CAMELOT_RELEASE_KEY:-}
       # Optional, when the project's deploy log is mounted below:
       CAMELOT_CONSOLE_PROJECT: ${CAMELOT_CONSOLE_PROJECT:-}
     volumes:
@@ -40,6 +44,10 @@ services:
       # The audit is the Console's own record; it is never inside the
       # environment folder.
       - ${CAMELOT_CONSOLE_AUDIT_SOURCE:-./audit}:/audit
+      # The public key the pull checks signatures with, when one is configured.
+      # The whole directory is mounted, so the path in the variable is the one
+      # inside the container: CAMELOT_RELEASE_KEY=/keys/release.pub.
+      - ${CAMELOT_KEYS_DIR:-./keys}:/keys:ro
       # Add this when the operator has the project on this host (the deploy log):
       # - ${CAMELOT_CONSOLE_PROJECT_SOURCE:?}:/project:ro
     restart: unless-stopped

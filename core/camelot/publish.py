@@ -25,6 +25,7 @@ from . import feedbuild
 from . import journal as journal_mod
 from . import project as project_mod
 from . import release as release_mod
+from . import sign as sign_mod
 
 __all__ = ["BRANCH", "FORMAT", "PublishError", "publish"]
 
@@ -126,13 +127,41 @@ def _check_artifacts(root, record) -> None:
             )
 
 
-def _commit(root, number, marker, *, at=None, branch=BRANCH) -> str:
-    """One commit on *branch*, built from the content branch's tree plus the
-    payloads and the marker. Returns its sha.
+def _add_blob(root, env, relative: str, data: bytes) -> None:
+    """One file into the index, without it ever touching the working tree.
 
-    The "nothing to publish" check compares the payload tree — the marker is
-    excluded on purpose: its timestamp changes on every run, and a publish that
-    would only rewrite the marker is a no-op.
+    What the deploy branch carries on top of the content tree is derived — the
+    marker, and the release's signature — and a derived file in the operator's
+    `git status` is a file they have to reason about for nothing.
+    """
+    blob = subprocess.run(
+        ["git", "-C", str(root), "hash-object", "-w", "--stdin"],
+        input=data,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    if blob.returncode != 0:
+        detail = (blob.stderr or blob.stdout).decode("utf-8", "replace").strip().splitlines()
+        raise PublishError(f"git hash-object: {detail[-1] if detail else blob.returncode}")
+    _git(
+        root,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"100644,{blob.stdout.decode('ascii').strip()},{relative}",
+        env=env,
+    )
+
+
+def _commit(root, number, marker, *, at=None, branch=BRANCH, signature=None) -> str:
+    """One commit on *branch*, built from the content branch's tree plus the
+    payloads, the marker and the release's signature. Returns its sha.
+
+    The "nothing to publish" check compares the tree the commit would carry, and
+    excludes one path on purpose: the marker, whose timestamp changes on every run.
+    Everything else counts — including a signature the branch did not have yet, so
+    a desk that published unsigned and then made a key has something to publish.
     """
     handle, index = tempfile.mkstemp(prefix="camelot-publish-")
     os.close(handle)
@@ -143,40 +172,26 @@ def _commit(root, number, marker, *, at=None, branch=BRANCH) -> str:
     try:
         _git(root, "read-tree", "HEAD", env=env)
         _git(root, "add", "-f", "--", *PAYLOADS, env=env)
-        payload_tree = _git(root, "write-tree", env=env).strip()
+        _add_blob(
+            root,
+            env,
+            MARKER,
+            (json.dumps(marker, indent=1, ensure_ascii=False) + "\n").encode("utf-8"),
+        )
+        if signature:
+            _add_blob(root, env, signature[0], signature[1])
+        tree = _git(root, "write-tree", env=env).strip()
         previous = _git(
             root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}", check=False
         ).strip()
         if previous:
             changed = _git(
-                root, "diff-tree", "-r", "--name-only", previous, payload_tree
+                root, "diff-tree", "-r", "--name-only", previous, tree
             ).splitlines()
             if not [name for name in changed if name != MARKER]:
                 raise PublishError(
                     "nothing to publish: the deploy branch already carries these bytes"
                 )
-        blob = subprocess.run(
-            ["git", "-C", str(root), "hash-object", "-w", "--stdin"],
-            input=json.dumps(marker, indent=1, ensure_ascii=False) + "\n",
-            text=True,
-            capture_output=True,
-            check=False,
-            env=env,
-        )
-        if blob.returncode != 0:
-            detail = (blob.stderr or blob.stdout).strip().splitlines()
-            raise PublishError(
-                f"git hash-object: {detail[-1] if detail else blob.returncode}"
-            )
-        _git(
-            root,
-            "update-index",
-            "--add",
-            "--cacheinfo",
-            f"100644,{blob.stdout.strip()},{MARKER}",
-            env=env,
-        )
-        tree = _git(root, "write-tree", env=env).strip()
         args = ["commit-tree", tree]
         if previous:
             args += ["-p", previous]
@@ -188,6 +203,37 @@ def _commit(root, number, marker, *, at=None, branch=BRANCH) -> str:
         Path(index).unlink(missing_ok=True)
 
 
+def _signature_of(root, number, key) -> tuple[tuple[str, bytes] | None, dict]:
+    """The detached signature over the release record (`remote.md` §D7), or None
+    with the reason when this desk has no key.
+
+    What is signed is the **record**, never the payloads: `release.json` carries
+    the sha256 of the pack, of `rows.json` and of the client patchlist, so one
+    signature covers the release and every file it names. The signature rides in
+    the deploy branch beside the record it signs, and never in the working tree.
+    """
+    if not key:
+        return None, {
+            "key": None,
+            "path": None,
+            "why": "no release_key: this desk publishes unsigned, and a server that "
+            "checks signatures will refuse the release",
+        }
+    where = release_mod.record_path(root, number)
+    if not where.is_file():
+        raise PublishError(f"{where}: there is no release record to sign")
+    try:
+        blob = sign_mod.sign(key, where.read_bytes())
+    except sign_mod.SignError as error:
+        raise PublishError(str(error)) from error
+    relative = f"{release_mod.DIR}/{int(number):04d}/{where.name}{sign_mod.SIGNATURE}"
+    return (relative, blob), {
+        "key": sign_mod.key_id(key),
+        "path": relative,
+        "why": "",
+    }
+
+
 def publish(
     root,
     number=None,
@@ -196,11 +242,16 @@ def publish(
     feed_url=None,
     server=None,
     remote=None,
+    release_key=None,
     at=None,
 ) -> dict:
-    """Build the feed (unless *build* is false), commit the payloads and the
-    feed to the `deploy` branch, and record one `publish` line in the deploy
-    log. *remote* pushes the branch when given.
+    """Build the feed (unless *build* is false), sign the release record, commit
+    the payloads, the feed and the signature to the `deploy` branch, and record
+    one `publish` line in the deploy log. *remote* pushes the branch when given.
+
+    *release_key* is this desk's private key; without one, `machine.json`'s
+    `release_key` is used, and without either the release is published unsigned
+    and said so (`remote.md` §D7).
 
     The feed build needs the pristine base client (`remote.md` §D5); with
     *build* false, the `feed/` directory must already hold what the players
@@ -252,14 +303,22 @@ def publish(
         "listed": read_back["files"],
     }
 
+    # The signature is made here, over the record as the tree will carry it, and
+    # before the commit that adds it: a publish that cannot sign is a publish
+    # that must not happen at all.
+    signature, signed = _signature_of(
+        root, number, sign_mod.configured(release_key, project_mod.machine(root))
+    )
+
     marker = {
         "format": FORMAT,
         "release": int(number),
         "feed": feed_facts,
+        "signature": signed if signature else None,
         "at": journal_mod.now(at),
         "author": project_mod.author_name(root),
     }
-    commit = _commit(root, number, marker, at=at)
+    commit = _commit(root, number, marker, at=at, signature=signature)
     pushed = None
     if remote:
         _git(root, "push", str(remote), f"{BRANCH}:{BRANCH}")
@@ -273,6 +332,7 @@ def publish(
             "branch": BRANCH,
             "commit": commit,
             "remote": pushed,
+            "signed": signed["key"] if signature else None,
             "outcome": "ok",
         },
     )
@@ -281,6 +341,7 @@ def publish(
         "branch": BRANCH,
         "commit": commit,
         "feed": feed_facts,
+        "signature": signed if signature else None,
         "pushed": pushed,
         "fact": fact,
     }

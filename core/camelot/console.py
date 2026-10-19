@@ -43,7 +43,9 @@ from . import feed as feed_mod
 from . import installer
 from . import project as project_mod
 from . import publish as publish_mod
+from . import release as release_mod
 from . import remote as remote_mod
+from . import sign as sign_mod
 
 __all__ = [
     "AUDIT_FORMAT",
@@ -517,7 +519,9 @@ def _git_head(where: Path) -> tuple[str | None, str | None]:
     return result.stdout.strip(), None
 
 
-def _remote_doc(deploy, env_root, *, branch=publish_mod.BRANCH, problems=None) -> dict | None:
+def _remote_doc(
+    deploy, env_root, *, branch=publish_mod.BRANCH, release_key=None, problems=None
+) -> dict | None:
     """What the deploy checkout holds, and whether the environment has taken it
     (`remote.md` §D4). Read-only; the pull itself is the action."""
     if not deploy:
@@ -529,6 +533,8 @@ def _remote_doc(deploy, env_root, *, branch=publish_mod.BRANCH, problems=None) -
         "present": where.is_dir(),
         "head": None,
         "publish": None,
+        "signature": None,
+        "release_key": str(Path(str(release_key)).expanduser()) if release_key else None,
         "wanted": None,
         "applied": [],
         "pending": [],
@@ -552,6 +558,15 @@ def _remote_doc(deploy, env_root, *, branch=publish_mod.BRANCH, problems=None) -
         "at": marker.get("at"),
         "author": marker.get("author"),
     }
+    # What the branch carries, read without running ssh-keygen on every page: the
+    # check itself is the pull's (`remote.md` §D7), and it is the one that refuses.
+    number = int(marker.get("release") or 0)
+    if number:
+        record = release_mod.record_path(where, number)
+        found["signature"] = {
+            "present": record.with_name(record.name + sign_mod.SIGNATURE).is_file(),
+            "signed_by": (marker.get("signature") or {}).get("key"),
+        }
     if env_root is None:
         return found
     try:
@@ -590,6 +605,7 @@ def live(
     allow_restart: bool = False,
     audit=None,
     deploy=None,
+    release_key=None,
     log_lines: int = LOG_LINES,
 ) -> dict:
     """What is live on one environment, read from the Installer's state.
@@ -709,7 +725,7 @@ def live(
             # asked, and still applied: the Installer's step has not run yet
             "pending": [number for number in asked if number in recorded],
         },
-        "remote": _remote_doc(deploy_dir, root, problems=problems),
+        "remote": _remote_doc(deploy_dir, root, release_key=release_key, problems=problems),
         "audit": _audit_doc(audit, problems),
         "channel": CHANNEL,
         "problems": problems,
@@ -1059,8 +1075,32 @@ def _page_remote(document: dict) -> str:
             f'<p>published release <strong>{int(publish["release"]):04d}</strong> · '
             f'feed v{_e(feed.get("version"))} · {_e(publish.get("at"))}</p>'
         )
+        if remote.get("release_key"):
+            signature = remote.get("signature") or {}
+            signed = (
+                f'<code>{_e(signature.get("signed_by"))}</code>'
+                if signature.get("signed_by")
+                else "a key this Console has not seen"
+            )
+            if signature.get("present"):
+                found.append(
+                    f'<p>signature: signed by {signed} — checked against '
+                    f'<code>{_e(remote["release_key"])}</code> before anything is handed '
+                    "over.</p>"
+                )
+            else:
+                found.append(
+                    '<p class="warn">signature: this publish carries none, and this Console '
+                    "has a release key — Pull will refuse it.</p>"
+                )
     else:
         found.append('<p class="empty">No publish.json in the checkout.</p>')
+    if not remote.get("release_key"):
+        found.append(
+            '<p class="warn">signature: not checked. This Console has no release key, so it '
+            "trusts whatever the branch carries. Set <code>--release-key</code> (the "
+            "operator's <code>.pub</code>) to refuse a release nobody signed.</p>"
+        )
     wanted = (remote.get("wanted") or {}).get("releases") or []
     if wanted:
         applied = remote.get("applied") or []
@@ -1233,6 +1273,7 @@ class _ConsoleState:
         root=None,
         deploy=None,
         remote: str | None = None,
+        release_key: str | None = None,
         feed=None,
         token: str | None = None,
     ) -> None:
@@ -1244,6 +1285,7 @@ class _ConsoleState:
         self.root = Path(str(root)).expanduser() if root else None
         self.deploy = Path(str(deploy)).expanduser() if deploy else None
         self.remote = remote
+        self.release_key = release_key
         self.feed = Path(str(feed)).expanduser() if feed else None
         self.token = token or secrets.token_urlsafe(32)
         self.lock = threading.Lock()
@@ -1481,6 +1523,7 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
                         state.env,
                         remote=state.remote,
                         feed=state.feed,
+                        release_key=state.release_key,
                         by=audit_user,
                     )
                 except (remote_mod.PullError, project_mod.ProjectError) as error:
@@ -1489,9 +1532,15 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
                         return self._json({"ok": False, "error": audit_error}, status=500)
                     return self._redirect("pull", "error")
                 feed_files = report["feed"]["files"] if report["feed"] else 0
+                signature = report["signature"]
                 detail = (
                     f"release {report['release']:04d} · wrote {len(report['wrote'])} · "
-                    f"feed {feed_files}"
+                    f"feed {feed_files} · "
+                    + (
+                        f"signed {signature['key'] or 'yes'}"
+                        if signature["checked"]
+                        else "unsigned (no release key)"
+                    )
                 )
                 error = self._audit(action="pull", result="pulled", detail=detail)
                 if error:
@@ -1528,6 +1577,7 @@ def server_for(
     root=None,
     deploy=None,
     remote: str | None = None,
+    release_key: str | None = None,
     feed=None,
     token: str | None = None,
 ) -> ConsoleServer:
@@ -1562,6 +1612,7 @@ def server_for(
         root=root,
         deploy=deploy,
         remote=remote,
+        release_key=release_key,
         feed=feed,
         token=token,
     )
@@ -1589,6 +1640,7 @@ def serve(
     root=None,
     deploy=None,
     remote: str | None = None,
+    release_key: str | None = None,
     feed=None,
     token: str | None = None,
 ) -> int:
@@ -1606,6 +1658,7 @@ def serve(
         root=root,
         deploy=deploy,
         remote=remote,
+        release_key=release_key,
         feed=feed,
         token=token,
     )
@@ -1633,6 +1686,7 @@ def run(
     audit=None,
     deploy=None,
     deploy_remote=None,
+    release_key=None,
     feed_out=None,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
@@ -1645,7 +1699,9 @@ def run(
     *allow_restart* is set, and then need an API and a writable audit path.
     *deploy* is the checkout of the deploy branch: with it (and *env*), the
     Console can pull (`remote.md` §D4); *feed_out* is the directory the feed
-    service serves, mirrored by the pull."""
+    service serves, mirrored by the pull. *release_key* is the operator's public
+    key: with it, a pull refuses a release whose signature does not check out
+    (`remote.md` §D7)."""
     if not root:
         raise ConsoleError("--root is required: the environment folder (client/ + server/)")
     audit_path = Path(audit).expanduser() if audit else default_audit_path(root)
@@ -1662,6 +1718,7 @@ def run(
             allow_restart=allow_restart,
             audit=audit_path,
             deploy=deploy,
+            release_key=release_key,
         )
 
     return serve(
@@ -1678,6 +1735,7 @@ def run(
         root=root,
         deploy=deploy,
         remote=deploy_remote,
+        release_key=release_key,
         feed=feed_out,
         token=token,
     )
@@ -1708,6 +1766,7 @@ def main() -> int:
             audit=os.environ.get("CAMELOT_CONSOLE_AUDIT") or None,
             deploy=os.environ.get("CAMELOT_CONSOLE_DEPLOY") or None,
             deploy_remote=os.environ.get("CAMELOT_CONSOLE_DEPLOY_REMOTE") or None,
+            release_key=os.environ.get("CAMELOT_CONSOLE_RELEASE_KEY") or None,
             feed_out=os.environ.get("CAMELOT_CONSOLE_FEED_OUT") or None,
             host=os.environ.get("CAMELOT_CONSOLE_HOST") or DEFAULT_HOST,
             port=port,

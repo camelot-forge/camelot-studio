@@ -24,6 +24,7 @@ from . import pipeline as pipeline_mod
 from . import project as project_mod
 from . import publish as publish_mod
 from . import release as release_mod
+from . import sign as sign_mod
 
 __all__ = ["FORMAT", "PullError", "pull", "read_wanted", "wanted_path", "write_wanted"]
 
@@ -117,6 +118,47 @@ def _verify(deploy: Path, record: dict) -> list[tuple[str, str]]:
     return found
 
 
+def _check_signature(deploy: Path, number: int, key) -> dict:
+    """Who signed the release record, checked **before** its hashes are believed
+    (`remote.md` §D7).
+
+    The hashes travel in the same commit as the artifacts they describe, so on
+    their own they prove nothing about a branch somebody else wrote. This is the
+    step that makes them mean something, and it runs first for that reason.
+
+    No key configured is not a refusal: it is the state every server was in
+    before there was a key, and it is reported rather than hidden, so a Console
+    can say that this server does not check who signed a release.
+    """
+    record = release_mod.record_path(deploy, number)
+    if key is None:
+        return {
+            "checked": False,
+            "key": None,
+            "why": "no release key is configured: this server does not check who signed "
+            "a release",
+        }
+    if not record.is_file():
+        raise PullError(f"{record}: no release record to check a signature against")
+    signature = record.with_name(record.name + sign_mod.SIGNATURE)
+    if not signature.is_file():
+        raise PullError(
+            f"release {int(number):04d}: the branch carries no {signature.name} — this "
+            "server checks who signed a release, so an unsigned one is refused "
+            "(`remote.md` §D7)"
+        )
+    try:
+        found = sign_mod.verify(key, record.read_bytes(), signature.read_bytes())
+    except sign_mod.SignError as error:
+        raise PullError(str(error)) from error
+    if not found["ok"]:
+        raise PullError(
+            f"release {int(number):04d}: the signature does not check out against "
+            f"{Path(key).expanduser()} ({found['why']}) — refusing to hand it over"
+        )
+    return {"checked": True, "key": found["key"], "why": ""}
+
+
 def _handover(deploy: Path, env_root: Path, record: dict, files: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
     """The server half into `<env>/server/camelot/releases/NNNN/` — the same
     destination Deploy writes on a local environment (`R §D5`). A file the
@@ -173,16 +215,21 @@ def pull(
     remote=None,
     branch=publish_mod.BRANCH,
     feed=None,
+    release_key=None,
     by="pull",
     at=None,
 ) -> dict:
-    """Fetch the deploy branch, verify the newest publish, hand its server half
-    over and mark it wanted. Nothing is applied here (`S §D1`).
+    """Fetch the deploy branch, check who signed the newest publish, verify its
+    hashes, hand its server half over and mark it wanted. Nothing is applied here
+    (`S §D1`).
 
     *deploy* is the checkout of the deploy branch — a project, with this
     machine's `machine.json` naming the environment. *remote* fetches and
     fast-forwards it first; without one, the checkout is used as it stands.
     *feed* mirrors the pulled feed into the directory the service serves.
+    *release_key* is the operator's public key; without one, `machine.json`'s
+    `release_key` is used, and without either the release is handed over
+    unsigned — reported, never hidden (`remote.md` §D7).
     """
     deploy = Path(deploy).expanduser()
     project = project_mod.load(deploy)
@@ -221,6 +268,11 @@ def pull(
         raise PullError(f"{marker_path}: names no release")
     record = release_mod.load(deploy, number)
 
+    # Who signed it, then whether the bytes are the ones it names: the hashes
+    # only mean something once the record they are written in is trusted.
+    signature = _check_signature(
+        deploy, number, sign_mod.configured(release_key, project_mod.machine(deploy))
+    )
     files = _verify(deploy, record)
     env_root = pipeline_mod.folder(project, env)
     written, unchanged = _handover(deploy, env_root, record, files)
@@ -244,6 +296,7 @@ def pull(
         "branch": branch,
         "head": head,
         "fetched": fetched,
+        "signature": signature,
         "wrote": written,
         "unchanged": unchanged,
         "wanted": str(wanted),
