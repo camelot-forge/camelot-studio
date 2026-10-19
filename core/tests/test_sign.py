@@ -19,10 +19,21 @@ pytestmark = pytest.mark.skipif(
 RECORD = b'{\n "format": "camelot.release/1",\n "number": 7\n}\n'
 
 
-def _key(where: Path, name: str = "release") -> Path:
+def _key(where: Path, name: str = "release", passphrase: str = "") -> Path:
     """A real Ed25519 key pair, the way an operator makes one."""
     subprocess.run(
-        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "camelot", "-f", str(where / name)],
+        [
+            "ssh-keygen",
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            passphrase,
+            "-C",
+            "camelot",
+            "-f",
+            str(where / name),
+        ],
         capture_output=True,
         check=True,
     )
@@ -111,3 +122,43 @@ def test_the_same_record_signs_to_the_same_bytes(tmp_path):
     key = _key(tmp_path)
 
     assert sign.sign(key, RECORD) == sign.sign(key, RECORD)
+
+
+def _askpass(tmp_path: Path, passphrase: str) -> Path:
+    """The door OpenSSH uses to ask for a passphrase when it has no terminal —
+    the same one `ssh-add` and every git-over-ssh setup uses."""
+    where = tmp_path / "askpass.sh"
+    where.write_text(f"#!/bin/sh\necho {passphrase}\n", encoding="utf-8")
+    where.chmod(0o755)
+    return where
+
+
+def test_a_key_with_a_passphrase_signs_when_ssh_keygen_can_ask(tmp_path, monkeypatch):
+    """A protected key is the careful choice, so it has to work. This is what the
+    message being signed from a *file* buys: stdin stays free for the question."""
+    key = _key(tmp_path, "protected", passphrase="hunter2")
+    monkeypatch.setenv("SSH_ASKPASS", str(_askpass(tmp_path, "hunter2")))
+    monkeypatch.setenv("SSH_ASKPASS_REQUIRE", "force")
+
+    signature = sign.sign(key, RECORD)
+
+    assert sign.verify(tmp_path / "protected.pub", RECORD, signature)["ok"] is True
+
+
+def test_a_key_with_a_passphrase_and_nowhere_to_ask_is_named(tmp_path, monkeypatch):
+    """The failure an operator actually meets — a publish from a job, a key they
+    protected — arrives as `ssh_askpass: exec(/usr/bin/ssh-askpass): No such file
+    or directory`, which names a program nobody installed and not the key."""
+    key = _key(tmp_path, "protected", passphrase="hunter2")
+    for name in ("SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "SSH_AUTH_SOCK"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(sign.SignError) as raised:
+        sign.sign(key, RECORD)
+
+    said = str(raised.value)
+    assert "protected by a passphrase" in said
+    assert "ssh-add" in said
+    assert "a key without a passphrase" in said
+    # and not the name of a program that is not installed
+    assert "ssh-askpass" not in said

@@ -15,6 +15,13 @@ format is OpenSSH's SSHSIG, which is Ed25519 for an ed25519 key
 What is signed is the **release record**, never the payloads: `release.json`
 carries the sha256 of the pack, of `rows.json` and of the client patchlist, so
 one signature covers the release and every file it names.
+
+A key protected by a passphrase works, and the message is signed from a scratch
+file rather than in on stdin for that reason: `ssh-keygen -Y sign -` reads the
+message from stdin, which leaves it nowhere to ask. What does not work is a
+passphrase with no terminal and no askpass helper, which is a publish from a job.
+That failure is translated rather than passed through, because `ssh-keygen`
+answers it with the name of a program nobody has installed.
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ __all__ = [
     "ENV_KEY",
     "NAMESPACE",
     "PRINCIPAL",
+    "RECORD",
     "SIGNATURE",
     "SignError",
     "available",
@@ -40,6 +48,11 @@ __all__ = [
 #: The signature's own name: `<file>.sig`, beside the file it signs. OpenSSH's
 #: own convention, and what `ssh-keygen -Y verify -s` is pointed at.
 SIGNATURE = ".sig"
+
+#: The name the message is given in the scratch directory it is signed from.
+#: `ssh-keygen` never puts it in the signature; the name is for the reader of a
+#: log line.
+RECORD = "release.json"
 
 #: Part of the signed data, so a signature made for another purpose does not
 #: verify here — which is the point of naming one.
@@ -122,22 +135,57 @@ def sign(key, data: bytes, *, namespace: str = NAMESPACE) -> bytes:
     """The detached signature over *data*, by the key at *key*.
 
     *key* is a private key file, or the `.pub` of one held by `ssh-agent` — the
-    two things `ssh-keygen -f` accepts, unchanged. The message goes in on stdin
-    and the signature comes out on stdout, so nothing is written beside the record
-    it signs and a second signature never meets an overwrite prompt.
+    two things `ssh-keygen -f` accepts, unchanged.
+
+    The message goes to a scratch file rather than in on stdin, and that is not
+    an implementation detail. `ssh-keygen -Y sign` reads the message from stdin
+    when it is given `-`, which leaves nowhere to ask for a passphrase: a key
+    protected by one fails with `ssh_askpass: exec(/usr/bin/ssh-askpass): No such
+    file or directory`, naming a program the operator has never heard of. Signing
+    a file leaves stdin free, so the prompt reaches the terminal. The scratch
+    directory also means the signature never meets the `Overwrite (y/n)?`
+    prompt, which reads from the terminal and would hang a publish that has none.
+
+    Neither the file's name nor the way it was handed over enters the signature
+    (measured 2026-10-19: the same bytes sign identically either way), so a
+    release signed before this was written verifies unchanged.
     """
     where = Path(key).expanduser()
     if not where.is_file():
         raise SignError(
             f"{where}: no key there — `machine.json`'s release_key names this desk's own"
         )
-    result = _run(["-Y", "sign", "-f", str(where), "-n", namespace, "-"], data=data)
-    if result.returncode != 0:
-        detail = _lines(result)
-        raise SignError(
-            f"ssh-keygen -Y sign: {detail[0] if detail else f'exited {result.returncode}'}"
+    with tempfile.TemporaryDirectory(prefix="camelot-sign-") as scratch:
+        message = Path(scratch) / RECORD
+        message.write_bytes(data)
+        result = _run(["-Y", "sign", "-f", str(where), "-n", namespace, str(message)])
+        if result.returncode != 0:
+            raise SignError(_sign_refusal(where, result))
+        return message.with_name(message.name + SIGNATURE).read_bytes()
+
+
+def _sign_refusal(where: Path, result: subprocess.CompletedProcess) -> str:
+    """What `ssh-keygen` said, said again so an operator can act on it.
+
+    One failure is worth translating. A key protected by a passphrase, with no
+    terminal to prompt on and no `ssh-askpass` installed, answers
+    `ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory` — which
+    names a program nobody has heard of, and not the key that was protected. The
+    raw line is dropped rather than quoted: once the message says what happened,
+    echoing it only buries the three ways out.
+    """
+    text = (result.stderr or result.stdout).decode("utf-8", "replace")
+    detail = _lines(result)
+    said = detail[0] if detail else f"exited {result.returncode}"
+    if "askpass" in text:
+        return (
+            f"{where}: this key is protected by a passphrase and ssh-keygen had nowhere "
+            f"to ask for it. Publish from a terminal, load the key into an agent "
+            f"(`ssh-add {where}`), or use a key without a passphrase"
         )
-    return result.stdout
+    if "passphrase" in text:
+        return f"{where}: ssh-keygen refused the passphrase ({said})"
+    return f"ssh-keygen -Y sign: {said}"
 
 
 def verify(
