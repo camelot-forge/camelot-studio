@@ -13,6 +13,12 @@ import sys
 from camelot import launcher
 
 
+def _say(message: str) -> None:
+    """A windowed build has no stderr: the message would otherwise raise."""
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="camelot-launcher",
@@ -34,7 +40,7 @@ def main(argv=None) -> int:
         settings = launcher.read_settings(args.settings)
         shard = launcher.read_shard(args.shard)
     except launcher.LauncherError as error:
-        print(f"error: {error}", file=sys.stderr)
+        _say(f"error: {error}")
         return 1
     settings = launcher.configure(
         settings,
@@ -56,7 +62,7 @@ def main(argv=None) -> int:
             open_browser=not args.no_open,
         )
     except (launcher.LauncherError, OSError) as error:
-        print(f"error: {error}", file=sys.stderr)
+        _say(f"error: {error}")
         return 1
 
 

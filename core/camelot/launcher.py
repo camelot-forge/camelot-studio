@@ -900,7 +900,8 @@ def serve(settings: dict, *, page, host: str = "127.0.0.1", port: int = 8710, op
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(seen)).start()
     shard = state(settings).get("shard") or {}
-    print(f"camelot launcher · {shard.get('shard') or 'no feed'} · {seen}")
+    if sys.stdout is not None:
+        print(f"camelot launcher · {shard.get('shard') or 'no feed'} · {seen}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

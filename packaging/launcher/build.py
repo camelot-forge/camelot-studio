@@ -85,6 +85,13 @@ def main(argv=None) -> int:
         "--onedir",
         "--name",
         NAME,
+    ]
+    if sys.platform == "win32":
+        # A player double-clicks the launcher: a console window would sit beside
+        # the page. The error paths say their piece in the event log or in the
+        # page; a windowed build has no stderr to write to.
+        command.append("--windowed")
+    command += [
         "--paths",
         str(STUDIO / "core"),
         "--add-data",
