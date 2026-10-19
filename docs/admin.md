@@ -437,6 +437,15 @@ Output: `packaging/dist/camelot-launcher/` (the binary, `_internal/`, and
 The game's address comes from the feed's `launcher.json`, and the feed service
 writes both on the way out.
 
+A shard that publishes launcher packages adds `--launcher https://patch.example/launcher/`
+and bumps `--version` for every hand-out. The operator copies
+`packaging/dist/camelot-launcher-<platform>.zip` and
+`packaging/dist/launcher-manifest.json` to that URL. The page then offers
+**Restart and update**: the launcher stages the package beside its own folder,
+waits for the process to exit, renames the install to `.old-<version>`, moves
+the staged folder in, starts the new process, and removes the old folder. A
+failed move restores it.
+
 Hand out: the launcher package and the client. The client is the shard's own
 business (the game is not redistributable). Every player has to start from the
 **same base client** the desk fingerprints in `project.json`, because the feed

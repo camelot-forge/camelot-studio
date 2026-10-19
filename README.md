@@ -75,8 +75,17 @@ client and starts the game. A distributed launcher carries `shard.json` beside
 the executable:
 
 ```json
-{ "name": "Camelot Hills", "feed": "https://patch.example/" }
+{
+  "name": "Camelot Hills",
+  "feed": "https://patch.example/",
+  "launcher": "https://patch.example/launcher/"
+}
 ```
+
+`launcher` is where the launcher's own zip and manifest are published. The page
+shows **Restart and update** when the manifest carries a greater version than
+the package's `version.txt`. The build writes the key from
+`packaging/launcher/build.py --launcher …`.
 
 `--feed` and `--server` override the feed's own values for a development run.
 `Play` is refused while the client is behind the feed.

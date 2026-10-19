@@ -11,11 +11,15 @@ cd web/launcher && pnpm install && pnpm build   # the page, if it changed
 cd ../.. && .venv/bin/python packaging/launcher/build.py \
   --name "Camelot Hills" \
   --feed "http://127.0.0.1:8080/" \
+  --launcher "http://127.0.0.1:8090/launcher/" \
   --version 1
 ```
 
 `--version` is the launcher's own version: a package carrying a greater one is
 what replaces a player's (`deployment.md` §D7), so it only moves forward.
+`--launcher` is optional. It names the directory where the zip and the
+`launcher-manifest.json` are published; without it, the launcher has no
+self-update.
 
 Output:
 
@@ -55,10 +59,17 @@ A shard that publishes launcher packages adds a `launcher` URL:
 ```
 
 That directory holds the zip `build.py` wrote and the `launcher-manifest.json`
-beside it. The launcher reads the manifest at start-up, takes the package only
-when its version is greater than `version.txt`'s, checks the SHA-256, and stages
-it under `update/`; the swap itself happens after the process exits
-(`deployment.md` §D6-§D8). Without the `launcher` URL there is no self-update.
+beside it. The page reads the manifest, shows **Restart and update** when the
+manifest's version is greater than `version.txt`'s, checks the SHA-256, and
+stages the package in `<install parent>/update/<version>/`
+(`deployment.md` §D6-§D8).
+
+**Restart and update** writes `swap-launcher-<pid>.sh` (or `.bat`) beside the
+install and stops the process. The script waits for the pid to disappear,
+renames the install folder to `<name>.old-<version>`, moves the staged folder
+into place, starts the new launcher with the same command line plus
+`--no-open`, and removes the old folder. A failed move restores the old folder.
+The page polls until the new process answers, then reloads.
 
 ## Run
 
