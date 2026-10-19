@@ -903,7 +903,7 @@ def test_a_removals_record_carries_a_timestamp_as_text(tmp_path, client):
     # naive `datetime` for it. That is the value the record has to survive.
     from datetime import datetime
 
-    stamp = datetime(2026, 10, 18, 16, 15, 53)  # noqa: DTZ001
+    stamp = datetime(2026, 10, 18, 16, 15, 53)
     project, env_root, server = _applied(
         tmp_path,
         client,
