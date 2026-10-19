@@ -86,13 +86,12 @@ the pack, the rows and the client patchlist — a mismatch is refused;
 client half stays in the feed;
 4. writes `<env>/server/camelot/wanted.json` — the ask, for the Installer;
 5. mirrors the pulled `feed/` into the directory the feed service serves
-(files are added or replaced, never removed);
+(files are added or replaced);
 6. writes one audit line.
 
-The pull **does not apply rows**: the Installer does (`S §D1`). On the server,
-that is `camelot env apply <env>` (in a `camelot-core` job until the C#
-Installer exists); the Console's page shows the wanted release as `pending`
-until the state file records it.
+The pull **hands over and stops**; the Installer applies the rows (`S §D1`). On a
+server that is `camelot env apply <env>`, or the C# plugin at boot; the Console's
+page shows the wanted release as `pending` until the state file records it.
 
 ## Reverse (7e)
 
@@ -104,7 +103,7 @@ first, then applies what is handed over, and clears the file.
 
 It is a **repair**, not a rollback (`S §D17`): the rows the release changed go
 back, the release leaves the state and the environment's folder — a pull is what
-puts it back — but the feed never goes back, so a player whose launcher already
+puts it back — but the feed moves forward, so a player whose launcher already
 took that release's client half keeps it. Use it in the hours after a bad apply;
 anything the players have already seen is undone by a new release.
 
@@ -132,8 +131,8 @@ CAMELOT_FEED_SOURCE=/srv/forge/feed
 ```
 
 Host networking is Linux-native; on Docker Desktop, run the Console from the
-checkout or bind OpenDAoC's API wider. The Console reads the server's folder
-and nothing else: no database, no write path into the environment.
+checkout or bind OpenDAoC's API wider. The Console reads the environment and
+writes two asks: the handover and the reversal. It holds no database handle.
 
 ## Player counts
 

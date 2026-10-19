@@ -77,9 +77,9 @@ which is the supervisor here.
 ./camelot.sh logs             # the game server's output
 ```
 
-`reverse` is refused while a later release is applied, and it does not undo the
-players' side: the feed never goes back, so anything already seen is undone by a
-new release (`S §D17`).
+`reverse` is refused while a later release is applied, and it repairs the server
+only: the feed moves forward, so anything already seen is undone by a new release
+(`S §D17`).
 
 The job mounts the checkout read-write (a pull is the Console's, but a fallback
 should not need a different container), the environment folder read-write — the
@@ -102,7 +102,7 @@ docker compose up -d core
 ```
 
 A new emulator reads the same database; the schema it expects is OpenDAoC's own,
-and a release never writes a table the project does not own (`S §D4`).
+and a release writes only a table the project owns (`S §D4`).
 
 ## What to back up
 

@@ -35,6 +35,30 @@ fixes**:
 - Worked examples of that rule (what was wrong, what replaced it):
   `workspace/notes/ui-modernization.md` § Copy.
 
+### One fact per sentence (mandatory, documents and UI copy)
+
+Apply one test to every sentence: **what does the reader know, or what can they
+do, after reading it that they could not before?** If the answer is nothing,
+delete the sentence. Four patterns fail that test every time:
+
+- **Slogans and scene-setting openers.** "From two empty machines to a shard
+  whose players update themselves" is a tagline. Start with the first thing the
+  reader has to do.
+- **Negations that only deny.** "The desk never reaches the server, and the
+  server never reaches the desk." "The Windows package is the players' launcher,
+  not the studio." State what is: "The studio runs on Linux and macOS." A
+  negation earns its place only when the reader would otherwise act on the wrong
+  assumption, and that mistake costs them something.
+- **The project's history.** Documents describe the system as it is today: not
+  what it used to do, not what it stopped asking for, not which behaviour
+  changed. Git history, `workspace/blog.md` and the specs carry that.
+- **What the reader does not have to do.** "The launcher never asks for a URL"
+  tells them nothing; if the tool does not ask, there is nothing to say. Say what
+  it asks for, or say nothing at all.
+
+This covers `README.md`, `docs/`, the per-directory READMEs, CLI help text and
+the web UI's copy alike.
+
 ## Testing (TDD by default)
 
 - **Every new feature must ship with tests** — write the test first when

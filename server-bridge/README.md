@@ -16,9 +16,8 @@ one project per server that arbitration is unnecessary, and the Installer is
 that design with the mod host removed — but three of its ideas survive intact,
 and the READMEs of both say which (`mod-loader.md`).
 
-The server does not need to know the client's formats: it references model
-IDs and consumes declarative rows; the client resolves the rest through its
-own tables.
+The server works from model IDs and declarative rows; the client resolves the
+rest through its own tables.
 
 The admin Console is a separate app on the server, sharing the Installer's state
 file.

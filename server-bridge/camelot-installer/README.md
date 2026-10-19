@@ -36,17 +36,15 @@ it. Everything after it is the folder.
    Each reversal writes `reversed/NNNN/reversed.json`, takes the release out of
    `state.json`, deletes `releases/NNNN/` (the folder *is* the ask, which is why
    a pull puts it back) and drops it from `wanted.json`. An ask that names a
-   release which is not applied any more is skipped and said so: a stale ask is
-   not a broken environment;
+   release which is not applied any more is skipped and said so;
 2. **then what is handed over** — every `releases/NNNN/` the state does not
    record, oldest first. A release's rows go to `state.json` and
    `applied/NNNN/applied.json` when they land.
 
 ## What it guarantees
 
-- **One writer.** Nothing else in the suite opens a server's database: the
-  Console writes files, Deploy hands over a folder, the Studio never talks to a
-  server (§D1).
+- **One writer.** The Console writes files, Deploy hands over a folder, and the
+  Studio's work stays on the desk (§D1).
 - **A failure never stops the server.** `UpdateDatabase()` treats a thrown
   exception as fatal — the server refuses to boot, which under
   `restart: unless-stopped` is a crash loop — so every failure is caught and
@@ -70,7 +68,7 @@ it. Everything after it is the folder.
 - **A removal keeps the whole row**, so reversing it re-inserts the row rather
   than a guess (§D14, §D17).
 
-## What it does not do
+## Where it stops
 
 - **No reload, no restart.** `needs.reload` and `needs.restart` are in-game admin
   commands (`/reload doors`, `/reload mob`) — a release *names* the ritual, a

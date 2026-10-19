@@ -22,12 +22,10 @@ by a player's launcher. Every path and number below is from that walk.
 | **Console** | the server | the running server's face: what is applied, what is wanted, Pull, Restart (`camelot console`) |
 | **Installer** | the server | the only writer of the server's own rows (`camelot env apply`, or the C# plugin at boot) |
 
-One more piece, which is not an admin surface: the **players' launcher** is a
-package you hand out (§7). The player never types a URL.
+The **players' launcher** is a package you hand out (§7).
 
-The desk never reaches the server, and the server never reaches the desk. What
-travels between them is a git branch (`camelot-deploy`, §6) and the players'
-HTTP traffic.
+What travels between the two machines is a git branch (`camelot-deploy`, §6) and
+the players' HTTP traffic.
 
 ## 2. The desk
 
@@ -38,17 +36,17 @@ One folder holds the whole content of one shard:
 ```text
 forge-project/
 ├── project.json          the shard's identity: its name, its base build, its environments
-├── machine.json          this machine's own answers (never committed)
+├── machine.json          this machine's own answers
 ├── journal/              the edit history — the source of every release
-├── releases/NNNN/        release.json + server/ + client/ (the payloads; never committed)
-├── feed/                 what the players' launcher reads (never committed)
+├── releases/NNNN/        release.json + server/ + client/ (the payloads)
+├── feed/                 what the players' launcher reads
 └── deploy/log.jsonl      one line per release, deploy, apply, reload, publish
 ```
 
-`project.json` is committed, `machine.json` is not: a teammate writes their own
-paths and nothing else changes. `releases/*/server/`, `releases/*/client/` and
-`feed/` are derived — a release is reproducible from the journal plus the base
-client, which is what `camelot project verify --rebuild N` asserts.
+Git carries `project.json`, `journal/` and `deploy/log.jsonl`. A teammate clones
+the project and writes their own `machine.json`. The three derived folders are
+rebuilt: a release comes back from the journal plus the base client, which is
+what `camelot project verify --rebuild N` asserts.
 
 ### `machine.json`
 
@@ -97,8 +95,8 @@ Give it the **pristine base** — the client as a player receives it, before any
 mod — and `feed/` is a complete snapshot: any player on that base downloads
 exactly what changed. Give it a working client and the feed holds only the
 newest release's files, and it stays correct only because the directory
-accumulates. Keep one clean copy (`/home/you/daoc/clean-client`) and never
-edit it; the tool refuses nothing here, it just does the wrong thing quietly.
+accumulates. Keep one clean copy (`/home/you/daoc/clean-client`) and edit
+nothing in it. A working client as the source gives a feed that is quietly wrong.
 
 ### The environments
 
@@ -128,29 +126,28 @@ ours:
 └── client/               only on a desk; a server-only environment has none
 ```
 
-`state.json` is the single truth every other surface reads. Nothing else on the
-server keeps a copy of "what is applied" — not the Console, not the feed.
+`state.json` is the single truth every other surface reads.
 
 ### Who writes the rows
 
-Two ways to run the Installer on a server. The choice changes nothing else: the
-folder, the documents and the Console's calls are the same either way.
+Two ways to run the Installer on a server; the folder, the documents and the
+Console's calls are the same either way.
 
 - **the `camelot-core` job** (`deploy/server/`): the desk's own `camelot env
   apply`, in a container, run by hand or by `camelot.sh`. It provisions and
   verifies too, which is why it stays on a fresh machine;
 - **the C# plugin** (`server-bridge/camelot-installer/`): copied once into the
-  server's script folder, compiled by the server at boot, run by it. Nothing has
-  to be asked to apply a release, and a release that fails is recorded instead of
-  stopping the boot.
+  server's script folder, compiled by the server at boot, run by it. It applies a
+  release without being asked, and records a failure instead of stopping the boot.
 
 The plugin is a manual step, once: the server compiles its scripts *before* any
 hook runs, so a release cannot carry it.
 
 ```sh
-cp -r server-bridge/camelot-installer /srv/forge/env/server/scripts/
+mkdir -p /srv/forge/env/server/scripts/camelot-installer
+cp server-bridge/camelot-installer/*.cs /srv/forge/env/server/scripts/camelot-installer/
 # and add Newtonsoft.Json to <ScriptAssemblies> in config/serverconfig.xml
-systemctl restart camelot-server
+docker compose restart core          # or systemctl restart camelot-server
 ```
 
 It reads `<server>/camelot/` by default; the server property
@@ -180,7 +177,7 @@ pull, one player.
 ```
 
 Open `/world`, select the keep, move it. Every edit lands in the project's
-journal as an operation — never as a silent file write.
+journal as an operation.
 
 ### 4.2 Release
 
@@ -241,26 +238,26 @@ camelot project publish 1 --dir ~/daoc/forge-project --remote origin
 ```
 
 It commits `releases/0001/**`, `feed/**` and a `publish.json` marker to the
-`camelot-deploy` branch and pushes it. Your working branch and its index are
-never touched — the commit is built with git's plumbing, so this is safe with
-uncommitted work in the tree. The deploy log gains one `publish` line.
-
-Nothing else on the desk changes. The content branch (your `main`) is where you
-version your work; `camelot-deploy` is the transport.
+`camelot-deploy` branch and pushes it. The commit is built with git's plumbing,
+so your working branch and its index stay as they are, and a publish is safe with
+uncommitted work in the tree. The deploy log gains one `publish` line. The
+content branch (your `main`) is where you version your work; `camelot-deploy` is
+the transport.
 
 ### 4.6 Pull, on the server
 
-Console → **Pull**. One action does five things and applies nothing:
+Console → **Pull**. The pull does five things and stops before the database:
 
 1. fetches the `camelot-deploy` branch and fast-forwards the checkout;
-2. recomputes the sha256 of the pack, the rows and the client patchlist and
-   refuses a mismatch by name;
-3. copies the **server half** into `<env>/server/camelot/releases/0001/` — the
-   client half stays in the feed and never lands on the server;
+2. checks the release's signature against the server's key, then recomputes the
+   sha256 of the pack, the rows and the client patchlist, and refuses a mismatch
+   by name;
+3. copies the **server half** into `<env>/server/camelot/releases/0001/`; the
+   client half goes to the feed;
 4. writes `wanted.json` — the ask, for the Installer;
 5. mirrors the pulled `feed/` into the directory the feed service serves
-   (files are added or replaced, never removed: a player behind still needs what
-   earlier publishes put there).
+   (files are added or replaced; a player behind still needs what earlier
+   publishes put there).
 
 The page then shows release 1 as **pending**, because nothing is applied yet.
 
@@ -285,9 +282,6 @@ it with what it installed, walks `patchlist-new.txt`, MD5s each local file and
 downloads only what differs — 25 KB here — then verifies what it wrote and
 enables Play. Play is refused while the client is behind the feed.
 
-The feed was already being served from the pull, so there was nothing to do
-for them.
-
 ## 5. A new local test server
 
 ```sh
@@ -309,8 +303,7 @@ camelot project open camelot-hills --db-config <root>/server/config/serverconfig
 ```
 
 `env provision` **drops and re-imports** the environment's database: it is what
-makes a local server the baseline plus your releases, and nothing else. It
-refuses without `--yes`.
+makes a local server the baseline plus your releases. It refuses without `--yes`.
 
 `env verify local` reads the whole thing back: the database's tables against the
 baseline's, the releases the state records against the rows it holds, the files
@@ -331,7 +324,7 @@ flowchart TD
     F --> J["feed mirrored<br/>players' launchers read it"]
 ```
 
-Two channels leave one release and they are not the same delivery:
+One release leaves by two channels, and they are different deliveries:
 
 | | Server channel | Players channel |
 |---|---|---|
@@ -340,20 +333,20 @@ Two channels leave one release and they are not the same delivery:
 | Who writes | the Installer alone | the publish build, then served as files |
 | When it takes effect | apply, then `/reload` or a restart | whenever each player's launcher reads it |
 
-Why the feed is not built on the server: a zone archive is rebuilt from the
-**base client** plus the changed entry, and a server has no client and will not
-get one. The feed is built where a client exists and travels as files.
+The feed is built on the desk, because a zone archive is rebuilt from the **base
+client** plus the changed entry and a server holds no client. The built files
+travel to the server.
 
 The one action the server can be told remotely is a **shutdown** (the Console's
 Restart, which needs a supervisor to bring the server back). `/reload`, messages
-and kicks are in-game GM commands; there is no console stdin. That boundary is
-measured, not assumed (`notes/console.md` §D5).
+and kicks are in-game GM commands; there is no console stdin
+(`notes/console.md` §D5).
 
 ### Who signed the release
 
 The branch travels over a git remote and lands on a machine you may not own. The
 hashes in `release.json` are recorded in the same commit as the files they
-describe, so they catch a half-copied file and nothing else: whoever can write
+describe, so they catch a half-copied file and nothing more: whoever can write
 the branch can rewrite both.
 
 A signature is what a server can check without trusting the branch. One key, on
@@ -365,8 +358,8 @@ ssh-keygen -t ed25519 -C camelot-release -f ~/daoc/keys/camelot-release
 ```
 
 `camelot project publish` then signs the release **record** — which carries the
-sha256 of every artifact, so one signature covers the whole release — and the
-signature rides in the branch beside it. Nothing appears in your working tree.
+sha256 of every artifact, so one signature covers the whole release — and adds
+the signature to the commit beside it.
 
 On the server, copy the `.pub` and name it:
 
@@ -385,16 +378,15 @@ error: release 0001: the signature does not check out against
 signature) — refusing to hand it over
 ```
 
-**A server with no key is not a server that fails.** It hands the release over
-and says so — `signed not checked — no release key is configured` — and the
-Console's page carries the same line. That is the state every server was in
-before there was a key, and the state to leave in a hurry: until you set one,
-the deploy key's scope is the whole trust boundary.
+**A server with no key still hands the release over**, and says so:
+`signed not checked — no release key is configured`, and the Console's page
+carries the same line. Until you set one, the deploy key's scope is the whole
+trust boundary.
 
 ### Going back
 
-There is no rollback verb, on purpose: the launcher's protocol only moves
-forward, so a step back **for the players** is a new release.
+There is no rollback verb: the launcher's protocol only moves forward, so a step
+back **for the players** is a new release.
 
 ```sh
 # on the desk: revert the change as a new operation, then
@@ -404,8 +396,8 @@ camelot project publish --remote origin
 ```
 
 The clients converge on N+1 like any other update, and nobody rewrites the
-`camelot-deploy` branch. The values a release replaced are in `state.json` —
-that is the evidence a reversal is written against, not a database backup.
+`camelot-deploy` branch. The values a release replaced are in `state.json`, and
+that is the evidence a reversal is written against.
 
 **On the server, `env reverse` is the repair.** It
 puts back the rows one release changed (a column to the value it had, a removed
@@ -418,18 +410,17 @@ camelot env reverse production --release 6  # or name one
 ```
 
 From the Console, the same thing without SSH: the page's **Reverse** button
-writes the ask (`<env>/server/camelot/reverse.json`) and the Installer's next run
-does the work — the Console never opens the database, so it cannot put a row back
-any more than it can write one. The page shows the ask as *asked* until the state
-stops recording the release, and `camelot env apply` honours it before it applies
-anything else.
+writes the ask (`<env>/server/camelot/reverse.json`), and the Installer's next run
+does the work. The Console writes asks; the database belongs to the Installer
+alone. The page shows the ask as *asked* until the state stops recording the
+release, and `camelot env apply` honours it before it applies anything else.
 
 It is refused while a **later** release is applied (its values would be written
-over), and it does **not** undo the players' side: a client whose launcher
-already took release N's half keeps it, and the feed never goes back. Use it
-in the hours after a bad apply, for a row that should never have been written
-or a release withdrawn before the players took it. Anything the players have
-already seen is undone by a new release (`server-install.md` §D17).
+over), and it repairs the server only: a client whose launcher already took
+release N's half keeps it, because the feed only moves forward. Use it in the
+hours after a bad apply, for a row that should have been written differently or a
+release withdrawn before the players took it. Anything the players have already
+seen is undone by a new release (`server-install.md` §D17).
 
 ## 7. What a player receives
 
@@ -442,9 +433,9 @@ cd web/launcher && pnpm build && cd ../..
 ```
 
 Output: `packaging/dist/camelot-launcher/` (the binary, `_internal/`, and
-`shard.json`) plus a zip. `shard.json` carries the shard's name and its feed URL
-and nothing else — the game's address comes from the feed's `launcher.json`, and
-the feed service writes both on the way out.
+`shard.json`) plus a zip. `shard.json` carries the shard's name and its feed URL.
+The game's address comes from the feed's `launcher.json`, and the feed service
+writes both on the way out.
 
 Hand out: the launcher package and the client. The client is the shard's own
 business (the game is not redistributable). Every player has to start from the
@@ -457,13 +448,13 @@ launcher remembers the client folder and the account in
 
 ## 8. A VPS
 
-The same five surfaces, with the desk's half left at home. What runs on the VPS:
+What runs on the VPS:
 
 | Container | What it is |
 |---|---|
 | `db` | MariaDB, the environment's database |
 | `core` | OpenDAoC, a **pinned** image |
-| `camelot-core` | a one-shot job: `camelot env apply` (the Installer, until the C# one exists) |
+| `camelot-core` | a one-shot job: `camelot env apply`, run by hand |
 | `feed` | `feedserve`: the feed directory, with the public URL and the game address rewritten per request |
 | `console` | the Console, host-networked so it can reach the game's API on `127.0.0.1:5000` |
 
@@ -485,7 +476,7 @@ deploy/server/camelot.sh api '<the api password>'
 deploy/server/camelot.sh restart         # the API host starts at boot
 ```
 
-What the VPS holds that is not in a container:
+What the VPS holds outside the containers:
 
 - the **environment folder** — `<env>/server/camelot/` is the part that matters
   and the part to back up;
@@ -514,8 +505,7 @@ path:
 ```
 
 The dry run then names the release's client half as the feed's and hands over
-only the server half, and `env verify` does not look for a client. Nothing else
-changes — the same release, the same numbers.
+only the server half, and `env verify` does not look for a client.
 
 ## 9. Backups
 

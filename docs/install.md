@@ -1,10 +1,7 @@
 # Installing Camelot Forge
 
-From two empty machines to a shard whose players update themselves. This is the
-way in; `docs/admin.md` is the runbook once it is done, and `deploy/README.md`
-maps the containers.
-
-Camelot Forge has five surfaces on two machines.
+Installs the desk and the server. `docs/admin.md` is the runbook once this is
+done, and `deploy/README.md` maps the containers.
 
 | Surface | Runs on | What it does |
 |---|---|---|
@@ -32,20 +29,18 @@ flowchart LR
     FEED --> PLAYERS["players' launchers"]
 ```
 
-The desk never reaches the server, and the server never reaches the desk. One
-git branch carries releases one way, and the players' HTTP traffic carries
-content the other.
+Releases reach the server as a git branch, `camelot-deploy`. Players' launchers
+fetch content over HTTP from the feed.
 
 ## 1. What you need
 
 ### The desk
 
-- Linux or macOS. The Windows package is the players' launcher, not the studio.
+- Linux or macOS.
 - Python 3.11 or later.
 - `git`, and OpenSSH 8.0 or later. `ssh -V` prints the version; 8.0 is where
   `ssh-keygen -Y` appears, which signs releases.
-- A DAoC client, the full install, unmodified. You keep two copies and only one
-  of them is ever edited (§2.2).
+- A DAoC client, the full install.
 - OpenDAoC's database checkout, if you want a local test server. It is the
   baseline `env provision` imports.
 
@@ -53,9 +48,8 @@ content the other.
 
 - A machine you can ssh into, with Docker or Podman and the compose plugin.
 - `git`, and a read-only deploy key on the project's repository.
-- A clone of the studio repository. The `camelot-core` job is **built**, from
-  `core/`, not pulled as an image, so the server needs the source and not just
-  the compose files.
+- A clone of the studio repository: the `camelot-core` job is built from `core/`,
+  so the server needs the source.
 - Two ports for the players (the game's TCP and UDP) and one for the feed
   behind TLS. The Console and the database stay on loopback.
 
@@ -84,19 +78,19 @@ export DAOC_CLIENT="$HOME/daoc/clean-client"    # add to ~/.bashrc or ~/.zshrc
 
 `project feed` and `project publish` stage a hardlinked copy of the client you
 name, apply **every** release's client half to it, and copy into `feed/` the
-files that no longer match the client they started from. Give them the pristine
-base and the feed is a complete snapshot: a player on that base downloads exactly
-what changed. Give them a client you have been playing from and the feed holds
-only the newest release's files, which stays correct by accident.
+files that no longer match it. Given the pristine base, the feed is a complete
+snapshot: a player on that base downloads exactly what changed. Given a client
+you have been playing from, the feed holds only the newest release's files and
+stays correct by accident.
 
-So keep two copies:
+Keep two copies:
 
 ```sh
 cp -a "/path/to/DAOC CLIENT" ~/daoc/clean-client     # never edit this one
 cp -a ~/daoc/clean-client ~/daoc/play-client         # play from this one
 ```
 
-The game client is about 5 GB and is not redistributable. Sync it between your
+The game client is about 5 GB and is not redistributable, so sync it between your
 machines however you sync large files.
 
 ### 2.3 The project
@@ -115,8 +109,8 @@ That writes `project.json` (the shard's identity, and the fingerprint of the bas
 client), the folder shape, `.gitignore`, `.gitattributes`, and a `machine.json`
 naming the client you passed.
 
-`machine.json` is the only file you edit by hand, and it is never committed: it
-carries this machine's paths. Fill in one entry per environment.
+`machine.json` carries this machine's paths and stays out of git. It is the only
+file you edit by hand; fill in one entry per environment.
 
 ```json
 {
@@ -138,8 +132,8 @@ carries this machine's paths. Fill in one entry per environment.
 }
 ```
 
-`"client": false` marks an environment **server-only**. A server has no client
-and never will, and this flag is what stops the dry run from looking for one.
+`"client": false` marks an environment **server-only**: the dry run then writes
+only the server half.
 
 `populate` records the resources your edits lean on: each zone's placements and
 its catalogue, and each client table whole. The three tables below are the ones
@@ -152,13 +146,13 @@ the editor reads rows out of, and they are the ones every client ships:
 .venv/bin/camelot project verify --dir ~/daoc/camelot-hills
 ```
 
-`verify` is the check to run when something feels wrong. It reads the base back
-against the fingerprints `project.json` recorded, and says which file moved.
+`verify` reads the base back against the fingerprints `project.json` recorded and
+says which file moved.
 
 ### 2.4 A local test server
 
-You cannot author safely against a live shard. Build the environment's own
-database from OpenDAoC's baseline instead, and patch a server that runs on it.
+Build the environment's own database from OpenDAoC's baseline, and patch a server
+that runs on it.
 
 ```sh
 .venv/bin/camelot env provision local --yes --dir ~/daoc/camelot-hills
@@ -179,9 +173,8 @@ Three things it needs from you:
   directory of the OpenDAoC-Database repository: the SQL the emulator's own
   schema comes from.
 - **an OpenDAoC build** in `<root>/server`, with its `config/serverconfig.xml`
-  pointing at the database `provision` created. Building the emulator is
-  OpenDAoC's business, not ours; what matters here is that the server's files sit
-  in `<root>/server/`, because that folder *is* the environment's server half.
+  pointing at the database `provision` created. That folder *is* the
+  environment's server half, so the server's files belong there.
 
 Put the server under a supervisor. The Console's **Restart** sends a shutdown, so
 without something to start it again that action is a stop.
@@ -217,7 +210,7 @@ state records against the rows it holds, and the files in the folder.
 
 ### 2.5 Authoring
 
-Two ways in, and they are the same daemon:
+Either command serves the same daemon:
 
 ```sh
 # the browser: the world editor, the asset library, Deploy, the Journal
@@ -228,21 +221,19 @@ Two ways in, and they are the same daemon:
 ```
 
 `--db-write` lets the editor patch the server's **existing** world rows. Without
-it the daemon serves read-only, which is what you want on a machine you are only
-looking at. The `--db-config` flag points at the server's `serverconfig.xml` when
-the `db` block in `machine.json` is not enough.
+it the daemon serves read-only, which is what a machine you only inspect wants.
+The `--db-config` flag points at the server's `serverconfig.xml` when the `db`
+block in `machine.json` is not enough.
 
-The daemon takes a lock on the project. A second daemon serves read-only and
-names the holder instead of fighting it.
+The daemon takes a lock on the project; a second daemon serves read-only and names
+the holder.
 
 ## 3. Two keys
 
-They point in opposite directions and they are not the same key.
-
 **The deploy key** is what the server uses to **read** the repository. You
 generate it on the server, and you add its `.pub` to the repository as a
-read-only deploy key. A server that can only read cannot rewrite the branch it
-pulls from.
+read-only deploy key. Read-only scope matters: a server that can write the branch
+can rewrite the release it pulls.
 
 **The release key** is what the desk uses to **sign** a release. You generate it
 on the desk, and the server gets only the `.pub`.
@@ -252,16 +243,16 @@ on the desk, and the server gets only the `.pub`.
 ssh-keygen -t ed25519 -C camelot-release -f ~/daoc/keys/camelot-release
 ```
 
-Then name it in `machine.json`, and nothing else on the desk changes:
+Then name it in `machine.json`:
 
 ```json
 { "release_key": "/home/you/daoc/keys/camelot-release" }
 ```
 
 A key with a passphrase works. Signing from a terminal prompts for it, and
-`ssh-add ~/daoc/keys/camelot-release` once per session means no prompt at all.
-A publish from a job has no terminal, so it needs the agent or a key without a
-passphrase; the refusal says so rather than naming `ssh-askpass`.
+`ssh-add ~/daoc/keys/camelot-release` once per session removes the prompt. A
+publish from a job has no terminal, so it needs the agent or a key without a
+passphrase.
 
 The hashes in `release.json` travel in the same commit as the files they
 describe, so whoever can write the branch can rewrite both. A signature over the
@@ -272,7 +263,7 @@ without trusting the branch it pulled from.
 
 ### 4.1 The checkout
 
-A clone of the project on the branch the desk publishes, and nothing else.
+A clone of the project on the branch the desk publishes.
 
 ```sh
 ssh-keygen -t ed25519 -f /srv/forge/keys/deploy -N ''
@@ -291,10 +282,8 @@ pull never touches it.
 
 `<env>/server/camelot/` is the part of the environment that is ours: the
 Installer writes there, the Console asks there, and it is the part to back up.
-Nothing else in the environment belongs to the suite.
 
-The stack is not just compose files. The `camelot-core` job is built from `core/`,
-so the server gets the source:
+The `camelot-core` job is built from `core/`, so the server gets the source:
 
 ```sh
 git clone git@github.com:camelot-forge/camelot-studio.git /srv/forge/studio
@@ -330,8 +319,8 @@ again.
 
 ### 4.4 The Console
 
-The Console needs the operator's public key before it can check anything, and the
-key is public: copying it is the whole distribution.
+The Console checks signatures with the operator's public key. Copy it to the
+server; it is public, so copying is the whole distribution.
 
 ```sh
 scp ~/daoc/keys/camelot-release.pub forge:/srv/forge/keys/
@@ -364,15 +353,13 @@ the stack itself:
 sudo systemctl enable docker     # or podman, whichever runs the stack
 ```
 
-`docker compose up -d` once is then enough for every reboot after it. The Console
-and the database never face the network; `deploy/README.md` says which ports to
-expose and which to leave on loopback.
+`docker compose up -d` once is then enough for every reboot after it.
+`deploy/README.md` says which ports to expose and which to leave on loopback.
 
 ### 4.6 The Installer at boot
 
 Two ways to run the Installer, and the Console cannot tell them apart: the
-`camelot-core` job above, run by hand, and the C# plugin, which runs at boot with
-nothing asked of you. The plugin is the end state on a running server.
+`camelot-core` job above, run by hand, and the C# plugin, which applies at boot.
 
 ```sh
 mkdir -p /srv/forge/env/server/scripts/camelot-installer
@@ -409,8 +396,9 @@ The sequence that carries one edit to the players, in the order it runs.
 ```
 
 A release is immutable once cut, and `camelot project verify --rebuild N` proves
-it. A second clone rebuilds the same bytes from the journal. A deploy is a copy,
-a publish is a commit, and neither applies anything.
+it. A second clone rebuilds the same bytes from the journal. A deploy copies a
+release into an environment, a publish commits it to the branch; the Installer is
+what writes rows.
 
 The desk's dry run is the step to read before you publish. Without `--dry-run` it
 is the deploy itself:
@@ -432,17 +420,16 @@ cd web/launcher && pnpm install && pnpm build && cd ../..
   --name "Camelot Hills" --feed "https://patch.example/"
 ```
 
-That leaves `packaging/dist/camelot-launcher/` and a zip beside it.
-`shard.json` carries the shard's name and the feed's URL, and nothing else: the
-game's address comes from the feed's `launcher.json`, which the feed service
-writes on every request.
+That leaves `packaging/dist/camelot-launcher/` and a zip beside it. `shard.json`
+carries the shard's name and the feed's URL: the game's address comes from the
+feed's `launcher.json`, which the feed service writes on every request.
 
 Hand out the launcher and the client. Every player has to start from the **same
 base client** the desk fingerprinted into `project.json`, because the feed is a
 delta against it; a client from somewhere else gets the right files and the wrong
-result. The player's launcher never asks for a URL, refuses Play while the client
-is behind the feed, and stores the client folder and the account in
-`~/.config/camelot-launcher/settings.json`. It never stores a password.
+result. The launcher refuses Play while the client is behind the feed, and it
+stores the client folder and the account in
+`~/.config/camelot-launcher/settings.json`. The password is never written there.
 
 On Windows `connect.exe` runs directly. On Linux the launcher runs it under Wine
 and the launcher's settings name the prefix.
@@ -457,7 +444,7 @@ and the launcher's settings name the prefix.
 | the deploy key | the server | a read-only clone is reproducible; the key is a minute's work |
 | the feed directory | the server | rebuilt from the project in one command |
 
-The database is not in that list. It is the baseline plus the releases, and both
-are reproducible; a dump is a convenience, not a backup. The one thing no command
-can rebuild is the environment's `camelot/` folder, because it holds the values
-each release replaced, and that is what a reversal is written against.
+The database is reproducible: the baseline plus the releases rebuild it, so a dump
+is a convenience. The one thing no command can rebuild is the environment's
+`camelot/` folder, because it holds the values each release replaced, and that is
+what a reversal is written against.
