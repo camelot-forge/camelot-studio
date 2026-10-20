@@ -124,17 +124,19 @@ an ask; the Installer's next run puts back the rows one release changed.
 
 ## The server, as containers
 
-`deploy/compose.yaml` includes three parts, each of which also runs alone:
-`server/` (MariaDB 10.6, OpenDAoC **pinned by digest**, and the `camelot-core`
-job), `feed/` (`feedserve`) and `console/`. One `.env` drives the whole stack,
-and the same files run on a desk and on a VPS: what changes is the public feed
-URL, the game's address and the secrets.
+`deploy/install/` is the server install: one `compose.yaml`, named volumes, and
+`./install.sh` (or a Coolify compose resource). It clones the OpenDAoC baseline
+and the `camelot-deploy` branch, provisions the database once and seeds the feed.
+`deploy/compose.yaml` is the desk's bench, with host paths, and includes three
+parts, each of which also runs alone: `server/` (MariaDB 10.6, OpenDAoC **pinned
+by digest**, and the `camelot-core` job), `feed/` (`feedserve`) and `console/`.
+One `.env` drives the whole stack.
 
 ```sh
-cp deploy/.env.example deploy/.env && $EDITOR deploy/.env
-docker compose up -d db
-deploy/server/camelot.sh provision     # the baseline, then the releases it carries
-docker compose up -d
+cd deploy/install
+./install.sh          # writes .env, generates the passwords, and exits
+$EDITOR .env          # the five FILL values
+./install.sh
 ```
 
 The Installer also runs as a **C# plugin** inside the server itself
