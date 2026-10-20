@@ -36,6 +36,11 @@ page to serve — `test_the_server_needs_no_client_reader_and_no_daemon`).
 `deploy/README.md` maps the containers; `docs/admin.md` is the operator's
 runbook.
 
+`deploy/install/` is the server install: one compose file with named volumes and
+a `camelot-bootstrap` job, driven by `./install.sh`. It clones the baseline and
+the deploy branch, writes `machine.json`, provisions the database once and seeds
+the feed, so a VPS needs no prepared directory tree.
+
 The Installer also exists as a **C# plugin**
 (`server-bridge/camelot-installer/`): copied once into the server's script
 folder, compiled at boot, run through `IDatabaseUpdater`.

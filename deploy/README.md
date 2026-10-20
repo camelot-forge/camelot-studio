@@ -1,8 +1,9 @@
 # Deploy
 
 The server side of Camelot Forge, as containers. Five services, one entry point
-(`compose.yaml`) and one environment file (`.env`). The same stack runs on a desk
-and on a VPS; three values change.
+(`compose.yaml`) and one environment file (`.env`). This file is the desk's
+bench: host paths, a checkout beside it. A server install is `install/`: named
+volumes, one bootstrap job, and `install.sh`.
 
 ```mermaid
 flowchart LR
@@ -33,6 +34,23 @@ flowchart LR
 
 `notes/remote.md` §D10 says what runs where; `docs/admin.md` is the runbook
 around it. `docs/install.md` walks the whole install, desk and server.
+
+## A server
+
+`install/` is the server's own entry point. One compose file, named volumes, and
+a `camelot-bootstrap` job that clones the baseline and the deploy branch, writes
+`machine.json`, provisions the database once, and seeds the feed.
+
+```sh
+cd install
+./install.sh          # writes .env, generates the passwords, and exits
+$EDITOR .env          # the five FILL values
+./install.sh
+```
+
+`install/README.md` walks the deploy key, the release key, Coolify, the ports and
+the first release. The stack below is the same services with host paths, for a
+desk or a machine whose directories you manage yourself.
 
 ## Local
 

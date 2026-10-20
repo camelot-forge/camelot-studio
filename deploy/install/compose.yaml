@@ -1,0 +1,214 @@
+# The server install: one entry point, named volumes, and one bootstrap job.
+#
+#   cp .env.example .env && ./install.sh
+#
+# The desk stack in `deploy/compose.yaml` keeps its host paths; this file is the
+# server's own, so a VPS needs no prepared directory tree. `install.sh` is the
+# one command; Coolify or another PaaS can deploy this file with the same env.
+#
+# Ownership stays split: OpenDAoC is its pinned image (CAMELOT_CORE_IMAGE), and
+# Camelot Forge is the three images built from this checkout. Each side moves
+# on its own version.
+
+name: camelot-install
+
+services:
+  db:
+    image: mariadb:10.6
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --lower_case_table_names=1
+      - --character-set-server=utf8mb3
+      - --collation-server=utf8mb3_general_ci
+    environment:
+      MARIADB_ROOT_PASSWORD: ${CAMELOT_DB_PASSWORD:?set CAMELOT_DB_PASSWORD}
+      # The environment's database is created by `env provision`, never here:
+      # `provision` refuses to drop a database this project did not create.
+      CAMELOT_DB_NAME: ${CAMELOT_DB_NAME:?set CAMELOT_DB_NAME}
+    volumes:
+      - db-data:/var/lib/mysql
+    ports:
+      - "127.0.0.1:${CAMELOT_DB_PORT:-3307}:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  # The first run: the deploy key, the baseline, the deploy checkout, this
+  # machine's machine.json, a feed seed, the database provision, and the two
+  # server properties the Console needs. Every step is idempotent; the database
+  # provision runs only while `serverproperty` is absent.
+  camelot-bootstrap:
+    build:
+      context: ../..
+      dockerfile: deploy/server/Dockerfile
+    entrypoint: ["/bin/sh", "/scripts/bootstrap.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CAMELOT_ENVIRONMENT: ${CAMELOT_ENVIRONMENT:-production}
+      CAMELOT_DB_NAME: ${CAMELOT_DB_NAME:?set CAMELOT_DB_NAME}
+      CAMELOT_DB_PASSWORD: ${CAMELOT_DB_PASSWORD:?set CAMELOT_DB_PASSWORD}
+      CAMELOT_DB_HOST: db
+      CAMELOT_DB_PORT: "3306"
+      CAMELOT_DEPLOY_REPO: ${CAMELOT_DEPLOY_REPO:?set CAMELOT_DEPLOY_REPO}
+      CAMELOT_DEPLOY_KEY_B64: ${CAMELOT_DEPLOY_KEY_B64:?set CAMELOT_DEPLOY_KEY_B64}
+      CAMELOT_RELEASE_PUBLIC_KEY: ${CAMELOT_RELEASE_PUBLIC_KEY:?set CAMELOT_RELEASE_PUBLIC_KEY}
+      CAMELOT_BASELINE_REPO: ${CAMELOT_BASELINE_REPO:-https://github.com/OpenDAoC/OpenDAoC-Database.git}
+      CAMELOT_FEED_URL: ${CAMELOT_FEED_URL:?set CAMELOT_FEED_URL}
+      CAMELOT_GAME_SERVER: ${CAMELOT_GAME_SERVER:?set CAMELOT_GAME_SERVER}
+      CAMELOT_API_PASSWORD: ${CAMELOT_API_PASSWORD:?set CAMELOT_API_PASSWORD}
+    volumes:
+      - forge-env:/env
+      - forge-camelot:/env/server/camelot
+      - forge-deploy:/deploy
+      - forge-baseline:/baseline
+      - forge-keys:/keys
+      - forge-ssh:/root/.ssh
+      - forge-feed:/feed
+      - ./bootstrap.sh:/scripts/bootstrap.sh:ro
+    restart: "no"
+
+  # OpenDAoC keeps its own release cadence: bump CAMELOT_CORE_IMAGE, then
+  # `docker compose up -d core`. The API binds 127.0.0.1:5000, which the
+  # Console shares through host networking.
+  core:
+    image: ${CAMELOT_CORE_IMAGE:-ghcr.io/opendaoc/opendaoc-core@sha256:89da37855ab3629273884652b646f3bc2a84398193926646d6721341a58d0d3e}
+    network_mode: host
+    depends_on:
+      camelot-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      UID: ${CAMELOT_CORE_UID:-1000}
+      GID: ${CAMELOT_CORE_GID:-1000}
+      SERVER_IP: 0.0.0.0
+      SERVER_PORT: ${CAMELOT_GAME_PORT:-10300}
+      REGION_IP: 0.0.0.0
+      REGION_PORT: ${CAMELOT_REGION_PORT:-10400}
+      UDP_IP: 0.0.0.0
+      UDP_PORT: ${CAMELOT_REGION_PORT:-10400}
+      ENABLE_UPNP: "False"
+      DETECT_REGION_IP: "True"
+      SERVER_NAME: ${CAMELOT_SHARD_NAME:?set CAMELOT_SHARD_NAME}
+      SERVER_NAME_SHORT: ${CAMELOT_SHARD_SHORT:-CAMELOT}
+      GAME_TYPE: Normal
+      AUTO_ACCOUNT_CREATION: "True"
+      ENABLE_COMPILATION: "True"
+      CHEAT_LOGGER_NAME: cheats
+      GM_ACTION_LOGGER_NAME: gmactions
+      INVALID_NAMES_FILE: ./config/invalidnames.txt
+      LOG_CONFIG_FILE: ./config/logconfig.xml
+      SCRIPT_ASSEMBLIES: ""
+      SCRIPT_COMPILATION_TARGET: ./lib/GameServerScripts.dll
+      DB_TYPE: MYSQL
+      DB_CONNECTION_STRING: "Server=127.0.0.1;Port=${CAMELOT_DB_PORT:-3307};Database=${CAMELOT_DB_NAME:?set CAMELOT_DB_NAME};UserId=root;Password=${CAMELOT_DB_PASSWORD:?set CAMELOT_DB_PASSWORD};TreatTinyAsBoolean=false;Pooling=true;MinimumPoolSize=30;MaximumPoolSize=120;ConnectionReset=false"
+      DB_AUTOSAVE: "True"
+      DB_AUTOSAVE_INTERVAL: "10"
+      CPU_USE: ${CAMELOT_CORE_CPU:-4}
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "False"
+    volumes:
+      - forge-core-logs:/app/logs
+    stdin_open: true
+    tty: true
+    # The emulator saves on shutdown; ten seconds is not enough for a world.
+    stop_grace_period: 60s
+    restart: unless-stopped
+
+  # The Installer's step, on demand: `compose run --rm camelot-core env apply`.
+  camelot-core:
+    build:
+      context: ../..
+      dockerfile: deploy/server/Dockerfile
+    network_mode: host
+    depends_on:
+      camelot-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      CAMELOT_DB_HOST: 127.0.0.1
+      CAMELOT_DB_PORT: ${CAMELOT_DB_PORT:-3307}
+      CAMELOT_DB_USER: root
+      CAMELOT_DB_PASSWORD: ${CAMELOT_DB_PASSWORD:?set CAMELOT_DB_PASSWORD}
+      CAMELOT_RELEASE_KEY: /keys/release.pub
+    volumes:
+      - forge-env:/env:ro
+      - forge-camelot:/env/server/camelot
+      - forge-deploy:/deploy
+      - forge-baseline:/baseline:ro
+      - forge-keys:/keys:ro
+      - forge-ssh:/root/.ssh:ro
+    command:
+      - env
+      - status
+      - ${CAMELOT_ENVIRONMENT:-production}
+      - --dir
+      - /deploy
+
+  feed:
+    build:
+      context: ../..
+      dockerfile: deploy/feed/Dockerfile
+    depends_on:
+      camelot-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      CAMELOT_FEED_DIR: /feed
+      CAMELOT_FEED_URL: ${CAMELOT_FEED_URL:?set CAMELOT_FEED_URL}
+      CAMELOT_GAME_SERVER: ${CAMELOT_GAME_SERVER:?set CAMELOT_GAME_SERVER}
+    volumes:
+      - forge-feed:/feed:ro
+    # A proxy on the host reaches the loopback port; Coolify's proxy reaches the
+    # container on the compose network and ignores this binding.
+    ports:
+      - "${CAMELOT_FEED_BIND:-127.0.0.1}:${CAMELOT_FEED_PORT:-8080}:8080"
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  console:
+    build:
+      context: ../..
+      dockerfile: deploy/console/Dockerfile
+    network_mode: host
+    depends_on:
+      camelot-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      CAMELOT_CONSOLE_ROOT: /env
+      CAMELOT_CONSOLE_HOST: ${CAMELOT_CONSOLE_HOST:-127.0.0.1}
+      CAMELOT_CONSOLE_PORT: ${CAMELOT_CONSOLE_PORT:-8770}
+      CAMELOT_CONSOLE_ENV: ${CAMELOT_ENVIRONMENT:-production}
+      CAMELOT_CONSOLE_PASSWORD: ${CAMELOT_CONSOLE_PASSWORD:?set CAMELOT_CONSOLE_PASSWORD}
+      CAMELOT_CONSOLE_GAME_SERVER: ${CAMELOT_CONSOLE_GAME_SERVER:-127.0.0.1:10300}
+      CAMELOT_CONSOLE_API_URL: ${CAMELOT_CONSOLE_API_URL:-http://127.0.0.1:5000}
+      CAMELOT_CONSOLE_API_PASSWORD: ${CAMELOT_API_PASSWORD:-}
+      CAMELOT_CONSOLE_ALLOW_RESTART: ${CAMELOT_CONSOLE_ALLOW_RESTART:-0}
+      CAMELOT_CONSOLE_AUDIT: /audit/audit.jsonl
+      CAMELOT_CONSOLE_DEPLOY: /deploy
+      CAMELOT_CONSOLE_DEPLOY_REMOTE: ${CAMELOT_CONSOLE_DEPLOY_REMOTE:-origin}
+      CAMELOT_CONSOLE_FEED_OUT: /feed-out
+      CAMELOT_CONSOLE_RELEASE_KEY: /keys/release.pub
+    volumes:
+      - forge-env:/env:ro
+      - forge-camelot:/env/server/camelot
+      - forge-deploy:/deploy
+      - forge-feed:/feed-out
+      - forge-audit:/audit
+      - forge-keys:/keys:ro
+      - forge-ssh:/root/.ssh:ro
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  forge-env:
+  forge-camelot:
+  forge-deploy:
+  forge-baseline:
+  forge-keys:
+  forge-ssh:
+  forge-feed:
+  forge-audit:
+  forge-core-logs:

@@ -261,6 +261,21 @@ without trusting the branch it pulled from.
 
 ## 4. The server
 
+`deploy/install/` is the server install: one compose file, named volumes, and a
+bootstrap job. It needs no prepared directory tree.
+
+```sh
+git clone git@github.com:camelot-forge/camelot-studio.git
+cd camelot-studio/deploy/install
+./install.sh          # writes .env, generates the passwords, and exits
+$EDITOR .env          # the five FILL values
+./install.sh
+```
+
+`deploy/install/README.md` walks the deploy key, the release key, Coolify, the
+ports and the first release. The rest of this section is the same stack by hand,
+for a machine whose directories you manage yourself.
+
 ### 4.1 The checkout
 
 A clone of the project on the branch the desk publishes.

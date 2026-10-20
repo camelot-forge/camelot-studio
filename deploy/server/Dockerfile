@@ -15,7 +15,7 @@ COPY core/camelot /app/camelot
 # (`project pull --remote …`) when the Console is down, which fetches the deploy
 # branch (`remote.md` §D4).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git openssh-client \
+    && apt-get install -y --no-install-recommends git openssh-client ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # The one extra Python dependency: the driver the server's own MySQL needs
