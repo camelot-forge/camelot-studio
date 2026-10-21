@@ -6,7 +6,7 @@ the database, OpenDAoC, and the job that applies a release.
 | Service | What it is |
 |---|---|
 | `db` | MariaDB 10.6, the environment's own database. Publishes on **loopback only** (`127.0.0.1:3307`). |
-| `core` | OpenDAoC, pinned by digest. Host network: the game's ports are the host's, and its API binds `127.0.0.1:5000` where the Console reads it. |
+| `core` | OpenDAoC, pinned by digest. Host network: the game's ports are the host's. The API must bind `127.0.0.1:5000` where the Console reads it; the current image's .NET default is `8080`, so set `ASPNETCORE_URLS=http://127.0.0.1:5000` (the server install does). |
 | `camelot-core` | A one-shot job running the `camelot` CLI — one of the two ways to run the Installer on a server (S §D10). It is the only container that opens the database. |
 
 The feed service and the Console are their own directories; `deploy/compose.yaml`
@@ -66,6 +66,10 @@ its **Restart** action sends `/utils/shutdown/{api_password}`. Without a
 supervisor that action is a stop: `core` runs with `restart: unless-stopped`,
 which is the supervisor here.
 
+The current OpenDAoC image defaults the API to `8080` (`ASPNETCORE_HTTP_PORTS`).
+Set `ASPNETCORE_URLS=http://127.0.0.1:5000` on `core`. A restart of an existing
+container keeps its old environment; recreate it after the change.
+
 ## The job
 
 `camelot.sh` wraps `docker compose run --rm camelot-core …`:
@@ -99,6 +103,9 @@ podman inspect --format '{{index .RepoDigests 0}}' ghcr.io/opendaoc/opendaoc-cor
 # put the digest in .env as CAMELOT_CORE_IMAGE=…@sha256:…
 docker compose up -d core
 ```
+
+On the server install, `core` is built from `deploy/core/Dockerfile`; the same
+digest change is `docker compose up -d --build core`.
 
 A new emulator reads the same database; the schema it expects is OpenDAoC's own,
 and a release writes only a table the project owns (`S §D4`).

@@ -27,7 +27,7 @@ flowchart LR
 | Service | Its own README | What it writes |
 |---|---|---|
 | `db` | — | its own volume, on loopback only |
-| `core` | — | the database, and `/app/logs` |
+| `core` | — | the database, `/app/logs`, and `/app/camelot` (the Installer plugin at boot on the server install) |
 | `camelot-core` | `server/README.md` | `<env>/server/camelot/` (state, releases, applied) |
 | `feed` | `feed/README.md` | nothing: it serves a directory read-only |
 | `console` | `console/README.md` | `<env>/server/camelot/`, the audit, the feed mirror |
@@ -51,6 +51,10 @@ $EDITOR .env          # the five FILL values
 `install/README.md` walks the deploy key, the release key, Coolify, the ports and
 the first release. The stack below is the same services with host paths, for a
 desk or a machine whose directories you manage yourself.
+
+The server install bakes the C# Installer into `core`
+(`deploy/core/Dockerfile`): the admin flow is **Pull → Restart**, and the plugin
+applies the handed-over release before the world loads.
 
 ## Local
 
@@ -110,8 +114,7 @@ TLS reverse proxy. The Console and the database stay on loopback.
 ```text
 desk     project release N → project feed → project publish N --remote origin
 console  Pull          (fetch, verify sha256, hand over, mark wanted, mirror the feed)
-server   camelot.sh apply   (the Installer's step: rows + state.json)
-console  Restart, or /reload in game when the release only needs a reload
+server   the plugin at boot (Pull → Restart), or camelot.sh apply on the bench
 players  their launchers read the feed and update themselves
 ```
 

@@ -324,6 +324,10 @@ server/camelot.sh restart       # the API host starts at boot only
 curl -s http://127.0.0.1:8080/healthz
 ```
 
+With the current OpenDAoC image (dotnet 10), the API defaults to `8080`
+(`ASPNETCORE_HTTP_PORTS`). Add `ASPNETCORE_URLS=http://127.0.0.1:5000` to the
+`core` service before `docker compose up -d`; the Console reads `:5000`.
+
 `camelot.sh` is a wrapper over `docker compose run --rm camelot-core`, and the
 verbs are `provision`, `apply`, `reverse`, `status`, `verify`, `api`, `restart`
 and `logs`.
@@ -374,7 +378,14 @@ sudo systemctl enable docker     # or podman, whichever runs the stack
 ### 4.6 The Installer at boot
 
 Two ways to run the Installer, and the Console cannot tell them apart: the
-`camelot-core` job above, run by hand, and the C# plugin, which applies at boot.
+`camelot-core` job above, and the C# plugin, which applies at boot.
+
+**The server install (`deploy/install/`) includes the plugin.** `core` is built
+from `deploy/core/Dockerfile`: OpenDAoC's pinned digest plus the three `.cs`,
+with `SCRIPT_ASSEMBLIES=Newtonsoft.Json` and the `forge-camelot` volume at
+`/app/camelot`. The admin flow is Pull → Restart.
+
+On a server without that image, copy the plugin once:
 
 ```sh
 mkdir -p /srv/forge/env/server/scripts/camelot-installer
@@ -386,7 +397,7 @@ docker compose restart core
 
 It is a manual step once, because the server compiles its scripts *before* any
 hook runs: a release cannot carry it. `server-bridge/camelot-installer/README.md`
-has the details and the container equivalent.
+has the details.
 
 ## 5. The first release, end to end
 
@@ -404,7 +415,7 @@ The sequence that carries one edit to the players, in the order it runs.
 
 # on the server
 #   Console → Pull        fetch, check the signature, verify the hashes, hand over, mark wanted
-#   Console → Restart     or /reload in game when the release only needs a reload
+#   Console → Restart     boot the server; the plugin applies the release before the world loads
 
 # the players
 #   their launchers read the feed and update themselves

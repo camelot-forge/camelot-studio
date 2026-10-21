@@ -39,7 +39,9 @@ runbook.
 `deploy/install/` is the server install: one compose file with named volumes and
 a `camelot-bootstrap` job, driven by `./install.sh`. It clones the baseline and
 the deploy branch, writes `machine.json`, provisions the database once and seeds
-the feed, so a VPS needs no prepared directory tree.
+the feed, so a VPS needs no prepared directory tree. Its `core` is built from the
+pinned OpenDAoC digest plus the C# Installer (`deploy/core/Dockerfile`), so the
+admin flow is Pull → Restart.
 
 The Installer also exists as a **C# plugin**
 (`server-bridge/camelot-installer/`): copied once into the server's script

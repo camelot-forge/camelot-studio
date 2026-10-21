@@ -16,7 +16,8 @@ directory is the server's; a VPS needs no prepared directory tree.
 - The desk's **release public key**.
 - A **feed URL** the players can reach, and the game's public address.
 - Ports **10300/tcp** and **10400/tcp+udp** open and forwarded to the machine.
-  The feed and the Console sit behind an HTTP proxy with TLS (80/443).
+  The feed sits behind an HTTP proxy with TLS (80/443). The Console stays on
+  loopback; reach it through an SSH tunnel.
 
 ## 1. The deploy key
 
@@ -32,6 +33,10 @@ write access off. With the GitHub CLI:
 ```sh
 gh repo deploy-key add deploy_key.pub --repo your-org/your-project
 ```
+
+If the organization disables deploy keys, GitHub answers `Deploy keys are
+disabled for this repository`. Enable
+`deploy_keys_enabled_for_repositories` in the organization settings first.
 
 The private key is what goes into `CAMELOT_DEPLOY_KEY_B64`, on one line:
 
@@ -173,6 +178,17 @@ pins `ASPNETCORE_URLS=http://127.0.0.1:5000` because the image's .NET default is
 `8080`. A containerised proxy cannot reach that loopback. Use the SSH tunnel for
 the Console, or set `CAMELOT_CONSOLE_HOST=0.0.0.0` and give the proxy the host's
 Docker gateway as its upstream.
+
+## When the first deploy fails
+
+| Log | What it means |
+|---|---|
+| `Bind for 0.0.0.0:8080 failed: port is already allocated` | a service publishes 8080 on the host. The feed must not; Coolify's proxy reaches it on the compose network. |
+| `Failed to bind to address http://[::]:8080: address already in use` | the API is on the image's .NET default. Set `ASPNETCORE_URLS=http://127.0.0.1:5000` and recreate `core`; a restart keeps the old environment. |
+| `installer directory 'camelot' does not exist; no release loaded` | `core` has no `forge-camelot` volume at `/app/camelot`. |
+| `... has no camelot-deploy branch: publish from the desk first` | the project repository has no `camelot-deploy` branch; publish once from the desk. |
+| `CAMELOT_DEPLOY_KEY_B64 is not an unencrypted SSH private key` | the base64 is the `.pub`, or it is multi-line. Use the private key, one line. |
+| `Access denied for user 'root'` | the `db` volume was initialized with another password. Remove `db-data` and redeploy while there is no player data. |
 
 ## Backups
 

@@ -36,6 +36,11 @@ Put a TLS reverse proxy in front (Caddy, Traefik, nginx) and map the public
 `/` to the container's `:8080`. The feed service speaks HTTP and holds no
 secrets.
 
+In the server install (`deploy/install/`), the feed has no host `ports`
+mapping: Coolify's proxy reaches the container on the compose network. A host
+proxy needs a compose override with a `ports` mapping. Publishing `8080` on the
+host is what produces `port is already allocated`.
+
 ## What it rewrites
 
 - `patchlist-new.txt`: the first line becomes `CAMELOT_FEED_URL`;

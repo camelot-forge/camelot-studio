@@ -20,7 +20,7 @@ by a player's launcher. Every path and number below is from that walk.
 | **Deploy** | the desk | cuts releases and hands them to an environment (`camelot project release`, `project deploy`, `project promote`) |
 | **Feed** | built on the desk, served on the server | what the players' launcher reads (`camelot project feed`, then `feedserve`) |
 | **Console** | the server | the running server's face: what is applied, what is wanted, Pull, Restart (`camelot console`) |
-| **Installer** | the server | the only writer of the server's own rows (`camelot env apply`, or the C# plugin at boot) |
+| **Installer** | the server | the only writer of the server's own rows (the C# plugin at boot on the server install; `camelot env apply` otherwise) |
 
 The **players' launcher** is a package you hand out (§7).
 
@@ -133,15 +133,16 @@ ours:
 Two ways to run the Installer on a server; the folder, the documents and the
 Console's calls are the same either way.
 
+- **the C# plugin** (`server-bridge/camelot-installer/`): the server install
+  bakes it into the `core` image (`deploy/core/Dockerfile`), so the server
+  compiles and runs it at every boot. It applies the handed-over release before
+  the world loads, and records a failure instead of throwing it out of `Start()`;
 - **the `camelot-core` job** (`deploy/server/`): the desk's own `camelot env
-  apply`, in a container, run by hand or by `camelot.sh`. It provisions and
-  verifies too, which is why it stays on a fresh machine;
-- **the C# plugin** (`server-bridge/camelot-installer/`): copied once into the
-  server's script folder, compiled by the server at boot, run by it. It applies a
-  release without being asked, and records a failure instead of stopping the boot.
+  apply`, in a container. It provisions and verifies too, which is why the
+  bootstrap uses it; it is also the fallback for an apply without a restart.
 
-The plugin is a manual step, once: the server compiles its scripts *before* any
-hook runs, so a release cannot carry it.
+On a non-container server the plugin is a manual step, once: the server compiles
+its scripts *before* any hook runs, so a release cannot carry it.
 
 ```sh
 mkdir -p /srv/forge/env/server/scripts/camelot-installer
@@ -151,8 +152,8 @@ docker compose restart core          # or systemctl restart camelot-server
 ```
 
 It reads `<server>/camelot/` by default; the server property
-`installer_directory` moves it. On the container stack the same thing is a
-read-only volume into `core` plus `SCRIPT_ASSEMBLIES: Newtonsoft.Json`.
+`installer_directory` moves it. The server install mounts that folder at
+`/app/camelot` in `core` and sets `SCRIPT_ASSEMBLIES: Newtonsoft.Json`.
 
 Around that folder, a server also has:
 
@@ -263,6 +264,14 @@ The page then shows release 1 as **pending**, because nothing is applied yet.
 
 ### 4.7 Apply, on the server
 
+On the server install the C# Installer runs at boot. The flow is **Pull**, then
+**Restart**: the plugin reads `wanted.json` and `releases/NNNN/` before the world
+loads, writes the rows, and records `state.json` and `applied/NNNN/applied.json`.
+The Console then shows the release applied.
+
+The `camelot-core` job is the same step without a restart, and the fallback for a
+server without the plugin:
+
 ```sh
 camelot env apply production --dir /srv/forge/deploy
 ```
@@ -272,8 +281,8 @@ what it wrote and the values they had before in `state.json`, and writes one lin
 per row in `applied/NNNN/applied.json`. All or nothing: a row that is not there
 refuses the whole release and writes nothing.
 
-Then the release's own ritual: `/reload doors` in game, or the Console's
-**Restart** (supervised) when the release needs a restart.
+Then the release's own ritual: `/reload doors` in game for an apply on a running
+server. An apply at boot has already loaded the rows, so it needs no reload.
 
 ### 4.8 The players
 
@@ -319,8 +328,8 @@ flowchart TD
     D --> E["git: camelot-deploy<br/>releases/NNNN/** + feed/** + publish.json"]
     E --> F["server: Console Pull<br/>fetch, verify sha256, hand over"]
     F --> G["wanted.json"]
-    G --> H["Installer: apply<br/>rows + state.json"]
-    H --> I["reload in game, or supervised Restart"]
+    G --> H["Installer at boot (plugin)<br/>rows + state.json"]
+    H --> I["world loads; /reload only<br/>for an apply on a running server"]
     F --> J["feed mirrored<br/>players' launchers read it"]
 ```
 
@@ -331,7 +340,7 @@ One release leaves by two channels, and they are different deliveries:
 | What travels | `releases/NNNN/server/` | the feed: the two protocol files and the changed client files |
 | Where it lands | `<env>/server/camelot/releases/NNNN/` | the directory the feed service serves |
 | Who writes | the Installer alone | the publish build, then served as files |
-| When it takes effect | apply, then `/reload` or a restart | whenever each player's launcher reads it |
+| When it takes effect | the next boot (plugin), or apply then `/reload` / restart (fallback) | whenever each player's launcher reads it |
 
 The feed is built on the desk, because a zone archive is rebuilt from the **base
 client** plus the changed entry and a server holds no client. The built files
@@ -369,6 +378,9 @@ scp ~/daoc/keys/camelot-release.pub forge:/srv/forge/keys/
 # the job:   CAMELOT_RELEASE_KEY=/keys/camelot-release.pub
 ```
 
+The server install takes the same key as `CAMELOT_RELEASE_PUBLIC_KEY` and writes
+it to `/keys/release.pub`.
+
 A pull then checks the signature **before** it believes the hashes, and refuses
 with the reason named:
 
@@ -392,7 +404,7 @@ back **for the players** is a new release.
 # on the desk: revert the change as a new operation, then
 camelot project release          # → N+1
 camelot project publish --remote origin
-# on the server: Console Pull, then apply, then reload/restart
+# on the server: Console Pull, then Restart (the plugin applies at boot)
 ```
 
 The clients converge on N+1 like any other update, and nobody rewrites the
@@ -410,10 +422,11 @@ camelot env reverse production --release 6  # or name one
 ```
 
 From the Console, the same thing without SSH: the page's **Reverse** button
-writes the ask (`<env>/server/camelot/reverse.json`), and the Installer's next run
-does the work. The Console writes asks; the database belongs to the Installer
-alone. The page shows the ask as *asked* until the state stops recording the
-release, and `camelot env apply` honours it before it applies anything else.
+writes the ask (`<env>/server/camelot/reverse.json`), and the Installer's next
+run — the plugin at the next boot, or `camelot env apply` — does the work. The
+Console writes asks; the database belongs to the Installer alone. The page shows
+the ask as *asked* until the state stops recording the release, and
+`camelot env apply` honours it before it applies anything else.
 
 It is refused while a **later** release is applied (its values would be written
 over), and it repairs the server only: a client whose launcher already took
@@ -457,52 +470,41 @@ launcher remembers the client folder and the account in
 
 ## 8. A VPS
 
-What runs on the VPS:
+The server install is `deploy/install/`: one compose file, named volumes, and a
+`camelot-bootstrap` job. `install.sh` drives it on a bare VPS; Coolify deploys
+the same compose file. `deploy/install/README.md` is the step-by-step.
 
-| Container | What it is |
+| Service | What it is |
 |---|---|
-| `db` | MariaDB, the environment's database |
-| `core` | OpenDAoC, a **pinned** image |
-| `camelot-core` | a one-shot job: `camelot env apply`, run by hand |
-| `feed` | `feedserve`: the feed directory, with the public URL and the game address rewritten per request |
+| `db` | MariaDB, the environment's database, loopback only |
+| `camelot-bootstrap` | the first run: deploy key, OpenDAoC baseline, `camelot-deploy` clone, `machine.json`, feed seed, database provision, `atlas_api`/`api_password` |
+| `core` | OpenDAoC's **pinned digest** plus the C# Installer (`deploy/core/Dockerfile`); host network; API on `127.0.0.1:5000` |
+| `feed` | `feedserve`: the feed directory, with the public URL and the game address rewritten per request; no host port, the proxy reaches it on the compose network |
 | `console` | the Console, host-networked so it can reach the game's API on `127.0.0.1:5000` |
+| `camelot-core` | the one-shot fallback: `env apply`, `env status`, `env verify` |
 
-One compose entry point and one environment file: `deploy/compose.yaml` and
-`deploy/.env` (see `deploy/README.md` for the container map). The three values
-that differ from a local run are the public feed URL, the game's public address,
-and the secrets.
+The bootstrap is idempotent and never drops a database that already has
+`serverproperty`. It sets the two properties the Console needs, so the first
+`core` boot has the API. The admin flow is **Pull → Restart**: the plugin applies
+the handed-over release before the world loads.
 
-The first run, in this order — the job needs the database, and the game server
-needs the tables:
+The environment folder, the Installer's folder, the deploy checkout and the feed
+are named volumes on the server install (`forge-env`, `forge-camelot`,
+`forge-deploy`, `forge-feed`), so a VPS needs no prepared directory tree.
 
-```sh
-cp deploy/.env.example deploy/.env && $EDITOR deploy/.env
-docker compose up -d db
-deploy/server/camelot.sh provision       # the baseline, then every release the
-                                        # checkout already carries
-docker compose up -d                     # db, core, feed, console
-deploy/server/camelot.sh api '<the api password>'
-deploy/server/camelot.sh restart         # the API host starts at boot
-```
+Four things to get right:
 
-What the VPS holds outside the containers:
-
-- the **environment folder** — `<env>/server/camelot/` is the part that matters
-  and the part to back up;
-- the **deploy checkout**, a clone of the project on `camelot-deploy`, with a
-  **read-only deploy key** (it only ever fetches);
-- the **feed directory** the pull mirrors into.
-
-Two things to get right on a fresh VPS:
-
-- `atlas_api` must be true in the server's `serverproperty` table, or the
-  Console has no read API and no Restart (the page names what it could not read);
-  `api_password` is what the Console sends. `deploy/server/camelot.sh api` sets
-  both, and the API host is started **at boot only** — a
-  `/serverproperties refresh` in game does not bring it up, so the server has to
-  restart (`server/camelot.sh restart`, or the Console's Restart once it is on);
-- the game server must run with `restart: unless-stopped` (or systemd
-  `Restart=always`), or the Console's Restart is a stop.
+- the API must bind `127.0.0.1:5000`. The OpenDAoC image's .NET default is
+  `8080`, which another service may hold; the server install sets
+  `ASPNETCORE_URLS=http://127.0.0.1:5000`. An environment change is a **redeploy**
+  (the container is recreated), not a restart (the old environment stays);
+- the feed has no `ports` mapping. Coolify's proxy reaches the container on the
+  compose network; a host proxy needs an override with a `ports` mapping.
+  Publishing `8080` on the host is what produces `port is already allocated`;
+- `core` runs with `restart: unless-stopped`, so the Console's Restart brings the
+  server back and the plugin applies the release;
+- `camelot-bootstrap` and `camelot-core` are one-shot jobs. Both carry
+  `restart: "no"`; without it a job that exited 0 is restarted in a loop.
 
 ### The server-only environment
 
@@ -514,7 +516,9 @@ path:
 ```
 
 The dry run then names the release's client half as the feed's and hands over
-only the server half, and `env verify` does not look for a client.
+only the server half, and `env verify` does not look for a client. The server's
+own `machine.json` is generated by `camelot-bootstrap`; the desk's block is for
+the dry run.
 
 ## 9. Backups
 
@@ -546,7 +550,10 @@ already there.
 | `release 0006 cannot be reversed while release 0007 is applied` | the newer release's values would be written over: reverse the newest first (`S §D17`) |
 | `release 0007 is not applied to this environment` | there is nothing to put back — the reversal needs the state the apply wrote |
 | `the feed does not say where the game is` | the feed was served without `launcher.json` or without `CAMELOT_GAME_SERVER` |
-| `[Errno 111] Connection refused` on `:5000` | OpenDAoC's API is off (`atlas_api`) or not on loopback where the Console looks |
+| `[Errno 111] Connection refused` on `:5000` | OpenDAoC's API is off (`atlas_api`), failed to bind, or is on another port. The image's .NET default is 8080; the server install pins `ASPNETCORE_URLS=http://127.0.0.1:5000`. |
+| `Failed to bind to address http://[::]:8080: address already in use` | the API is on the image's default port. Set `ASPNETCORE_URLS=http://127.0.0.1:5000` and **recreate** `core`; a restart keeps the old environment. |
+| `installer directory 'camelot' does not exist; no release loaded` | `core` has no `forge-camelot` volume at `/app/camelot`; the plugin cannot see the releases. |
+| `Bind for 0.0.0.0:8080 failed: port is already allocated` | a compose service publishes 8080 on the host. The server install's feed does not; the proxy reaches it on the compose network. |
 | `reload: unknown` on the Console | the server has no copy of the project's `deploy/log.jsonl`; that file is the desk's record |
 | `this environment was provisioned for 'X', not 'Y'` | one environment folder, one project: `project.md` §D1 |
 | `id N (zone Z, key K) is already held by <table> <key>` | a release allocates an id the server grew into; re-cut, the ids moved |
@@ -567,6 +574,7 @@ already there.
 | `<env>/server/camelot/reversed/NNNN/reversed.json` | row-by-row evidence of a reversal | on the server |
 | `<env>/server/camelot/wanted.json` | the Console's ask | on the server |
 | `<env>/server/camelot/reverse.json` | the Console's ask for the other direction | on the server |
-| `<env>/server/scripts/camelot-installer/` | the C# Installer, copied in once | on the server |
+| `deploy/core/Dockerfile` | the C# Installer baked into the `core` image | yes |
+| `<env>/server/scripts/camelot-installer/` | the C# Installer, copied in once on a non-container server | on the server |
 | `<env>/server/camelot/console/audit.jsonl` | every Console action | on the server |
 | `~/.config/camelot-launcher/settings.json` | a player's client folder, account, installed version | on the player's machine |

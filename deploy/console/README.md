@@ -38,8 +38,9 @@ camelot console \
 
 `--project` is what makes the reload readable: the desktop records it in the
 project's `deploy/log.jsonl`. A server without that file gets `unknown`, not a
-guess. `--feed` is optional and gives the players' version; the Console
-compares it with the state and names a divergence.
+guess. `--feed` is the read side (the players' version); `--feed-out` is where
+the pull mirrors the branch's feed. The server install points both at
+`/feed-out`.
 
 ## Actions (7b)
 
@@ -90,7 +91,9 @@ client half stays in the feed;
 
 The pull **hands over and stops**; the Installer applies the rows (`S §D1`). On a
 server that is `camelot env apply <env>`, or the C# plugin at boot; the Console's
-page shows the wanted release as `pending` until the state file records it.
+page shows the wanted release as `pending` until the state file records it. The
+server install bakes the plugin into `core`, so the admin flow is Pull →
+Restart.
 
 ## Reverse (7e)
 
