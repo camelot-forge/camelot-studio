@@ -168,10 +168,11 @@ The feed service listens on `8080` and declares it with `expose`; a proxy
 (Caddy, Traefik, nginx, Coolify) on the same Docker network serves
 `CAMELOT_FEED_URL` and adds TLS. A host proxy on a bare VPS needs a compose
 override with a `ports` mapping, for example `127.0.0.1:8080:8080`. The Console
-uses host networking to reach OpenDAoC's API on `127.0.0.1:5000`; a containerised
-proxy cannot reach that loopback. Use the SSH tunnel for the Console, or set
-`CAMELOT_CONSOLE_HOST=0.0.0.0` and give the proxy the host's Docker gateway as
-its upstream.
+uses host networking to reach OpenDAoC's API on `127.0.0.1:5000`; the compose
+pins `ASPNETCORE_URLS=http://127.0.0.1:5000` because the image's .NET default is
+`8080`. A containerised proxy cannot reach that loopback. Use the SSH tunnel for
+the Console, or set `CAMELOT_CONSOLE_HOST=0.0.0.0` and give the proxy the host's
+Docker gateway as its upstream.
 
 ## Backups
 

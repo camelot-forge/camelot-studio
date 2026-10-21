@@ -114,6 +114,9 @@ services:
       DB_AUTOSAVE: "True"
       DB_AUTOSAVE_INTERVAL: "10"
       CPU_USE: ${CAMELOT_CORE_CPU:-4}
+      # The OpenDAoC image's .NET default is 8080 (ASPNETCORE_HTTP_PORTS),
+      # which the feed and other services may hold. The Console reads :5000.
+      ASPNETCORE_URLS: http://127.0.0.1:5000
       DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "False"
     volumes:
       - forge-core-logs:/app/logs
