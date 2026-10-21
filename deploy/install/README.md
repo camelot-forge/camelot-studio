@@ -112,8 +112,7 @@ repository, set the compose file to `deploy/install/compose.yaml`, and put the
 values of `.env` in the resource's environment.
 
 - Give the **feed** service a domain (`feed.example`), HTTPS, container port
-  **8080**. Coolify's proxy reaches the container on the compose network;
-  `CAMELOT_FEED_BIND` stays `127.0.0.1`.
+  **8080**. Coolify's proxy reaches the container on the compose network.
 - Leave **core** without a domain. It binds the game ports on the host.
 - The **Console** stays on loopback. Reach it through a tunnel:
   `ssh -L 8770:127.0.0.1:8770 you@server`, then `http://127.0.0.1:8770/`.
@@ -157,14 +156,16 @@ The players' launchers read the feed URL and update the client.
 | 10300/tcp | public | the game |
 | 10400/tcp+udp | public | the region |
 | 80/443 | public | the feed, through the host's proxy |
-| 8080 | loopback | the feed container; point the proxy's domain at it |
+| 8080 | internal | the feed container; the proxy reaches it on the compose network |
 | 8770 | loopback | the Console; use the tunnel or a proxy on the host |
 | 3307 | loopback | the database; never public |
 
-The feed service publishes `8080` on loopback; a proxy (Caddy, Traefik, nginx,
-Coolify) serves `CAMELOT_FEED_URL` and adds TLS. The Console uses host networking
-to reach OpenDAoC's API on `127.0.0.1:5000`; a containerised proxy cannot reach
-that loopback. Use the SSH tunnel for the Console, or set
+The feed service listens on `8080` and declares it with `expose`; a proxy
+(Caddy, Traefik, nginx, Coolify) on the same Docker network serves
+`CAMELOT_FEED_URL` and adds TLS. A host proxy on a bare VPS needs a compose
+override with a `ports` mapping, for example `127.0.0.1:8080:8080`. The Console
+uses host networking to reach OpenDAoC's API on `127.0.0.1:5000`; a containerised
+proxy cannot reach that loopback. Use the SSH tunnel for the Console, or set
 `CAMELOT_CONSOLE_HOST=0.0.0.0` and give the proxy the host's Docker gateway as
 its upstream.
 

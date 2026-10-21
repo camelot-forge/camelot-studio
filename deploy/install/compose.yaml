@@ -160,10 +160,8 @@ services:
       CAMELOT_GAME_SERVER: ${CAMELOT_GAME_SERVER:?set CAMELOT_GAME_SERVER}
     volumes:
       - forge-feed:/feed:ro
-    # A proxy on the host reaches the loopback port; Coolify's proxy reaches the
-    # container on the compose network and ignores this binding.
-    ports:
-      - "${CAMELOT_FEED_BIND:-127.0.0.1}:${CAMELOT_FEED_PORT:-8080}:8080"
+    # The proxy reaches this port on the compose network. A host proxy on a
+    # bare VPS adds a `ports` mapping in a compose override.
     expose:
       - "8080"
     restart: unless-stopped
