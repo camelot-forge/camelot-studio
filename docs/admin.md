@@ -493,8 +493,16 @@ The environment folder, the Installer's folder, the deploy checkout and the feed
 are named volumes on the server install (`forge-env`, `forge-camelot`,
 `forge-deploy`, `forge-feed`), so a VPS needs no prepared directory tree.
 
-Four things to get right:
+Two surfaces face the internet: the feed, through the proxy, and the game,
+through the host's own ports. Coolify provides the first only; the second is a
+firewall rule and a forward on the router or on the provider's side.
 
+Five things to get right:
+
+- the game's ports are the host's, not the proxy's. `core` publishes `10300/tcp`
+  and `10400/tcp+udp` on the host's network; open them in the host's firewall,
+  forward them in the NAT in front of it, and check the public address from
+  outside the LAN (`nc -vz play.example:10300`);
 - the API must bind `127.0.0.1:5000`. The OpenDAoC image's .NET default is
   `8080`, which another service may hold; the server install sets
   `ASPNETCORE_URLS=http://127.0.0.1:5000`. An environment change is a **redeploy**
@@ -555,6 +563,8 @@ already there.
 | `Failed to bind to address http://[::]:8080: address already in use` | the API is on the image's default port. Set `ASPNETCORE_URLS=http://127.0.0.1:5000` and **recreate** `core`; a restart keeps the old environment. |
 | `installer directory 'camelot' does not exist; no release loaded` | `core` has no `forge-camelot` volume at `/app/camelot`; the plugin cannot see the releases. |
 | `Bind for 0.0.0.0:8080 failed: port is already allocated` | a compose service publishes 8080 on the host. The server install's feed does not; the proxy reaches it on the compose network. |
+| `Connection refused` on `play.example:10300` from outside the LAN | nothing forwards the game's ports. Coolify proxies 80/443 only; the host's firewall and the NAT in front of it must carry 10300/tcp and 10400/tcp+udp. |
+| the client shows **press ESC** at the end of its loading | the client never reached the game. Check the feed's `launcher.json`, then the two game ports from outside the LAN. |
 | `reload: unknown` on the Console | the server has no copy of the project's `deploy/log.jsonl`; that file is the desk's record |
 | `this environment was provisioned for 'X', not 'Y'` | one environment folder, one project: `project.md` §D1 |
 | `id N (zone Z, key K) is already held by <table> <key>` | a release allocates an id the server grew into; re-cut, the ids moved |

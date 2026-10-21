@@ -170,6 +170,12 @@ docker compose --env-file .env -f compose.yaml run --rm camelot-core \
 | 8770 | loopback | the Console; use the tunnel or a proxy on the host |
 | 3307 | loopback | the database; never public |
 
+The compose publishes `10300` and `10400` on the host's network. Opening them
+to the internet is a second step: a rule in the host's firewall, and a forward
+in whatever NAT sits in front of it. Check from outside the LAN with
+`nc -vz play.example:10300`. A client that shows **press ESC** at the end of its
+loading never reached the game; the feed and the Console can be green.
+
 The feed service listens on `8080` and declares it with `expose`; a proxy
 (Caddy, Traefik, nginx, Coolify) on the same Docker network serves
 `CAMELOT_FEED_URL` and adds TLS. A host proxy on a bare VPS needs a compose
@@ -190,6 +196,8 @@ Docker gateway as its upstream.
 | `... has no camelot-deploy branch: publish from the desk first` | the project repository has no `camelot-deploy` branch; publish once from the desk. |
 | `CAMELOT_DEPLOY_KEY_B64 is not an unencrypted SSH private key` | the base64 is the `.pub`, or it is multi-line. Use the private key, one line. |
 | `Access denied for user 'root'` | the `db` volume was initialized with another password. Remove `db-data` and redeploy while there is no player data. |
+| `Connection refused` on the public game address | the ports are not forwarded. The compose publishes them on the host; the host's firewall and the NAT in front of it must open them. |
+| the client shows **press ESC** at the end of its loading | it never reached the game. Check the feed's `launcher.json`, then the two game ports from outside the LAN. |
 
 ## Backups
 

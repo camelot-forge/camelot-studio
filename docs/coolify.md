@@ -188,6 +188,53 @@ domain. `core` is the game's TCP/UDP server, `console` is host-networked on
 The feed service has no host `ports` mapping. Coolify's proxy reaches it on the
 compose network; a host proxy on a bare VPS needs a compose override instead.
 
+## The game's ports
+
+Coolify proxies HTTP and terminates the feed's TLS. It does not forward the
+game: `core` listens on the host's own network, and two things in front of the
+host decide whether a player reaches it.
+
+The host's firewall:
+
+```sh
+sudo ufw allow 10300/tcp
+sudo ufw allow 10400/tcp
+sudo ufw allow 10400/udp
+sudo ufw status
+```
+
+The NAT in front of the host — a home router or the provider's firewall — must
+send **10300/tcp** and **10400/tcp+udp** to the host's private address.
+
+`hostname -I` prints that address. It also prints Docker's bridges; the LAN
+address is the one the forward must name. Check the game on the host, then on
+the LAN address:
+
+```sh
+nc -vz 127.0.0.1 10300
+nc -vz 192.0.2.10 10300   # the LAN address hostname -I printed
+```
+
+If the first answers and the second refuses, the host's firewall is still
+closed. If both answer, only the NAT is left. A dropped packet times out; a
+port with no listener refuses. A timeout on the LAN address is the host's
+firewall, not the game.
+
+Check the public address from a phone on mobile data, not from the LAN: a router
+without NAT loopback refuses from inside even when the forward is correct.
+
+```sh
+nc -vz play.example.com 10300
+nc -vz play.example.com 10400
+```
+
+The game server's log says `Server is now listening for incoming connections on
+0.0.0.0:10300` in every case. It listens on the host; the log says nothing about
+what reaches it.
+
+A client that shows **press ESC** at the end of its loading never reached the
+game. It read the feed, started, and failed to open its socket to `10300`.
+
 ## First deploy
 
 Select **Deploy**. Coolify pulls MariaDB and OpenDAoC, builds the four images and
@@ -257,6 +304,10 @@ docker compose --env-file .env -f compose.yaml run --rm camelot-core \
   env apply production --dir /deploy
 ```
 
+On the Coolify host, that command runs from the application's directory,
+`/data/coolify/applications/<uuid>`, which root owns. `cd` is a shell builtin,
+so `sudo cd` does not exist: open `sudo -i` and `cd` there.
+
 ## Updates
 
 **Camelot Forge.** Push to `main`; Coolify redeploys (GitHub App) or you click
@@ -307,6 +358,8 @@ them together.
 | `[Errno 111] Connection refused` on `:5000` | the API is off, failed to bind, or is on 8080. Check the `core` log. |
 | Deploy key: `Deploy keys are disabled for this repository` | the organization disables deploy keys. Enable `deploy_keys_enabled_for_repositories` in the organization settings. |
 | GitHub App: redirect lands on a website | the Coolify instance URL is wrong. Set **Settings → Instance → Instance's URL** to the real dashboard URL. |
+| `nc: connect to play.example.com (...) port 10300: Connection refused` from outside the LAN | nothing forwards the game. Coolify proxies 80/443 only; the host's firewall and the NAT in front of it must send 10300/tcp and 10400/tcp+udp to the host. |
+| the client shows **press ESC** at the end of its loading | the client never reached the game. Check `launcher.json`'s address, then the two ports from outside the LAN. The feed and the Console can be green. |
 
 ## Known cosmetic details
 
@@ -320,7 +373,8 @@ them together.
 ## Checklist
 
 - [ ] `feed.example.com` and `play.example.com` resolve to the server.
-- [ ] 80/443 reach Coolify's proxy; 10300/tcp and 10400/tcp+udp reach the host.
+- [ ] 80/443 reach Coolify's proxy; 10300/tcp and 10400/tcp+udp reach the game
+      from outside the LAN (`nc -vz play.example.com 10300`).
 - [ ] The deploy key is read-only on the project repository.
 - [ ] `camelot-deploy` exists and is published signed.
 - [ ] The compose application uses `deploy/install/compose.yaml`, base

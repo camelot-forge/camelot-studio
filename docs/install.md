@@ -50,8 +50,9 @@ fetch content over HTTP from the feed.
 - `git`, and a read-only deploy key on the project's repository.
 - A clone of the studio repository: the `camelot-core` job is built from `core/`,
   so the server needs the source.
-- Two ports for the players (the game's TCP and UDP) and one for the feed
-  behind TLS. The Console and the database stay on loopback.
+- The players' ports, **10300/tcp** and **10400/tcp+udp**, open in the host's
+  firewall and forwarded by the NAT in front of it. The feed behind TLS. The
+  Console and the database stay on loopback.
 
 ## 2. The desk
 

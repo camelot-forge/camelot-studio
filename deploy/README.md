@@ -110,6 +110,10 @@ the desk keeps its local URL and works online unchanged (`F §D3`).
 Ports to expose: the game's TCP and UDP (`10300`, `10400`) and the feed behind a
 TLS reverse proxy. The Console and the database stay on loopback.
 
+The compose publishes the game's ports on the host. The host's firewall and the
+NAT in front of it still have to carry them; `nc -vz <public address> 10300`
+from outside the LAN is the check.
+
 ## An update
 
 ```text
