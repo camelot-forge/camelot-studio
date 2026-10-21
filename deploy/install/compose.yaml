@@ -127,6 +127,9 @@ services:
     depends_on:
       camelot-bootstrap:
         condition: service_completed_successfully
+    # A one-shot job: `up -d` runs `env status` once, then the operator uses
+    # `run --rm`. It must never be restarted.
+    restart: "no"
     environment:
       CAMELOT_DB_HOST: 127.0.0.1
       CAMELOT_DB_PORT: ${CAMELOT_DB_PORT:-3307}
