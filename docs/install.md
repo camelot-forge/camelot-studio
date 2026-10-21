@@ -273,8 +273,9 @@ $EDITOR .env          # the five FILL values
 ```
 
 `deploy/install/README.md` walks the deploy key, the release key, Coolify, the
-ports and the first release. The rest of this section is the same stack by hand,
-for a machine whose directories you manage yourself.
+ports and the first release; `docs/coolify.md` is the Coolify-specific
+production walk. The rest of this section is the same stack by hand, for a
+machine whose directories you manage yourself.
 
 ### 4.1 The checkout
 

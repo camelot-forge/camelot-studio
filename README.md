@@ -146,6 +146,8 @@ release.
 ## Documentation
 
 - `docs/install.md` — installing the suite: the desk and the server.
+- `docs/coolify.md` — deploying the server on Coolify: the compose application,
+  the GitHub App, the domain and the first Pull.
 - `docs/admin.md` — running a shard: the daily flow, backups, and what each
   refusal means.
 - `docs/formats.md` — DAoC client format reference.

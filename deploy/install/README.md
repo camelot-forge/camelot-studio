@@ -112,9 +112,10 @@ one is a missing `camelot-deploy` branch: publish from the desk, then rerun
 
 ## 5. Coolify
 
-Coolify runs the same file. Create a compose resource from the `camelot-studio`
-repository, set the compose file to `deploy/install/compose.yaml`, and put the
-values of `.env` in the resource's environment.
+Coolify runs the same file. Create a **Docker Compose** application from
+`camelot-forge/camelot-studio`, set the compose file to
+`deploy/install/compose.yaml`, and put the values of `.env` in the resource's
+environment. The full walk, including the GitHub App, is `docs/coolify.md`.
 
 - Give the **feed** service a domain (`feed.example`), HTTPS, container port
   **8080**. Coolify's proxy reaches the container on the compose network.

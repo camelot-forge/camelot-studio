@@ -472,7 +472,8 @@ launcher remembers the client folder and the account in
 
 The server install is `deploy/install/`: one compose file, named volumes, and a
 `camelot-bootstrap` job. `install.sh` drives it on a bare VPS; Coolify deploys
-the same compose file. `deploy/install/README.md` is the step-by-step.
+the same compose file. `deploy/install/README.md` is the step-by-step; the
+Coolify-specific walk is `docs/coolify.md`.
 
 | Service | What it is |
 |---|---|

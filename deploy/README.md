@@ -54,7 +54,8 @@ desk or a machine whose directories you manage yourself.
 
 The server install bakes the C# Installer into `core`
 (`deploy/core/Dockerfile`): the admin flow is **Pull → Restart**, and the plugin
-applies the handed-over release before the world loads.
+applies the handed-over release before the world loads. `docs/coolify.md` is the
+Coolify-specific production walk.
 
 ## Local
 
