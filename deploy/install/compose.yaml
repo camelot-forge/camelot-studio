@@ -74,10 +74,15 @@ services:
     restart: "no"
 
   # OpenDAoC keeps its own release cadence: bump CAMELOT_CORE_IMAGE, then
-  # `docker compose up -d core`. The API binds 127.0.0.1:5000, which the
-  # Console shares through host networking.
+  # `docker compose up -d --build core`. The API binds 127.0.0.1:5000, which the
+  # Console shares through host networking. The image is OpenDAoC's pinned
+  # digest plus the Installer plugin, compiled by the server at boot.
   core:
-    image: ${CAMELOT_CORE_IMAGE:-ghcr.io/opendaoc/opendaoc-core@sha256:89da37855ab3629273884652b646f3bc2a84398193926646d6721341a58d0d3e}
+    build:
+      context: ../..
+      dockerfile: deploy/core/Dockerfile
+      args:
+        CAMELOT_CORE_IMAGE: ${CAMELOT_CORE_IMAGE:-ghcr.io/opendaoc/opendaoc-core@sha256:89da37855ab3629273884652b646f3bc2a84398193926646d6721341a58d0d3e}
     network_mode: host
     depends_on:
       camelot-bootstrap:
@@ -102,7 +107,7 @@ services:
       GM_ACTION_LOGGER_NAME: gmactions
       INVALID_NAMES_FILE: ./config/invalidnames.txt
       LOG_CONFIG_FILE: ./config/logconfig.xml
-      SCRIPT_ASSEMBLIES: ""
+      SCRIPT_ASSEMBLIES: Newtonsoft.Json
       SCRIPT_COMPILATION_TARGET: ./lib/GameServerScripts.dll
       DB_TYPE: MYSQL
       DB_CONNECTION_STRING: "Server=127.0.0.1;Port=${CAMELOT_DB_PORT:-3307};Database=${CAMELOT_DB_NAME:?set CAMELOT_DB_NAME};UserId=root;Password=${CAMELOT_DB_PASSWORD:?set CAMELOT_DB_PASSWORD};TreatTinyAsBoolean=false;Pooling=true;MinimumPoolSize=30;MaximumPoolSize=120;ConnectionReset=false"
@@ -112,6 +117,9 @@ services:
       DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "False"
     volumes:
       - forge-core-logs:/app/logs
+      # The Installer's folder (`releases/`, `state.json`, `wanted.json`): the
+      # plugin reads it at boot, the Console hands releases over into it.
+      - forge-camelot:/app/camelot
     stdin_open: true
     tty: true
     # The emulator saves on shutdown; ten seconds is not enough for a world.

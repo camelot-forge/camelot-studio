@@ -117,7 +117,7 @@ values of `.env` in the resource's environment.
 - The **Console** stays on loopback. Reach it through a tunnel:
   `ssh -L 8770:127.0.0.1:8770 you@server`, then `http://127.0.0.1:8770/`.
 
-Coolify can also build the three images: the compose file carries their build
+Coolify can also build the images: the compose file carries their build
 contexts, and the repository is the whole source.
 
 ## 6. The first release
@@ -137,17 +137,21 @@ The order is desk → branch → Console → Installer:
 3. **Pull**. It fetches the branch, verifies the signature and the hashes,
    copies the server half into the environment, writes `wanted.json`, and mirrors
    the feed;
-4. apply the rows:
-   ```sh
-   docker compose --env-file .env -f compose.yaml run --rm camelot-core \
-     env apply production --dir /deploy
-   ```
-5. restart the game server if the release changed cached rows:
+4. restart the game server:
    ```sh
    docker compose --env-file .env -f compose.yaml restart core
    ```
+   The Installer plugin applies the handed-over release at boot, before the world
+   loads. The Console then shows the release applied.
+5. the players' launchers read the feed URL and update the client.
 
-The players' launchers read the feed URL and update the client.
+The `camelot-core` job remains the fallback for a server without the plugin, or
+for an apply without a restart:
+
+```sh
+docker compose --env-file .env -f compose.yaml run --rm camelot-core \
+  env apply production --dir /deploy
+```
 
 ## Ports
 
@@ -194,7 +198,7 @@ The project branch is reproducible from the desk's project; the database is not.
 then:
 
 ```sh
-docker compose --env-file .env -f compose.yaml up -d core
+docker compose --env-file .env -f compose.yaml up -d --build core
 docker compose --env-file .env -f compose.yaml run --rm camelot-core \
   env verify production --dir /deploy
 ```
@@ -203,7 +207,7 @@ Do not run Watchtower on the game server. A release of OpenDAoC may change its
 schema; `env verify` and `camelot server tables` are what tells you before the
 players see it.
 
-**Camelot Forge** is the checkout. Pull a new commit, rebuild the three images,
+**Camelot Forge** is the checkout. Pull a new commit, rebuild the images,
 and leave the volumes alone:
 
 ```sh
