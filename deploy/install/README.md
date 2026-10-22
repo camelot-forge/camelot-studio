@@ -121,7 +121,9 @@ environment. The full walk, including the GitHub App, is `docs/coolify.md`.
   **8080**. Coolify's proxy reaches the container on the compose network.
 - Leave **core** without a domain. It binds the game ports on the host.
 - The **Console** stays on loopback. Reach it through a tunnel:
-  `ssh -L 8770:127.0.0.1:8770 you@server`, then `http://127.0.0.1:8770/`.
+  `ssh -L 8770:127.0.0.1:8770 you@server`, then `http://127.0.0.1:8770/`. On a
+  machine with Tailscale, `tailscale serve --bg 8770` gives the same page on the
+  tailnet with TLS, and the bind stays loopback.
 
 Coolify can also build the images: the compose file carries their build
 contexts, and the repository is the whole source.

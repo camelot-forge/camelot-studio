@@ -135,6 +135,27 @@ Host networking is Linux-native; on Docker Desktop, run the Console from the
 checkout or bind OpenDAoC's API wider. The Console reads the environment and
 writes two asks: the handover and the reversal. It holds no database handle.
 
+## Tailnet
+
+The Console can stay on `127.0.0.1` and still be reachable from a phone or
+another machine: Tailscale serves it on the tailnet with a real certificate.
+
+```sh
+sudo tailscale serve --bg 8770
+sudo tailscale serve status
+```
+
+The URL is `https://<machine>.<tailnet>.ts.net/`. Nothing changes in the
+compose: the Console keeps its loopback bind, and `tailscaled` proxies to it on
+the host. Only the tailnet reaches it; `tailscale funnel` is the public one and
+is not what this is.
+
+HTTPS certificates must be enabled for the tailnet (the admin console's **DNS**
+page). Without them, `tailscale serve` fails and says so.
+
+This is the exposure for a private or test shard: no tunnel to keep open, no
+port on the host, TLS from Tailscale, and the operator password still in front.
+
 ## Player counts
 
 `CAMELOT_CONSOLE_API_URL` and `CAMELOT_API_PASSWORD` also turn on the read half

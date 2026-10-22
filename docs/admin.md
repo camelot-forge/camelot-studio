@@ -489,6 +489,10 @@ The bootstrap is idempotent and never drops a database that already has
 `core` boot has the API. The admin flow is **Pull → Restart**: the plugin applies
 the handed-over release before the world loads.
 
+The Console listens on loopback. Reach it through an SSH tunnel, or serve it to
+the tailnet with `tailscale serve --bg 8770` and open
+`https://<machine>.<tailnet>.ts.net/`; the bind stays `127.0.0.1:8770`.
+
 The environment folder, the Installer's folder, the deploy checkout and the feed
 are named volumes on the server install (`forge-env`, `forge-camelot`,
 `forge-deploy`, `forge-feed`), so a VPS needs no prepared directory tree.

@@ -31,7 +31,9 @@ Coolify never sees it.
 
 The feed and the Console are not the same exposure. The feed is public HTTP
 behind Coolify's proxy. The Console is an operator page on loopback; keep it
-behind an SSH tunnel. The database and OpenDAoC's API stay on loopback too.
+behind an SSH tunnel, or serve it to the tailnet with `tailscale serve --bg 8770`
+and open the `https://<machine>.<tailnet>.ts.net/` URL it prints. The database
+and OpenDAoC's API stay on loopback too.
 
 ## The two keys
 
@@ -360,6 +362,7 @@ them together.
 | GitHub App: redirect lands on a website | the Coolify instance URL is wrong. Set **Settings → Instance → Instance's URL** to the real dashboard URL. |
 | `nc: connect to play.example.com (...) port 10300: Connection refused` from outside the LAN | nothing forwards the game. Coolify proxies 80/443 only; the host's firewall and the NAT in front of it must send 10300/tcp and 10400/tcp+udp to the host. |
 | the client shows **press ESC** at the end of its loading | the client never reached the game. Check `launcher.json`'s address, then the two ports from outside the LAN. The feed and the Console can be green. |
+| `tailscale serve` says HTTPS is not enabled | enable HTTPS certificates for the tailnet in the admin console's **DNS** page, then run the command again. |
 
 ## Known cosmetic details
 
