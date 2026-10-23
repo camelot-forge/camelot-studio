@@ -75,9 +75,12 @@ Point the tools at your client:
 export DAOC_CLIENT="$HOME/daoc/clean-client"    # add to ~/.bashrc or ~/.zshrc
 ```
 
-The project records it in `machine.json` (`project new --client`, then
-`project machine`), which is what `studio` reads. The variable is the last
-resort, for a caller that passes nothing else.
+The first run does not need it. `camelot serve` with no argument opens **Home**
+with no client at all, and the **New project** modal asks for the folder; the
+daemon adopts that client when the project opens. The variable is for the CLI
+verbs that work on a client outside a project (`info`, `gltf`, `client install`,
+`batch`, `contract`, the corpus tests). The project records its client in
+`machine.json`, which is what `studio` reads.
 
 ### 2.2 The client, and the one rule
 
@@ -232,6 +235,16 @@ Then read the environment back:
 state records against the rows it holds, and the files in the folder.
 
 ### 2.5 Authoring
+
+On a new machine, the first run has no client to name:
+
+```sh
+.venv/bin/camelot serve
+```
+
+It opens **Home**. **New project** asks for the folder, checks it, writes the
+client into `machine.json` and adopts it. Once a project exists, the daily verb
+is:
 
 ```sh
 .venv/bin/camelot studio ~/daoc/camelot-hills          # read-only

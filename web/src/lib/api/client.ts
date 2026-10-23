@@ -107,7 +107,8 @@ export interface HomeDaemon {
 	build: string;
 	host: string;
 	port: number;
-	client: string;
+	/** `null` when the daemon started without a client (the front door). */
+	client: string | null;
 	zones: number;
 }
 

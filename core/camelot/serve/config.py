@@ -12,6 +12,11 @@ DEFAULT_PORT = 8760
 
 CLIENT_ENV = "DAOC_CLIENT"
 
+#: Where a daemon that started with no client reads from: an empty directory,
+#: so every path stays real and the first `session.open` can adopt the
+#: project's own client (`home.md` §D3/D4).
+FRONT_DOOR = "front-door"
+
 
 def default_cache_dir() -> Path:
     """Per-user cache directory (never inside the repo, never versioned)."""
@@ -24,11 +29,16 @@ def client_root_from_env() -> str | None:
     return value or None
 
 
+def front_door_root() -> Path:
+    """The empty root a front-door daemon reads until a project is opened."""
+    return paths.cache_dir() / FRONT_DOOR
+
+
 @dataclass
 class ServeConfig:
     """Everything the daemon needs to run, resolved up front."""
 
-    root: Path
+    root: Path | None = None
     cache_dir: Path = field(default_factory=default_cache_dir)
     #: Where this machine keeps its own files across projects — the recent
     #: projects list today (`home.md` §D1). Not the cache directory: a cache
@@ -62,9 +72,18 @@ class ServeConfig:
     #: the panel says who holds it. Read-only is a *state*, never a flag an
     #: operator can turn off from the browser.
     read_only: bool = False
+    #: The daemon started with no client and no project: Home asks for one
+    #: (`home.md` §D4). Every component is re-pointed by `session.open`'s
+    #: `_adopt` once a project names its client.
+    front_door: bool = False
 
     def __post_init__(self) -> None:
-        self.root = Path(self.root).expanduser().resolve()
+        if self.root is None:
+            self.root = front_door_root()
+            self.root.mkdir(parents=True, exist_ok=True)
+            self.front_door = True
+        else:
+            self.root = Path(self.root).expanduser().resolve()
         self.cache_dir = Path(self.cache_dir).expanduser()
         self.config_dir = Path(self.config_dir).expanduser()
         if self.server_rows is not None:

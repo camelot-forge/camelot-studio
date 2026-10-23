@@ -60,7 +60,9 @@
 	const label = $derived(clientLabel(check));
 	const Icon = $derived(kind === 'clone' ? GitBranch : kind === 'new' ? Plus : Folder);
 	const ready = $derived(
-		kind === 'clone' ? url.trim().length > 0 && dir.trim().length > 0 : dir.trim().length > 0
+		dir.trim().length > 0 &&
+			client.trim().length > 0 &&
+			(kind !== 'clone' || url.trim().length > 0)
 	);
 
 	/** `~/servers/<slug>` — the draft's own default, refreshed until the

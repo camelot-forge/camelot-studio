@@ -447,7 +447,9 @@ class HomeDaemon(BaseModel):
     build: str = "unknown"
     host: str
     port: int
-    client: str
+    #: `None` when the daemon started without a client (the front door): Home
+    #: asks for one before it creates or opens a project.
+    client: str | None = None
     zones: int = 0
 
 

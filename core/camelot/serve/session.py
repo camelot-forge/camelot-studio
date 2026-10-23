@@ -203,10 +203,16 @@ class Session:
     def _client_for(self, project: project_mod.Project) -> tuple[Path, str]:
         """`machine.json` first, then `$DAOC_CLIENT`, then the root this daemon
         already reads — and that last fallback warns, because the base it
-        points at may not be this project's (`home.md` §D3.3)."""
+        points at may not be this project's (`home.md` §D3.3). A front-door
+        daemon has no root to inherit: it refuses instead, with the command."""
         found = project_mod.client_root(project)
         if found is not None:
             return found, ""
+        if self.config.front_door:
+            raise project_mod.ProjectError(
+                f"{project.name} names no client — `camelot project machine --dir "
+                f"{project.root} --client <client>`"
+            )
         root = self.config.root
         return root, f"{project.name} names no client — this daemon keeps reading {root}"
 
@@ -215,6 +221,7 @@ class Session:
         place, because every router holds these objects (`home.md` §D3.4)."""
         self.config.project = project.root
         self.config.root = Path(client).expanduser().resolve()
+        self.config.front_door = False
         if self.editor is not None:
             self.editor.repoint()
         self.world.repoint()

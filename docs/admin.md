@@ -105,6 +105,10 @@ answer, an environment the project does not declare. The project's verbs
 (`open`, `release`, `publish`, `env`, `studio`) refuse to run when the file is
 missing.
 
+A daemon started with no client (`camelot serve`) serves **Home** only. The
+**New project** modal names the client, and the daemon adopts it when the project
+opens; `$DAOC_CLIENT` stays the last resort for the CLI's client-only verbs.
+
 ### The one rule: the client is pristine
 
 `camelot project feed` and `project publish` stage a hardlinked copy of the

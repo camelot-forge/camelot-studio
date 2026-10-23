@@ -1151,14 +1151,7 @@ def cmd_serve(args) -> int:
             return 2
     else:
         root = client_root_from_env()
-        if not root:
-            print(
-                "error: no client root; pass --root, set $DAOC_CLIENT, "
-                "or pass --project to read machine.json",
-                file=sys.stderr,
-            )
-            return 2
-    if not os.path.isdir(root):
+    if root is not None and not os.path.isdir(root):
         print(f"error: not a directory: {root}", file=sys.stderr)
         return 2
 
@@ -1229,7 +1222,13 @@ def cmd_serve(args) -> int:
     # the operator's daily flow (a daemon on their project) is unchanged.
     landing = "world" if cfg.project is not None else "home"
     url = f"http://{'localhost' if cfg.is_loopback else host}:{port}/"
-    print(f"camelot serve: root={cfg.root}")
+    if cfg.front_door:
+        print(
+            "camelot serve: no client yet — Home asks for one when you create "
+            "or open a project"
+        )
+    else:
+        print(f"camelot serve: root={cfg.root}")
     print(f"  viewer: {url}{landing}")
     print(f"  api:    {url}api/v1/health  (docs at {url}api/docs)")
     if not static_dir:

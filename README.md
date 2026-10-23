@@ -46,6 +46,9 @@ Layer contract: **glTF + JSON**. Binary formats live only in `core/`; `web/`,
 ## The desk
 
 ```sh
+# first run: no client to name — Home asks for one
+.venv/bin/camelot serve
+
 # a project: the whole content of one server in one folder
 .venv/bin/camelot project new camelot-hills --client "$DAOC_CLIENT" --git
 .venv/bin/camelot project populate --all-zones --dir camelot-hills

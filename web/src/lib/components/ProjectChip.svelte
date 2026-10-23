@@ -208,7 +208,7 @@
 {#if door && asked}
 	<ProjectModal
 		kind={door}
-		defaultClient={asked.daemon.client}
+		defaultClient={asked.daemon.client ?? ''}
 		onclose={() => (door = null)}
 		ondone={done}
 	/>

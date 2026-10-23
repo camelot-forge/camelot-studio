@@ -95,6 +95,10 @@ def _client_of(config: ServeConfig, wanted: str) -> Path:
     name; whether it *is* a client is the reader's business (`project.new`
     fingerprints the base and refuses a missing resource by name)."""
     directory = Path(wanted).expanduser() if wanted else config.root
+    if not wanted and config.front_door:
+        raise project_mod.ProjectError(
+            "choose the client folder: this daemon started without one"
+        )
     if not directory.is_dir():
         raise project_mod.ProjectError(f"no client directory at {directory}")
     return directory
@@ -287,8 +291,8 @@ def build_home_router(config: ServeConfig, world, session: Session) -> APIRouter
             build=build_id(),
             host=config.host,
             port=config.port,
-            client=str(config.root),
-            zones=len(project_mod.zones_on_disk(config.root)),
+            client=None if config.front_door else str(config.root),
+            zones=0 if config.front_door else len(project_mod.zones_on_disk(config.root)),
         )
 
     def recent_rows() -> tuple[list[HomeRecent], str]:

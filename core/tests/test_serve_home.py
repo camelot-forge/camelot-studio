@@ -675,3 +675,85 @@ def test_health_never_migrates_the_project_it_reads(world, machine, tmp_path):  
     ).json()
     assert found["pending"] == {}
     assert legacy.is_file()  # nothing moved it aside
+
+
+# -- the front door: a daemon that started before any client was named --------
+
+
+def front_door(tmp_path, machine, monkeypatch):
+    """Home without a client (`home.md` §D4): the modal is where one is named."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.delenv("DAOC_CLIENT", raising=False)
+    return home_client(None, config_dir=machine)
+
+
+def test_a_front_door_daemon_serves_home_without_a_client(tmp_path, machine, monkeypatch):
+    client = front_door(tmp_path, machine, monkeypatch)
+
+    payload = client.get("/api/v1/home").json()
+
+    assert payload["daemon"]["client"] is None
+    assert payload["daemon"]["zones"] == 0
+    assert payload["project"] is None
+
+
+def test_the_create_door_requires_a_client_when_the_daemon_has_none(
+    tmp_path, machine, monkeypatch
+):
+    client = front_door(tmp_path, machine, monkeypatch)
+
+    refused = client.post(
+        "/api/v1/home/new", json={"name": "Avalon", "dir": str(tmp_path / "avalon")}
+    )
+
+    assert refused.status_code == 400
+    assert "client folder" in refused.json()["detail"]
+    assert not (tmp_path / "avalon").exists()
+
+
+def test_the_front_door_adopts_the_client_it_creates(
+    base, tmp_path, machine, monkeypatch  # noqa: F811
+):
+    client = front_door(tmp_path, machine, monkeypatch)
+
+    answer = client.post(
+        "/api/v1/home/new",
+        json={
+            "name": "Avalon",
+            "dir": str(tmp_path / "avalon"),
+            "client": str(base),
+            "open": True,
+        },
+    ).json()
+
+    assert answer["opened"] is True
+    payload = client.get("/api/v1/home").json()
+    assert payload["daemon"]["client"] == str(base)
+    assert payload["daemon"]["zones"] >= 2
+
+
+def test_opening_a_project_that_names_no_client_is_refused_at_the_front_door(
+    tmp_path, machine, monkeypatch
+):
+    project = pj.new(tmp_path / "avalon", name="Avalon")
+    client = front_door(tmp_path, machine, monkeypatch)
+
+    refused = client.post("/api/v1/home/open", json={"path": str(project.root)})
+
+    assert refused.status_code == 400
+    assert "names no client" in refused.json()["detail"]
+    assert "project machine" in refused.json()["detail"]
+
+
+def test_serve_starts_without_a_client(tmp_path, monkeypatch, capsys):
+    """The first run: no client, no project — Home is the front door."""
+    import uvicorn
+
+    from camelot.cli import main
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.delenv("DAOC_CLIENT", raising=False)
+    monkeypatch.setattr(uvicorn, "run", lambda *arguments, **keywords: None)
+
+    assert main(["serve", "--no-open", "--no-watch"]) == 0
+    assert "no client yet" in capsys.readouterr().out

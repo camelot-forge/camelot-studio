@@ -137,11 +137,15 @@
 	<AppBar section="home" subtitle={payload?.project ? payload.project.name : 'no project open'}>
 		{#snippet actions()}
 			{#if payload}
-				<div class="chip" title="the client this daemon reads">
-					<HardDrive size={15} />
-					<span class="client">{payload.daemon.client.split('/').filter(Boolean).pop()}</span>
-					<span class="zones">{payload.daemon.zones.toLocaleString()} zones</span>
-				</div>
+				{#if payload.daemon.client}
+					<div class="chip" title="the client this daemon reads">
+						<HardDrive size={15} />
+						<span class="client"
+							>{payload.daemon.client.split('/').filter(Boolean).pop()}</span
+						>
+						<span class="zones">{payload.daemon.zones.toLocaleString()} zones</span>
+					</div>
+				{/if}
 			{/if}
 		{/snippet}
 	</AppBar>
@@ -272,7 +276,9 @@
 		{/snippet}
 		{#snippet center()}
 			{#if payload}
-				<span>{payload.daemon.client} · {payload.daemon.zones.toLocaleString()} zones</span>
+				<span
+					>{payload.daemon.client ?? 'no client yet'} · {payload.daemon.zones.toLocaleString()} zones</span
+				>
 			{/if}
 		{/snippet}
 		{#snippet right()}
@@ -286,7 +292,7 @@
 {#if door && payload}
 	<ProjectModal
 		kind={door}
-		defaultClient={payload.daemon.client}
+		defaultClient={payload.daemon.client ?? ''}
 		defaultUrl={cloneUrl}
 		onclose={() => {
 			door = null;
