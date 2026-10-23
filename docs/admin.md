@@ -16,7 +16,7 @@ by a player's launcher. Every path and number below is from that walk.
 
 | Surface | Runs on | What it does |
 |---|---|---|
-| **Studio** | the desk | the world editor and the asset library (`camelot serve --project …`) |
+| **Studio** | the desk | the world editor and the asset library (`camelot studio …`) |
 | **Deploy** | the desk | cuts releases and hands them to an environment (`camelot project release`, `project deploy`, `project promote`) |
 | **Feed** | built on the desk, served on the server | what the players' launcher reads (`camelot project feed`, then `feedserve`) |
 | **Console** | the server | the running server's face: what is applied, what is wanted, Pull, Restart (`camelot console`) |
@@ -50,7 +50,9 @@ what `camelot project verify --rebuild N` asserts.
 
 ### `machine.json`
 
-This is the only file you edit by hand for the tool to find your machines:
+This is the only file that stays out of git. Write it with the tool —
+`camelot project machine` fills an environment from its `serverconfig.xml` — or
+by hand if you prefer; `camelot project check` reads it back either way.
 
 ```json
 {
@@ -317,21 +319,25 @@ enables Play. Play is refused while the client is behind the feed.
 ## 5. A new local test server
 
 ```sh
-# 1. the project
-camelot project new camelot-hills --dir ~/daoc --environments local,staging,production --git
+# 1. the project, and the client it edits (recorded in machine.json)
+camelot project new camelot-hills --dir ~/daoc --client "$DAOC_CLIENT" \
+  --environments local,staging,production --git
 
-# 2. this machine's answers
-$EDITOR ~/daoc/camelot-hills/machine.json     # client, and a root per environment
+# 2. the server's own files: an OpenDAoC build in <root>/server, its
+#    serverconfig.xml already naming the database this environment will use
 
-# 3. the environment's database, from OpenDAoC's baseline
+# 3. this machine's answers, derived from that config
+camelot project machine --dir ~/daoc/camelot-hills \
+  --client "$DAOC_CLIENT" \
+  --db-config ~/daoc/forge-env-local/server/config/serverconfig.xml
+camelot project check --dir ~/daoc/camelot-hills --no-live
+
+# 4. the environment's database, from OpenDAoC's baseline
 camelot env provision local --dir ~/daoc/camelot-hills --yes
 camelot env status local --dir ~/daoc/camelot-hills
 
-# 4. the server's own files: an OpenDAoC build in <root>/server, its
-#    serverconfig.xml pointing at the database provision created
-
 # 5. author
-camelot project open camelot-hills --db-config <root>/server/config/serverconfig.xml --db-write
+camelot studio ~/daoc/camelot-hills --edit
 ```
 
 `env provision` **drops and re-imports** the environment's database: it is what
@@ -575,7 +581,7 @@ already there.
 | Message | What happened |
 |---|---|
 | `nothing to publish: the deploy branch already carries these bytes` | the feed and the payloads are already on the branch; nothing changed since the last publish |
-| `no feed URL: pass --feed-url or set CAMELOT_FEED_URL` | a publish builds the feed, and the feed must say where it is served |
+| `no feed URL: pass --feed-url or set CAMELOT_FEED_URL` | a publish builds the feed, and the feed must say where it is served; a feed already built names one |
 | `no release carries a client half yet` | `project feed` with no release: cut one first |
 | `N file(s) the base has are not in the staged tree` | the protocol cannot remove a file from a player's client; a feed that lost a file is refused |
 | `the checkout's bytes do not hash what the release record says` | the branch is not what the release recorded — do not hand it over; publish again |

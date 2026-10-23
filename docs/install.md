@@ -5,7 +5,7 @@ done, and `deploy/README.md` maps the containers.
 
 | Surface | Runs on | What it does |
 |---|---|---|
-| Studio | the desk | the world editor and the asset library (`camelot serve --project …`) |
+| Studio | the desk | the world editor and the asset library (`camelot studio …`) |
 | Deploy | the desk | cuts releases, hands them to an environment, publishes the branch |
 | Feed | built on the desk, served on the server | what the players' launcher reads |
 | Console | the server | what is applied, what is wanted, Pull, Restart, Reverse |
@@ -75,6 +75,10 @@ Point the tools at your client:
 export DAOC_CLIENT="$HOME/daoc/clean-client"    # add to ~/.bashrc or ~/.zshrc
 ```
 
+The project records it in `machine.json` (`project new --client`, then
+`project machine`), which is what `studio` reads. The variable is the last
+resort, for a caller that passes nothing else.
+
 ### 2.2 The client, and the one rule
 
 `project feed` and `project publish` stage a hardlinked copy of the client you
@@ -111,7 +115,9 @@ client), the folder shape, `.gitignore`, `.gitattributes`, and a `machine.json`
 naming the client you passed.
 
 `machine.json` carries this machine's paths and stays out of git. It is the only
-file you edit by hand; fill in one entry per environment.
+file the project does not track; write it with `camelot project machine` (below),
+or by hand, and read it back with `camelot project check`. Fill in one entry per
+environment.
 
 ```json
 {
