@@ -50,13 +50,20 @@ Layer contract: **glTF + JSON**. Binary formats live only in `core/`; `web/`,
 .venv/bin/camelot project new camelot-hills --client "$DAOC_CLIENT" --git
 .venv/bin/camelot project populate --all-zones --dir camelot-hills
 
+# this machine's answers (client, database, key), then read them back
+.venv/bin/camelot project machine --dir camelot-hills \
+  --client "$DAOC_CLIENT" \
+  --db-config ~/daoc/forge-env-local/server/config/serverconfig.xml \
+  --release-key ~/daoc/keys/camelot-release
+.venv/bin/camelot project check --dir camelot-hills
+
 # the browser: the world editor, the asset library, Deploy, the Journal
-.venv/bin/camelot serve --project camelot-hills --db-write
+.venv/bin/camelot studio camelot-hills --edit
 ```
 
-`--db-config` reads the server's own database and `--db-write` is the explicit
-permission to patch its existing world rows. Every patch records the originals it
-read, so a revert is exact.
+`studio` reads `machine.json`, checks it, starts the daemon and opens the browser;
+`--edit` is the explicit permission to patch the server's existing world rows.
+Every patch records the originals it read, so a revert is exact.
 
 ```sh
 .venv/bin/camelot project release --dir camelot-hills      # cut the next release

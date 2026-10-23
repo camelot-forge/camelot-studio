@@ -20,6 +20,11 @@ from camelot.mpak import write_mpak
 
 @pytest.fixture()
 def base(tmp_path):
+    """The synthetic client, as a fixture (see `synthetic_base`)."""
+    return synthetic_base(tmp_path)
+
+
+def synthetic_base(tmp_path):
     """A synthetic base with the three shapes a real one uses: a plain file
     (the client's binary), a big archive (the tables), and an entry *inside*
     an archive (the zone index). Plus two zones — one of them in an UPPER-CASE

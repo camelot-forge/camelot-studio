@@ -136,6 +136,22 @@ file you edit by hand; fill in one entry per environment.
 `"client": false` marks an environment **server-only**: the dry run then writes
 only the server half.
 
+Write the file with the tool:
+
+```sh
+.venv/bin/camelot project machine --dir ~/daoc/camelot-hills \
+  --client "$DAOC_CLIENT" \
+  --db-config ~/daoc/forge-env-local/server/config/serverconfig.xml \
+  --release-key ~/daoc/keys/camelot-release
+.venv/bin/camelot project check --dir ~/daoc/camelot-hills
+```
+
+`project machine` derives the environment's folder, database, host and port from
+the `serverconfig.xml`. `project check` reads the file back and probes the
+database; it refuses a config that opens another database than the one the file
+names. `studio`, `project open`, `release`, `publish` and `env` refuse to run
+when the file is missing.
+
 `populate` records the resources your edits lean on: each zone's placements and
 its catalogue, and each client table whole. The three tables below are the ones
 the editor reads rows out of, and they are the ones every client ships:
@@ -211,20 +227,31 @@ state records against the rows it holds, and the files in the folder.
 
 ### 2.5 Authoring
 
-Either command serves the same daemon:
-
 ```sh
-# the browser: the world editor, the asset library, Deploy, the Journal
-.venv/bin/camelot serve --project ~/daoc/camelot-hills --db-write
-
-# the same daemon, after checking the base first
-.venv/bin/camelot project open ~/daoc/camelot-hills --db-write
+.venv/bin/camelot studio ~/daoc/camelot-hills          # read-only
+.venv/bin/camelot studio ~/daoc/camelot-hills --edit   # the server's rows
 ```
 
-`--db-write` lets the editor patch the server's **existing** world rows. Without
-it the daemon serves read-only, which is what a machine you only inspect wants.
-The `--db-config` flag points at the server's `serverconfig.xml` when the `db`
-block in `machine.json` is not enough.
+`studio` reads `machine.json`, checks it (the same walk as `project check`),
+starts the daemon and opens the browser. The client and the environment's
+`serverconfig.xml` come from the file: there is nothing to export. `--edit` is
+the explicit permission to patch the server's **existing** world rows; without
+it the daemon serves read-only.
+
+The environment's database must be running for the viewer to show mobs, statics
+and doors. `project check` says whether it answers. The game server is not
+needed to author — only to play and to `env deploy`.
+
+A caller that passes everything explicitly — CI, a container, a machine with no
+`machine.json` — still uses the daemon:
+
+```sh
+.venv/bin/camelot serve --project ~/daoc/camelot-hills --root "$DAOC_CLIENT" \
+  --db-config ~/daoc/forge-env-local/server/config/serverconfig.xml --db-write
+```
+
+`--server-rows <snapshot>` replaces the live database with an export
+(`camelot server export`), for a machine that must not reach MySQL.
 
 The daemon takes a lock on the project; a second daemon serves read-only and names
 the holder.

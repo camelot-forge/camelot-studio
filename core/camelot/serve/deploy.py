@@ -12,7 +12,6 @@ there yet is a fact the page says out loud — building it is P6.
 """
 from __future__ import annotations
 
-import os
 import threading
 from pathlib import Path
 
@@ -139,27 +138,15 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
         return {"progress": dict(progress)}
 
     def publish_target() -> tuple[str, str]:
-        """The two values the feed server will serve; the daemon reads the same
-        environment, so the page never asks for a URL (`F §D4`)."""
-        feed_url = (os.environ.get("CAMELOT_FEED_URL") or "").strip()
-        server = (os.environ.get("CAMELOT_GAME_SERVER") or "").strip()
-        if not feed_url:
-            raise HTTPException(
-                status_code=400,
-                detail="CAMELOT_FEED_URL is not set: the feed's public base URL",
-            )
-        feed_url = feed_url if feed_url.endswith("/") else feed_url + "/"
-        if not server:
-            raise HTTPException(
-                status_code=400,
-                detail="CAMELOT_GAME_SERVER is not set: the game's host:port",
-            )
-        if ":" not in server:
-            raise HTTPException(
-                status_code=400,
-                detail=f"CAMELOT_GAME_SERVER must be host:port, got {server!r}",
-            )
-        return feed_url, server
+        """The two values the feed server will serve: the daemon's environment,
+        or the feed that is already built beside the project. The same rule as
+        `project publish` (`F §D4`), so the page and the CLI cannot disagree."""
+        from .. import publish as publish_mod
+
+        try:
+            return publish_mod.feed_target(_root(config))
+        except publish_mod.PublishError as error:
+            raise _refused(error) from error
 
     def publish_in_background(project, base, feed_url: str, server: str) -> None:
         def step(stage: str, done: int = 0, total: int = 0) -> None:

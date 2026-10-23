@@ -71,7 +71,7 @@ def _identity(root) -> dict:
     }
 
 
-def _feed_target(root, feed_url, server) -> tuple[str, str]:
+def feed_target(root, feed_url=None, server=None) -> tuple[str, str]:
     """The two values the feed carries. Given, or from the environment, or from
     the feed that is already there — never guessed (`F §D4`)."""
     where = Path(root) / feed_mod.FEED
@@ -100,7 +100,13 @@ def _feed_target(root, feed_url, server) -> tuple[str, str]:
             "no game address: pass --server or set CAMELOT_GAME_SERVER "
             "(a feed already built names one)"
         )
-    return str(base_url), str(game)
+    # The feed's base is a directory URL: every patchlist entry is relative to
+    # it, and `feedbuild` refuses one without the slash. Normalise once, here,
+    # so the CLI and the page cannot disagree.
+    base_url = str(base_url)
+    if not base_url.endswith("/"):
+        base_url += "/"
+    return base_url, str(game)
 
 
 def _check_artifacts(root, record) -> None:
@@ -272,7 +278,7 @@ def publish(
         )
 
     if build:
-        target = _feed_target(root, feed_url, server)
+        target = feed_target(root, feed_url, server)
         try:
             feedbuild.build(
                 project,

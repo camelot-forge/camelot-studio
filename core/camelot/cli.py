@@ -367,10 +367,12 @@ def cmd_env(args) -> int:
     from pathlib import Path
 
     from . import envs, installer
+    from . import machine as machine_mod
     from . import project as projects
 
     try:
         project = projects.load(args.dir)
+        machine_mod.require(project.root)
     except projects.ProjectError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
@@ -608,6 +610,7 @@ def print_rebase(view: dict, decided: str = "") -> None:
 def cmd_project(args) -> int:
     from pathlib import Path
 
+    from . import machine as machine_mod
     from . import project as projects
 
     if args.project_cmd == "new":
@@ -665,11 +668,67 @@ def cmd_project(args) -> int:
             print(f"deploy: {fact['kind']}")
         return 0
 
+    if args.project_cmd == "machine":
+        if not any(
+            (
+                args.client,
+                args.root_dir,
+                args.db_config,
+                args.database,
+                args.release_key,
+                args.author,
+            )
+        ):
+            print(
+                "error: nothing to write: pass --client, --db-config, --release-key, "
+                "or another value this machine answers",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            project = projects.load(args.dir)
+            where, _ = machine_mod.write(
+                project.root,
+                env=args.env,
+                client=args.client,
+                root_dir=args.root_dir,
+                db_config=args.db_config,
+                database=args.database,
+                release_key=args.release_key,
+                author=args.author,
+            )
+        except projects.ProjectError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(f"wrote {where}")
+        for item in machine_mod.check(project.root, env=args.env, live=False):
+            if item["state"] != machine_mod.OK:
+                print(f"  {item['state']:<11} {item['field']}: {item['detail']}")
+        print("next: `camelot project check` probes the database")
+        return 0
+
+    if args.project_cmd == "check":
+        try:
+            project = projects.load(args.dir)
+            findings = machine_mod.check(project.root, env=args.env, live=not args.no_live)
+        except projects.ProjectError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        for item in findings:
+            print(f"  {item['state']:<11} {item['field']}: {item['detail']}")
+        hard = machine_mod.failures(findings)
+        if hard:
+            print(f"error: {len(hard)} problem(s) — see the fields above", file=sys.stderr)
+            return 1
+        print(f"{project.name}: this machine answers for {args.env}")
+        return 0
+
     if args.project_cmd == "open":
         # `open` is the operator's verb: check the base, say who holds the
         # checkout, then hand over to the daemon (which takes the lock itself).
         try:
             project = projects.load(args.dir)
+            machine_mod.require(project.root)
             findings = projects.verify(project, args.client)
         except projects.ProjectError as error:
             print(f"error: {error}", file=sys.stderr)
@@ -768,6 +827,7 @@ def cmd_project(args) -> int:
         from . import release as release_mod
 
         try:
+            machine_mod.require(project.root)
             record = release_mod.cut(project.root, client=args.client)
         except (release_mod.ReleaseError, projects.ProjectError) as error:
             print(f"error: {error}", file=sys.stderr)
@@ -851,6 +911,7 @@ def cmd_project(args) -> int:
         from . import publish as publish_mod
 
         try:
+            machine_mod.require(project.root)
             report = publish_mod.publish(
                 project.root,
                 args.number,
@@ -860,7 +921,7 @@ def cmd_project(args) -> int:
                 remote=args.remote,
                 release_key=args.release_key,
             )
-        except publish_mod.PublishError as error:
+        except (publish_mod.PublishError, projects.ProjectError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
         print(
@@ -1059,6 +1120,8 @@ def cmd_project(args) -> int:
 
 
 def cmd_serve(args) -> int:
+    from . import machine as machine_mod
+    from . import project as projects
     from .serve.config import (
         DEFAULT_HOST,
         DEFAULT_PORT,
@@ -1067,13 +1130,47 @@ def cmd_serve(args) -> int:
         default_cache_dir,
     )
 
-    root = args.root or client_root_from_env()
-    if not root:
-        print("error: no client root; pass --root or set $DAOC_CLIENT", file=sys.stderr)
-        return 2
+    project = None
+    # `--project` is also the older `--edits` (a 6.3 authoring directory with no
+    # `project.json`): machine.json is only read for a project.
+    if args.project and os.path.isfile(os.path.join(args.project, "project.json")):
+        try:
+            project = projects.load(args.project)
+        except projects.ProjectError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+
+    env = getattr(args, "env", None) or "local"
+    if args.root:
+        root = args.root
+    elif project is not None:
+        try:
+            root = str(machine_mod.resolve_client(project.root))
+        except machine_mod.MachineError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+    else:
+        root = client_root_from_env()
+        if not root:
+            print(
+                "error: no client root; pass --root, set $DAOC_CLIENT, "
+                "or pass --project to read machine.json",
+                file=sys.stderr,
+            )
+            return 2
     if not os.path.isdir(root):
         print(f"error: not a directory: {root}", file=sys.stderr)
         return 2
+
+    db_config = args.db_config
+    if db_config is None and project is not None:
+        db_config = machine_mod.resolve_db_config(project.root, env)
+        if db_config is None and args.server_rows is None:
+            print(
+                f"note: no server rows: {machine_mod.path(project.root)} names no "
+                f"db_config for {env!r}; the viewer renders the client only",
+                file=sys.stderr,
+            )
 
     host = args.host or DEFAULT_HOST
     port = args.port or DEFAULT_PORT
@@ -1096,7 +1193,7 @@ def cmd_serve(args) -> int:
         watch=not args.no_watch,
         static_dir=static_dir,
         server_rows=args.server_rows,
-        db_config=args.db_config,
+        db_config=db_config,
         db_write=args.db_write,
         project=args.project,
     )
@@ -1154,6 +1251,53 @@ def cmd_serve(args) -> int:
     finally:
         session.release()
     return 0
+
+
+def cmd_studio(args) -> int:
+    """The desk's one verb: check this machine, then open the project.
+
+    `machine.json` is the source here. A hard finding (missing file, a config
+    that names another database, a database that does not answer) stops before
+    the daemon starts, with one line per field and the command that fixes it.
+    """
+    from . import machine as machine_mod
+    from . import project as projects
+
+    try:
+        project = projects.load(args.dir)
+        findings = machine_mod.check(project.root, env=args.env, live=not args.no_live)
+    except projects.ProjectError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+    for item in findings:
+        if item["state"] != machine_mod.OK:
+            print(f"  {item['state']:<11} {item['field']}: {item['detail']}", file=sys.stderr)
+    hard = machine_mod.failures(findings)
+    if hard:
+        print(
+            f"error: this machine is not ready ({len(hard)} problem(s)); "
+            f"`camelot project machine` writes {machine_mod.path(project.root)}",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.edit and machine_mod.resolve_db_config(project.root, args.env) is None:
+        print(
+            f"error: --edit needs a db_config for {args.env!r}: name it in "
+            f"{machine_mod.path(project.root)}",
+            file=sys.stderr,
+        )
+        return 2
+
+    rest = ["--project", str(project.root), "--env", args.env]
+    if args.edit:
+        rest.append("--db-write")
+    if args.port is not None:
+        rest += ["--port", str(args.port)]
+    if args.no_open:
+        rest.append("--no-open")
+    return main(["serve", *rest])
 
 
 def cmd_pack(args) -> int:
@@ -1925,6 +2069,11 @@ def main(argv=None) -> int:
         "build outputs and the deploy log live there",
     )
     p.add_argument(
+        "--env",
+        default="local",
+        help="the environment machine.json answers for (default: local)",
+    )
+    p.add_argument(
         "--edits", dest="project", help="the older name of --project (the 6.3 authoring directory)"
     )
     p.add_argument(
@@ -1932,6 +2081,21 @@ def main(argv=None) -> int:
     )
     p.add_argument("--log-level", default="info")
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser(
+        "studio", help="open this project in the browser, after checking this machine"
+    )
+    p.add_argument("dir", nargs="?", default=".", help="the project's directory (default: .)")
+    p.add_argument("--env", default="local", help="the environment to open (default: local)")
+    p.add_argument(
+        "--edit",
+        action="store_true",
+        help="let the editor write the server's own rows (--db-write)",
+    )
+    p.add_argument("--port", type=int, help="port (default 8760)")
+    p.add_argument("--no-open", action="store_true", help="do not open the browser")
+    p.add_argument("--no-live", action="store_true", help="do not probe the database")
+    p.set_defaults(func=cmd_studio)
 
     p = sub.add_parser("server", help="the server's world rows (mob/worldobject/door/path)")
     sp = p.add_subparsers(dest="server_cmd", required=True)
@@ -2098,6 +2262,23 @@ def main(argv=None) -> int:
         nargs=argparse.REMAINDER,
         help="flags for the daemon, forwarded as-is (see `camelot serve --help`)",
     )
+    mp_ = pp.add_parser("machine", help="write this machine's facts (machine.json)")
+    mp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    mp_.add_argument(
+        "--env", default="local", help="the environment these values describe (default: local)"
+    )
+    mp_.add_argument("--client", help="this machine's client directory")
+    mp_.add_argument(
+        "--root-dir", help="the environment's folder (default: derived from --db-config)"
+    )
+    mp_.add_argument("--db-config", help="the environment's serverconfig.xml")
+    mp_.add_argument("--database", help="the database name (default: the config's own)")
+    mp_.add_argument("--release-key", help="the private key that signs releases")
+    mp_.add_argument("--author", help="the name that signs your journal shards")
+    ckp = pp.add_parser("check", help="read this machine's answers back, and probe them")
+    ckp.add_argument("--dir", default=".", help="the project's directory (default: .)")
+    ckp.add_argument("--env", default="local", help="the environment to check (default: local)")
+    ckp.add_argument("--no-live", action="store_true", help="do not probe the database")
     pop = pp.add_parser("populate", help="record the resources the project's edits depend on")
     pop.add_argument("--dir", default=".", help="the project's directory (default: .)")
     pop.add_argument("--client", help="the client to read (default: this machine's own answers)")

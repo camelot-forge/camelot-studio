@@ -78,11 +78,30 @@ This is the only file you edit by hand for the tool to find your machines:
   `project release`, `project feed` and `project publish` read.
 - `environments.<name>.root` is where that environment lives on this machine.
 - `baseline` is OpenDAoC's own database checkout; `env provision` imports it.
-- `db` is how to reach the environment's MySQL. Without it, the tool falls back
+- `db` is how `env` reaches the environment's MySQL. Without it, `env` falls back
   to the authoring server's `serverconfig.xml`, then to `$CAMELOT_DB_HOST`,
-  `_PORT`, `_USER`, `_PASSWORD`.
+  `_PORT`, `_USER`, `_PASSWORD`. The **viewer** does not read `db`: it reads the
+  environment's `db_config`, and that file carries the port and the database.
 - `"client": false` in an environment's block declares it **server-only**: no
   client half, no client folder. That is what a VPS is (§8).
+
+Write the file with the tool, not by hand:
+
+```sh
+camelot project machine --dir ~/daoc/forge-project \
+  --client ~/daoc/clean-client \
+  --db-config ~/daoc/forge-env-local/server/config/serverconfig.xml \
+  --release-key ~/daoc/keys/camelot-release
+camelot project check --dir ~/daoc/forge-project
+```
+
+`project machine` derives the environment's folder, database, host and port from
+the `serverconfig.xml`. `project check` reads the file back and refuses what the
+tool cannot reconcile: a config that opens **another** database than the one
+`machine.json` names, a client that is not there, a database that does not
+answer, an environment the project does not declare. The project's verbs
+(`open`, `release`, `publish`, `env`, `studio`) refuse to run when the file is
+missing.
 
 ### The one rule: the client is pristine
 
@@ -172,10 +191,14 @@ pull, one player.
 ### 4.1 Edit, on the desk
 
 ```sh
-.venv/bin/camelot serve --root "$DAOC_CLIENT" \
-  --project /home/you/daoc/forge-project \
-  --db-config /home/you/daoc/OpenDAoC-Database/…/serverconfig.xml --db-write
+camelot studio ~/daoc/forge-project --edit
 ```
+
+It reads `machine.json` (the client, the environment's `db_config`), checks them,
+starts the daemon and opens `/world`. `--edit` adds the permission to write the
+server's rows; without it the page is read-only. The environment's database must
+be running for the mobs to appear: `camelot project check` says whether it is.
+The game server is not needed to edit — only to play and to `env deploy`.
 
 Open `/world`, select the keep, move it. Every edit lands in the project's
 journal as an operation.
@@ -559,6 +582,7 @@ already there.
 | `the signature does not check out against <key>` | the record moved after it was signed, or the wrong key is configured; publish again, or point the server at the right `.pub` |
 | `the branch carries no release.json.sig` | this server checks signatures and the publish was unsigned: set `release_key` on the desk and publish again |
 | `the environment holds bytes this release does not record` | someone edited the server's files by hand; the pull refuses rather than overwrite |
+| `camelot studio` says the machine is not ready | `machine.json` is missing or names something the tool cannot reconcile. `camelot project check` lists each field; `camelot project machine` writes the missing answers. |
 | `an update is waiting — the client is at N, the shard publishes M` | the player's launcher refused Play until Update runs |
 | `release 0006 cannot be reversed while release 0007 is applied` | the newer release's values would be written over: reverse the newest first (`S §D17`) |
 | `release 0007 is not applied to this environment` | there is nothing to put back — the reversal needs the state the apply wrote |

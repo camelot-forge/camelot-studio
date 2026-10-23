@@ -219,3 +219,25 @@ def test_publish_refuses_a_project_without_a_release(tmp_path):
 
     with pytest.raises(pub.PublishError, match="no release yet"):
         pub.publish(root, None, build=False)
+
+
+def test_the_feed_target_reads_the_feed_that_is_already_built(tmp_path, monkeypatch):
+    """No environment, no flag: the feed beside the project is the answer the
+    page and the CLI both use (`F §D4`)."""
+    root = tmp_path / "avalon"
+    feed = root / "feed"
+    feed.mkdir(parents=True)
+    (feed / "release.json").write_text(
+        json.dumps({"base_url": "https://feed.example/"}), encoding="utf-8"
+    )
+    (feed / "launcher.json").write_text(
+        json.dumps({"server": "play.example:10300"}), encoding="utf-8"
+    )
+    monkeypatch.delenv("CAMELOT_FEED_URL", raising=False)
+    monkeypatch.delenv("CAMELOT_GAME_SERVER", raising=False)
+
+    assert pub.feed_target(root) == ("https://feed.example/", "play.example:10300")
+    assert pub.feed_target(root, "https://other.example/", "other:1") == (
+        "https://other.example/",
+        "other:1",
+    )
