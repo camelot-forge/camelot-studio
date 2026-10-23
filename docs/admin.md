@@ -102,7 +102,7 @@ the `serverconfig.xml`. `project check` reads the file back and refuses what the
 tool cannot reconcile: a config that opens **another** database than the one
 `machine.json` names, a client that is not there, a database that does not
 answer, an environment the project does not declare. The project's verbs
-(`open`, `release`, `publish`, `env`, `studio`) refuse to run when the file is
+(`release`, `publish`, `env`, `studio`) refuse to run when the file is
 missing.
 
 A daemon started with no client (`camelot serve`) serves **Home** only. The
@@ -200,11 +200,13 @@ pull, one player.
 camelot studio ~/daoc/forge-project --edit
 ```
 
-It reads `machine.json` (the client, the environment's `db_config`), checks them,
-starts the daemon and opens `/world`. `--edit` adds the permission to write the
-server's rows; without it the page is read-only. The environment's database must
-be running for the mobs to appear: `camelot project check` says whether it is.
-The game server is not needed to edit — only to play and to `env deploy`.
+With no path, `studio` opens this folder if it is a project, then the newest
+project in the machine's list, then Home (where one is created). It reads
+`machine.json` (the client, the environment's `db_config`), checks them, starts
+the daemon and opens `/world`. `--edit` adds the permission to write the server's
+rows; without it the page is read-only. The environment's database must be
+running for the mobs to appear: `camelot project check` says whether it is. The
+game server is not needed to edit — only to play and to `env deploy`.
 
 Open `/world`, select the keep, move it. Every edit lands in the project's
 journal as an operation.
@@ -223,6 +225,8 @@ It writes `releases/0001/release.json`, the server pack
 (`releases/0001/server/forge-project.tar.gz`, 22 KB) and the client half's
 inventory (`releases/0001/client/patchlist.json`). The release records its own
 order: `client-first` when it touches the client, `server-only` otherwise.
+
+In the browser, the same verb is **Deploy → Cut**.
 
 ### 4.3 Test it on your own server
 
@@ -244,8 +248,7 @@ Play it. If the keep moved in game, the desk is right and the rest is transport.
 ### 4.4 Build the feed
 
 ```sh
-camelot project feed --dir ~/daoc/forge-project \
-  --base-url http://127.0.0.1:8080/ --server 127.0.0.1:10301
+camelot project feed --dir ~/daoc/forge-project
 ```
 
 ```text
@@ -257,11 +260,17 @@ feed · version 1 · 30731 file(s) listed · 1 published · 25254 bytes
 `release.json` and `launcher.json`, and **only the files that changed**
 (`zones/Zone000/csv000.mpk`, 25 KB).
 
-The URL you pass is a placeholder: the service that serves the feed rewrites it
-(§5.2). Build with the URL your own test server uses and the same feed works
-online unchanged.
+The feed's public URL and the game's address live in `project.json` (`feed_url`,
+`game_server`), written once on the Deploy page's **Shard** card. Every machine
+and every publish reads them there; `--base-url`/`--server` override them for one
+build. The service that serves the feed still rewrites both on the way out
+(§5.2), so a feed built with a local URL works online unchanged.
 
 ### 4.5 Publish
+
+From the browser: **Deploy → Ship**. It builds the feed, signs the release record
+with this machine's `release_key`, commits the payloads and the feed to
+`camelot-deploy`, and pushes `origin`. The same thing from the desk's shell:
 
 ```sh
 camelot project publish 1 --dir ~/daoc/forge-project --remote origin
@@ -270,9 +279,13 @@ camelot project publish 1 --dir ~/daoc/forge-project --remote origin
 It commits `releases/0001/**`, `feed/**` and a `publish.json` marker to the
 `camelot-deploy` branch and pushes it. The commit is built with git's plumbing,
 so your working branch and its index stay as they are, and a publish is safe with
-uncommitted work in the tree. The deploy log gains one `publish` line. The
-content branch (your `main`) is where you version your work; `camelot-deploy` is
-the transport.
+uncommitted work in the tree. The content branch (your `main`) is where you
+version your work; `camelot-deploy` is the transport.
+
+The Shard card says which key signs. Without one, the release is published
+**unsigned** and a server that checks signatures refuses it. The deploy log gains
+one `publish` line; the publish deliberately leaves `main` alone, so the card
+offers **Commit the log** when that line is not committed yet.
 
 ### 4.6 Pull, on the server
 
@@ -603,6 +616,8 @@ already there.
 | `Bind for 0.0.0.0:8080 failed: port is already allocated` | a compose service publishes 8080 on the host. The server install's feed does not; the proxy reaches it on the compose network. |
 | `Connection refused` on `play.example:10300` from outside the LAN | nothing forwards the game's ports. Coolify proxies 80/443 only; the host's firewall and the NAT in front of it must carry 10300/tcp and 10400/tcp+udp. |
 | the client shows **press ESC** at the end of its loading | the client never reached the game. Check the feed's `launcher.json`, then the two game ports from outside the LAN. |
+| `no MySQL on 127.0.0.1:3307 — the environment's database is not running` | the database behind the environment's `db_config` is down. Start it, then `camelot project check`. |
+| `no release_key: a publish from this machine would be unsigned` | `camelot project machine --release-key <key>`, or set `$CAMELOT_RELEASE_KEY`. A server that checks signatures refuses an unsigned release. |
 | `reload: unknown` on the Console | the server has no copy of the project's `deploy/log.jsonl`; that file is the desk's record |
 | `this environment was provisioned for 'X', not 'Y'` | one environment folder, one project: `project.md` §D1 |
 | `id N (zone Z, key K) is already held by <table> <key>` | a release allocates an id the server grew into; re-cut, the ids moved |

@@ -187,6 +187,28 @@ export interface DeployPublish {
 	path: string | null;
 }
 
+/** The shard's public addresses, which live in `project.json` (tracked). */
+export interface DeployShard {
+	feed_url?: string;
+	game_server?: string;
+}
+
+/** Which key signs this machine's releases; `null` means unsigned. */
+export interface DeploySigning {
+	key: string | null;
+}
+
+/** `project publish` from the page: feed, signature, deploy branch, push. */
+export interface DeployShip {
+	running: boolean;
+	stage: string;
+	error: string | null;
+	release: number | null;
+	commit: string | null;
+	pushed: string | null;
+	signed: string | null;
+}
+
 /** One line of `deploy/log.jsonl` — the record of an attempt. */
 export interface DeployLogLine {
 	kind: string;
@@ -273,7 +295,12 @@ export interface DeployPage {
 	environments: DeployEnvironment[];
 	releases: DeployRelease[];
 	feed: DeployFeed;
+	shard: DeployShard;
+	signing: DeploySigning;
+	/** `deploy/log.jsonl` has a line HEAD does not carry yet. */
+	log_dirty: boolean;
 	publish: DeployPublish;
+	ship: DeployShip;
 	log: DeployLogLine[];
 }
 
@@ -903,7 +930,8 @@ export const api = {
 		name: string;
 		dir: string;
 		client?: string;
-		git?: boolean;
+		/** The environment's `serverconfig.xml`: the viewer's rows and database. */
+		db_config?: string;
 		staging?: boolean;
 		open?: boolean;
 	}) => send<HomeDoor>('POST', '/home/new', body),
@@ -955,5 +983,11 @@ export const api = {
 	deployCut: () => send<DeployCut>('POST', '/deploy/cut'),
 	deployVerify: (env: string) => send<DeployVerify>('POST', '/deploy/verify', { env }),
 	deployPublish: () => send<{ progress: DeployPublish }>('POST', '/deploy/publish'),
-	deployPublishProgress: () => get<{ progress: DeployPublish }>('/deploy/publish')
+	deployPublishProgress: () => get<{ progress: DeployPublish }>('/deploy/publish'),
+	deployShard: (ask: DeployShard) => send<DeployShard>('POST', '/deploy/shard', ask),
+	deployShip: (ask: { release?: number | null; remote?: string }) =>
+		send<{ progress: DeployShip }>('POST', '/deploy/ship', ask),
+	deployShipProgress: () => get<{ progress: DeployShip }>('/deploy/ship'),
+	deployCommitLog: () =>
+		send<{ commit: string; dirty: boolean }>('POST', '/deploy/commit-log')
 };

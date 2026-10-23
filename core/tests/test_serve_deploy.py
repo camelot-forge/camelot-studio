@@ -20,6 +20,7 @@ from test_zones import FIXTURES, world  # noqa: F401
 
 from camelot import feed as feed_mod
 from camelot import feedbuild
+from camelot import project as pj
 from camelot import release as rel
 from camelot.mpak import write_mpak
 from camelot.serve.app import create_app
@@ -297,6 +298,113 @@ def test_a_second_publish_is_refused_while_one_runs(project_client, tmp_path, mo
     finally:
         release.set()
         _published(api)
+
+
+def test_the_shard_addresses_are_written_to_the_project(project_client, tmp_path):
+    """The two values every player reads are facts of the project, not of the
+    daemon's shell (`F §D4`): the page writes them into `project.json`."""
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+    api = _api(project_client, project.root)
+
+    saved = api.post(
+        "/api/v1/deploy/shard",
+        json={"feed_url": "https://feed.example", "game_server": "play.example:10300"},
+    ).json()
+
+    assert saved == {
+        "feed_url": "https://feed.example/",
+        "game_server": "play.example:10300",
+    }
+    assert pj.shard(project.root) == saved
+    assert api.get("/api/v1/deploy").json()["shard"] == saved
+
+
+def test_a_shard_address_that_is_not_host_port_is_refused(project_client, tmp_path):
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+
+    refused = _api(project_client, project.root).post(
+        "/api/v1/deploy/shard", json={"game_server": "play.example"}
+    )
+
+    assert refused.status_code == 400 and "host:port" in refused.json()["detail"]
+
+
+def test_the_publish_route_reads_the_shards_own_addresses(
+    project_client, tmp_path, monkeypatch
+):
+    """No environment variable in a browser session: the project says where the
+    feed and the game are."""
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+    monkeypatch.delenv("CAMELOT_FEED_URL", raising=False)
+    monkeypatch.delenv("CAMELOT_GAME_SERVER", raising=False)
+    api = _api(project_client, project.root)
+    api.post(
+        "/api/v1/deploy/shard",
+        json={"feed_url": "https://feed.example/", "game_server": "play.example:10300"},
+    )
+
+    started = api.post("/api/v1/deploy/publish")
+
+    assert started.status_code == 200
+    progress = _published(api)
+    assert progress["error"] is None and progress["version"] == 1
+    launcher = json.loads((project.root / "feed" / "launcher.json").read_text(encoding="utf-8"))
+    assert launcher["feed"] == "https://feed.example/"
+    assert launcher["server"] == "play.example:10300"
+
+
+def test_the_ship_route_runs_the_publish_verb(project_client, tmp_path, monkeypatch):
+    """The page's Ship is `project publish`: feed, signature, deploy branch and
+    the push to `origin`, in the background."""
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+    calls = {}
+
+    def fake(root, number=None, *, build=True, feed_url=None, server=None, remote=None, **kwargs):
+        calls.update(
+            {"root": Path(root), "number": number, "build": build, "remote": remote}
+        )
+        return {
+            "release": 1,
+            "branch": "camelot-deploy",
+            "commit": "abc123def456",
+            "pushed": remote,
+            "signature": None,
+            "feed": {},
+        }
+
+    from camelot.serve import deploy as deploy_mod
+
+    monkeypatch.setattr(deploy_mod.publish_mod, "publish", fake)
+    monkeypatch.setattr(deploy_mod.publish_mod, "ensure_commit", lambda root: "head")
+    api = _api(project_client, project.root)
+
+    started = api.post("/api/v1/deploy/ship", json={"release": 1})
+    assert started.status_code == 200
+    for _ in range(100):
+        progress = api.get("/api/v1/deploy/ship").json()["progress"]
+        if not progress["running"]:
+            break
+        time.sleep(0.02)
+
+    assert calls == {"root": project.root, "number": 1, "build": True, "remote": "origin"}
+    assert progress["stage"] == "done" and progress["commit"] == "abc123def456"
+    assert progress["pushed"] == "origin"
+
+
+def test_the_page_says_which_key_signs(project_client, tmp_path):
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+    api = _api(project_client, project.root)
+
+    assert api.get("/api/v1/deploy").json()["signing"]["key"] is None
+
+    document = json.loads((project.root / pj.MACHINE_FILE).read_text(encoding="utf-8"))
+    document["release_key"] = "/home/tester/keys/camelot-release"
+    (project.root / pj.MACHINE_FILE).write_text(json.dumps(document), encoding="utf-8")
+
+    assert (
+        api.get("/api/v1/deploy").json()["signing"]["key"]
+        == "/home/tester/keys/camelot-release"
+    )
 
 
 def test_the_feed_panel_reads_the_launcher_files(project_client, tmp_path):

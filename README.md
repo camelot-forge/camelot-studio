@@ -66,7 +66,12 @@ Layer contract: **glTF + JSON**. Binary formats live only in `core/`; `web/`,
 
 `studio` reads `machine.json`, checks it, starts the daemon and opens the browser;
 `--edit` is the explicit permission to patch the server's existing world rows.
-Every patch records the originals it read, so a revert is exact.
+Every patch records the originals it read, so a revert is exact. With no path it
+opens this folder, then the newest recent project, then Home.
+
+The same loop is in the interface: Home creates a project (client, and the
+environment's `serverconfig.xml`), Deploy cuts and ships, the Shard card holds the
+feed URL and the game address.
 
 ```sh
 .venv/bin/camelot project release --dir camelot-hills      # cut the next release

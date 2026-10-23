@@ -723,36 +723,6 @@ def cmd_project(args) -> int:
         print(f"{project.name}: this machine answers for {args.env}")
         return 0
 
-    if args.project_cmd == "open":
-        # `open` is the operator's verb: check the base, say who holds the
-        # checkout, then hand over to the daemon (which takes the lock itself).
-        try:
-            project = projects.load(args.dir)
-            machine_mod.require(project.root)
-            findings = projects.verify(project, args.client)
-        except projects.ProjectError as error:
-            print(f"error: {error}", file=sys.stderr)
-            return 1
-        for finding in [item for item in findings if item["state"] != "ok"]:
-            print(
-                f"warning: {finding['resource']} {finding['state']} — {finding['detail']}",
-                file=sys.stderr,
-            )
-        if any(item["state"] != "ok" for item in findings):
-            print(
-                "warning: the base moved under this project; `camelot project verify` "
-                "lists it, and re-base comes with P8",
-                file=sys.stderr,
-            )
-        holder = projects.lock_state(project)
-        if holder is not None and holder.is_alive:
-            print(
-                f"note: {project.root} is held by {holder.author} (pid {holder.pid}): "
-                "the daemon will run read-only",
-                file=sys.stderr,
-            )
-        return main(["serve", "--project", str(project.root), *args.rest])
-
     try:
         project = projects.load(args.dir)
     except projects.ProjectError as error:
@@ -1253,17 +1223,57 @@ def cmd_serve(args) -> int:
 
 
 def cmd_studio(args) -> int:
-    """The desk's one verb: check this machine, then open the project.
+    """The desk's one verb: find the project, check this machine, open it.
 
     `machine.json` is the source here. A hard finding (missing file, a config
     that names another database, a database that does not answer) stops before
     the daemon starts, with one line per field and the command that fixes it.
+    With no project anywhere — no folder given, none in the current directory,
+    none in the recent list — it starts Home, where one is created.
     """
+    from pathlib import Path
+
     from . import machine as machine_mod
     from . import project as projects
+    from . import recent
+    from .paths import config_dir
+
+    directory = Path(args.dir).expanduser() if args.dir else Path.cwd()
+    project = None
+    if (directory / projects.PROJECT_FILE).is_file():
+        try:
+            project = projects.load(directory)
+        except projects.ProjectError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+    elif args.dir:
+        print(f"error: no project at {directory}", file=sys.stderr)
+        return 2
+    else:
+        for entry in recent.entries(config_dir()):
+            candidate = Path(entry["path"])
+            if (candidate / projects.PROJECT_FILE).is_file():
+                try:
+                    project = projects.load(candidate)
+                except projects.ProjectError as error:
+                    print(f"error: {error}", file=sys.stderr)
+                    return 2
+                break
+
+    if project is None:
+        if args.edit:
+            print(
+                "error: --edit needs a project — run `camelot serve` to create or open one",
+                file=sys.stderr,
+            )
+            return 2
+        print("no project here — opening Home", file=sys.stderr)
+        rest = ["--no-open"] if args.no_open else []
+        if args.port is not None:
+            rest += ["--port", str(args.port)]
+        return main(["serve", *rest])
 
     try:
-        project = projects.load(args.dir)
         findings = machine_mod.check(project.root, env=args.env, live=not args.no_live)
     except projects.ProjectError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -1280,6 +1290,19 @@ def cmd_studio(args) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # The base's fingerprints are a warning here, never a refusal: the machine
+    # check above is the one that stops a daemon, and it names the fix.
+    try:
+        base_findings = projects.verify(project)
+    except projects.ProjectError as error:
+        print(f"warning: {error}", file=sys.stderr)
+    else:
+        for finding in [item for item in base_findings if item["state"] != "ok"]:
+            print(
+                f"warning: {finding['resource']} {finding['state']} — {finding['detail']}",
+                file=sys.stderr,
+            )
 
     if args.edit and machine_mod.resolve_db_config(project.root, args.env) is None:
         print(
@@ -2084,7 +2107,12 @@ def main(argv=None) -> int:
     p = sub.add_parser(
         "studio", help="open this project in the browser, after checking this machine"
     )
-    p.add_argument("dir", nargs="?", default=".", help="the project's directory (default: .)")
+    p.add_argument(
+        "dir",
+        nargs="?",
+        default=None,
+        help="the project's directory (default: here, then the newest recent project)",
+    )
     p.add_argument("--env", default="local", help="the environment to open (default: local)")
     p.add_argument(
         "--edit",
@@ -2253,14 +2281,6 @@ def main(argv=None) -> int:
     )
     mp.add_argument("--author", help="the name that signs your journal shards")
     mp.add_argument("--git", action="store_true", help="run git init (no commit, no remote)")
-    op = pp.add_parser("open", help="verify a project and start the daemon on it")
-    op.add_argument("dir", help="the project's directory")
-    op.add_argument("--client", help="the client to check (default: this machine's own answers)")
-    op.add_argument(
-        "rest",
-        nargs=argparse.REMAINDER,
-        help="flags for the daemon, forwarded as-is (see `camelot serve --help`)",
-    )
     mp_ = pp.add_parser("machine", help="write this machine's facts (machine.json)")
     mp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
     mp_.add_argument(

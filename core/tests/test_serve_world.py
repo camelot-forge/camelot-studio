@@ -26,6 +26,7 @@ from camelot.serve.world import (
     TERRAIN_MAGIC,
     TERRAIN_VERSION,
     World,
+    _live_problem,
     terrain_binary,
     terraintex_path,
 )
@@ -549,3 +550,20 @@ def test_the_corpus_world_index_agrees_with_the_client_index():
     payload = client_for(CORPUS).get("/api/v1/world/index").json()
     assert len(payload["zones"]) == len(index.zones)
     assert {zone["id"] for zone in payload["zones"]} == set(index.zones)
+
+
+def test_a_database_that_is_down_is_named_with_its_address():
+    """`(2003, "Can't connect…")` is the driver's tuple; the operator gets the
+    fact and the address."""
+
+    class DriverError(Exception):
+        pass
+
+    connection = {"host": "localhost", "port": 3307, "database": "forge_project_local"}
+
+    assert _live_problem(DriverError(2003, "Can't connect"), connection) == (
+        "no MySQL on localhost:3307 — the environment's database is not running"
+    )
+    assert "refused the credentials" in _live_problem(DriverError(1045, "denied"), connection)
+    assert "forge_project_local" in _live_problem(DriverError(1049, "unknown"), connection)
+    assert _live_problem(DriverError(9999, "odd"), connection).startswith("live database:")

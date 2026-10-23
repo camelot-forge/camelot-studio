@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException
 
 from .. import __version__, recent
 from .. import journal as journal_mod
+from .. import machine as machine_mod
 from .. import project as project_mod
 from .. import rebase as rebase_mod
 from .api import build_id
@@ -137,13 +138,19 @@ def _create(config: ServeConfig, session: Session, body: HomeNewBody) -> HomeDoo
         raise project_mod.ProjectError(f"a project already lives here: {root}")
     client = _client_of(config, body.client)
     environments = ("local", "staging", "production") if body.staging else ("local", "production")
+    # Refuse a bad serverconfig before the folder exists: the create door writes
+    # once, and a half-created project is worse than a refusal (`home.md` D4).
+    if body.db_config:
+        machine_mod.validate_config(body.db_config)
     project = project_mod.new(
         root,
         name=body.name or None,
         client=client,
         environments=environments,
-        git=body.git,
+        git=True,  # a project ships on a branch: the repository is not optional
     )
+    if body.db_config:
+        machine_mod.write(project.root, env="local", db_config=body.db_config)
     zones = project_mod.zones_on_disk(client)
     found = project_mod.populate(client, zones=zones, tables=shipped_tables(client))
     project, _moved = project_mod.add_fingerprints(project.root, found)

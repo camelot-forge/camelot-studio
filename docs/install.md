@@ -158,7 +158,7 @@ Write the file with the tool:
 `project machine` derives the environment's folder, database, host and port from
 the `serverconfig.xml`. `project check` reads the file back and probes the
 database; it refuses a config that opens another database than the one the file
-names. `studio`, `project open`, `release`, `publish` and `env` refuse to run
+names. `studio`, `release`, `publish` and `env` refuse to run
 when the file is missing.
 
 `populate` records the resources your edits lean on: each zone's placements and
@@ -243,8 +243,9 @@ On a new machine, the first run has no client to name:
 ```
 
 It opens **Home**. **New project** asks for the folder, checks it, writes the
-client into `machine.json` and adopts it. Once a project exists, the daily verb
-is:
+client into `machine.json` and adopts it; the same modal takes the environment's
+`serverconfig.xml`, so the project also knows its database and its mobs. Once a
+project exists, the daily verb is:
 
 ```sh
 .venv/bin/camelot studio ~/daoc/camelot-hills          # read-only
@@ -452,13 +453,13 @@ has the details.
 The sequence that carries one edit to the players, in the order it runs.
 
 ```sh
-# on the desk
+# on the desk — or, in the browser: Deploy → Cut → Deploy → Ship
 .venv/bin/camelot project release --dir ~/daoc/camelot-hills     # cuts release 0001
 .venv/bin/camelot project deploy 1 --env local --dir ~/daoc/camelot-hills
 .venv/bin/camelot env apply local --dir ~/daoc/camelot-hills     # or the Installer, at boot
 .venv/bin/camelot env reload local --dir ~/daoc/camelot-hills    # records the ritual, in game
 
-.venv/bin/camelot project feed --dir ~/daoc/camelot-hills
+# feed, signature and the deploy branch in one verb (the page's Ship)
 .venv/bin/camelot project publish 1 --remote origin --dir ~/daoc/camelot-hills
 
 # on the server

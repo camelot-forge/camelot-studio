@@ -152,6 +152,12 @@ def check(root: str | os.PathLike, *, env: str = "local", live: bool = True) -> 
             add("release_key", OK, str(release_key))
         else:
             add("release_key", INVALID, f"{release_key}: not a file")
+    else:
+        add(
+            "release_key",
+            WARN,
+            "no release_key: a publish from this machine would be unsigned",
+        )
 
     project = project_mod.load(root)
     known = set(project.environments)
@@ -167,15 +173,15 @@ def check(root: str | os.PathLike, *, env: str = "local", live: bool = True) -> 
     if not item:
         add(
             f"environments.{env}",
-            MISSING,
-            f"no entry for {env!r}: name its folder, database and db_config",
+            WARN,
+            "no entry for this environment: the viewer renders the client only",
         )
         return found
 
     base = f"environments.{env}"
     folder = item.get("root")
     if not folder:
-        add(f"{base}.root", MISSING, "no folder: where this environment lives")
+        add(f"{base}.root", WARN, "no folder: `env` and the Console cannot reach it")
     else:
         root_dir = Path(str(folder)).expanduser()
         if root_dir.is_dir():
@@ -185,7 +191,7 @@ def check(root: str | os.PathLike, *, env: str = "local", live: bool = True) -> 
 
     database = item.get("database")
     if not database:
-        add(f"{base}.database", MISSING, "no database name")
+        add(f"{base}.database", WARN, "no database name: `env provision` cannot name one")
 
     config = item.get("db_config")
     connection = None
@@ -281,6 +287,18 @@ def _environment_root(config_path: Path) -> Path:
     return config_path.parent
 
 
+def validate_config(path) -> tuple[Path, dict]:
+    """A `serverconfig.xml` this machine can read, or a refusal that names it.
+    Called before a project is created, so a bad path creates nothing."""
+    config_path = Path(path).expanduser()
+    if not config_path.is_file():
+        raise MachineError(f"no serverconfig.xml at {config_path}")
+    try:
+        return config_path, serverrows.parse_server_config(str(config_path))
+    except serverrows.ServerRowsError as error:
+        raise MachineError(str(error)) from error
+
+
 def write(
     root: str | os.PathLike,
     *,
@@ -319,13 +337,7 @@ def write(
         data["release_key"] = str(key)
 
     if db_config is not None:
-        config_path = Path(db_config).expanduser()
-        if not config_path.is_file():
-            raise MachineError(f"no serverconfig.xml at {config_path}")
-        try:
-            connection = serverrows.parse_server_config(str(config_path))
-        except serverrows.ServerRowsError as error:
-            raise MachineError(str(error)) from error
+        config_path, connection = validate_config(db_config)
         current = environments.get(env)
         if isinstance(current, str):
             current = {"root": current}

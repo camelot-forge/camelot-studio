@@ -47,6 +47,7 @@
 	// the props are the modal's *initial* values: the operator takes it from there
 	let url = $state(untrack(() => defaultUrl));
 	let client = $state(untrack(() => defaultClient));
+	let serverconfig = $state('');
 	let git = $state(false);
 	let staging = $state(false);
 	let openIt = $state(true);
@@ -110,7 +111,7 @@
 		try {
 			const door =
 				kind === 'new'
-					? await api.homeNew({ name, dir, client, git, staging, open: openIt })
+					? await api.homeNew({ name, dir, client, db_config: serverconfig, staging, open: openIt })
 					: kind === 'import'
 						? await api.homeImport({ dir, name, client, git, open: openIt })
 						: await api.homeClone({ url, dir, client, open: openIt });
@@ -258,8 +259,22 @@
 			<span class="hint">The DAoC client this project uses.</span>
 		</label>
 
+		{#if kind === 'new'}
+			<label class="field" for="door-server">
+				<span>SERVERCONFIG (OPTIONAL)</span>
+				<input
+					id="door-server"
+					class="input"
+					type="text"
+					bind:value={serverconfig}
+					placeholder="/home/you/daoc/forge-env-local/server/config/serverconfig.xml"
+				/>
+				<span class="hint">The environment's serverconfig.xml: the viewer reads its mobs from the database it names.</span>
+			</label>
+		{/if}
+
 		<div class="options">
-			{#if kind !== 'clone'}
+			{#if kind === 'import'}
 				<label class="option">
 					<input type="checkbox" bind:checked={git} />
 					<span>Initialise a git repository</span>

@@ -757,3 +757,55 @@ def test_serve_starts_without_a_client(tmp_path, monkeypatch, capsys):
 
     assert main(["serve", "--no-open", "--no-watch"]) == 0
     assert "no client yet" in capsys.readouterr().out
+
+
+def _serverconfig(path):
+    (path / "server" / "config").mkdir(parents=True)
+    file = path / "server" / "config" / "serverconfig.xml"
+    file.write_text(
+        "<root><DBConnectionString>"
+        "Server=localhost;Port=3307;Database=forge_project_local;UserId=root;Password=x"
+        "</DBConnectionString></root>",
+        encoding="utf-8",
+    )
+    return file
+
+
+def test_new_can_record_the_server_config(base, machine, tmp_path):  # noqa: F811
+    """The same modal names the server: the environment, its database and its
+    config are derived from the file, so the project opens with its mobs."""
+    config = _serverconfig(tmp_path / "env-local")
+    client = home_client(base, config_dir=machine)
+
+    answer = client.post(
+        "/api/v1/home/new",
+        json={
+            "name": "Avalon",
+            "dir": str(tmp_path / "avalon"),
+            "client": str(base),
+            "db_config": str(config),
+        },
+    ).json()
+
+    local = pj.machine(answer["path"])["environments"]["local"]
+    assert local["db_config"] == str(config)
+    assert local["database"] == "forge_project_local"
+    assert local["root"] == str(tmp_path / "env-local")
+    assert local["db"]["port"] == 3307
+
+
+def test_new_refuses_a_server_config_that_is_not_there(base, machine, tmp_path):  # noqa: F811
+    client = home_client(base, config_dir=machine)
+
+    refused = client.post(
+        "/api/v1/home/new",
+        json={
+            "name": "Avalon",
+            "dir": str(tmp_path / "avalon"),
+            "client": str(base),
+            "db_config": str(tmp_path / "nope.xml"),
+        },
+    )
+
+    assert refused.status_code == 400 and "serverconfig" in refused.json()["detail"]
+    assert not (tmp_path / "avalon").exists()

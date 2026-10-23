@@ -362,6 +362,40 @@ def slug(value: str) -> str:
     return cleaned or "unknown"
 
 
+#: The shard's public addresses — facts of the *project*, tracked, because every
+#: machine and every player must see the same two values (`F §D4`).
+SHARD_FIELDS = ("feed_url", "game_server")
+
+
+def shard(root: str | os.PathLike) -> dict:
+    """The project's public addresses, when it names them."""
+    data = load(root).data
+    return {key: str(data[key]) for key in SHARD_FIELDS if data.get(key)}
+
+
+def set_shard(root: str | os.PathLike, *, feed_url=None, game_server=None) -> dict:
+    """Record the shard's addresses in `project.json`. An empty value removes
+    the key; a URL without its trailing slash is normalised here."""
+    path = Path(root) / PROJECT_FILE
+    data = load(root).data
+    if feed_url is not None:
+        value = str(feed_url).strip()
+        if value:
+            data["feed_url"] = value if value.endswith("/") else value + "/"
+        else:
+            data.pop("feed_url", None)
+    if game_server is not None:
+        value = str(game_server).strip()
+        if value:
+            if ":" not in value:
+                raise ProjectError(f"game_server must be host:port, got {value!r}")
+            data["game_server"] = value
+        else:
+            data.pop("game_server", None)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return shard(root)
+
+
 def author_name(root: str | os.PathLike) -> str:
     """Who signs this working copy's journal shards: `machine.json` first (a
     teammate's own name), then the operating system's."""

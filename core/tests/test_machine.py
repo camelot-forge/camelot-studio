@@ -293,3 +293,51 @@ def test_studio_refuses_before_starting_without_a_machine_file(tmp_path, capsys)
     captured = capsys.readouterr()
     assert "machine.json" in captured.err
     assert "not ready" in captured.err
+
+
+def test_studio_without_arguments_opens_the_newest_recent_project(
+    tmp_path, base, monkeypatch, capsys
+):
+    """One verb, no path: this folder, then the machine's list."""
+    import uvicorn
+
+    from camelot import paths, recent
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(uvicorn, "run", lambda *arguments, **keywords: None)
+    project = pj.new(tmp_path / "avalon", name="Avalon", client=base)
+    recent.record(project.root, name=project.name, directory=paths.config_dir())
+    empty = tmp_path / "elsewhere"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+
+    assert main(["studio", "--no-live", "--no-open"]) == 0
+    assert f"root={base}" in capsys.readouterr().out
+
+
+def test_studio_without_a_project_opens_home(tmp_path, monkeypatch, capsys):
+    """No folder, no project here, no recents: the front door, not an error."""
+    import uvicorn
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(uvicorn, "run", lambda *arguments, **keywords: None)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+
+    assert main(["studio", "--no-live", "--no-open"]) == 0
+    captured = capsys.readouterr()
+    assert "no project here" in captured.err
+    assert "no client yet" in captured.out
+
+
+def test_studio_edit_without_a_project_is_refused(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+
+    assert main(["studio", "--edit", "--no-open"]) == 2
+    assert "needs a project" in capsys.readouterr().err

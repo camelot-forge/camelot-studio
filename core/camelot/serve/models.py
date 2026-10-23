@@ -604,7 +604,9 @@ class HomeNewBody(BaseModel):
     dir: str
     #: The DAoC client to record. Empty = the client this daemon serves.
     client: str = ""
-    git: bool = False
+    #: The environment's `serverconfig.xml`, optional: the viewer reads its rows
+    #: from the database it names (`machine.json`'s `db_config`).
+    db_config: str = ""
     staging: bool = False
     open: bool = True
 
@@ -653,6 +655,22 @@ class DeployAsk(BaseModel):
     env: str
     adopt: bool = False
     source: str | None = None
+
+
+class DeployShardAsk(BaseModel):
+    """The shard's two public facts, as the Deploy page's fields carry them.
+    An empty value removes the key."""
+
+    feed_url: str = ""
+    game_server: str = ""
+
+
+class DeployShipAsk(BaseModel):
+    """A ship: the release to publish (the newest when omitted) and the git
+    remote to push the deploy branch to."""
+
+    release: int | None = None
+    remote: str = "origin"
 
 
 class DeployEnvAsk(BaseModel):

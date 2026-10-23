@@ -71,9 +71,62 @@ def _identity(root) -> dict:
     }
 
 
+#: The log a publish appends to. It is tracked, and it lives on the content
+#: branch: a publish never touches that branch, so the page offers the commit.
+LOG = "deploy/log.jsonl"
+
+
+def log_dirty(root) -> bool:
+    """Whether the deploy log has a line that HEAD does not carry yet."""
+    if not project_mod.is_git_repo(root):
+        return False
+    return bool(_git(root, "status", "--porcelain", "--", LOG).strip())
+
+
+def commit_log(root, *, message: str = "deploy: record the log") -> str:
+    """Commit `deploy/log.jsonl` alone, on the working branch, when the
+    operator asks for it. Returns the new HEAD.
+
+    A publish deliberately leaves the content branch alone (`remote.md` §D5),
+    so this is the one explicit way the line reaches `main`."""
+    if not project_mod.is_git_repo(root):
+        raise PublishError("the project is not a git repository: there is nothing to commit")
+    if not log_dirty(root):
+        raise PublishError(f"nothing to commit: {LOG} matches HEAD")
+    _git(
+        root,
+        "commit",
+        "-m",
+        str(message),
+        "--",
+        LOG,
+        env={**os.environ, **_identity(root)},
+    )
+    return _git(root, "rev-parse", "HEAD").strip()
+
+
+def ensure_commit(root, *, message: str = "project: start") -> str:
+    """The project's first commit, when a page-created project has none yet.
+
+    A publish mirrors the content branch's tree, so a repository with no commit
+    cannot ship. The page creates the repository and this is its first commit;
+    a desk that manages git itself never sees it (HEAD already answers).
+    """
+    if not project_mod.is_git_repo(root):
+        raise PublishError("the project is not a git repository: `git init` it first")
+    head = _git(root, "rev-parse", "--verify", "-q", "HEAD", check=False).strip()
+    if head:
+        return head
+    env = {**os.environ, **_identity(root)}
+    _git(root, "add", "-A", env=env)
+    _git(root, "commit", "-m", str(message), env=env)
+    return _git(root, "rev-parse", "HEAD").strip()
+
+
 def feed_target(root, feed_url=None, server=None) -> tuple[str, str]:
     """The two values the feed carries. Given, or from the environment, or from
-    the feed that is already there — never guessed (`F §D4`)."""
+    the shard's own record, or from the feed that is already there — never
+    guessed (`F §D4`)."""
     where = Path(root) / feed_mod.FEED
     recorded = {}
     record = where / feed_mod.RECORD_FILE
@@ -83,13 +136,20 @@ def feed_target(root, feed_url=None, server=None) -> tuple[str, str]:
         except (OSError, json.JSONDecodeError):
             recorded = {}
     launcher = feed_mod.launcher_of(where) if where.is_dir() else {}
+    named = project_mod.shard(root) if (Path(root) / project_mod.PROJECT_FILE).is_file() else {}
     base_url = (
         feed_url
         or os.environ.get("CAMELOT_FEED_URL")
+        or named.get("feed_url")
         or recorded.get("base_url")
         or launcher.get("feed")
     )
-    game = server or os.environ.get("CAMELOT_GAME_SERVER") or launcher.get("server")
+    game = (
+        server
+        or os.environ.get("CAMELOT_GAME_SERVER")
+        or named.get("game_server")
+        or launcher.get("server")
+    )
     if not base_url:
         raise PublishError(
             "no feed URL: pass --feed-url or set CAMELOT_FEED_URL "

@@ -334,7 +334,7 @@ def test_cli_refuses_a_directory_that_is_not_a_project(tmp_path, capsys):
 def test_cli_serve_takes_the_checkout_and_lets_it_go(tmp_path, base, capsys, monkeypatch):
     """The daemon claims the checkout it serves and drops the lock when it
     stops (`project.md` §D13) — a crashed daemon must not leave a project
-    unwritable, and `project open` is the operator's way in."""
+    unwritable, and `studio` is the operator's way in."""
     import uvicorn
 
     project = pj.new(tmp_path / "camelot-hills", client=base)
@@ -345,10 +345,7 @@ def test_cli_serve_takes_the_checkout_and_lets_it_go(tmp_path, base, capsys, mon
     # the machine's list of projects is not a test's to write (`home.md` §D1)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
-    assert (
-        main(["project", "open", str(project.root), "--root", str(base), "--no-open", "--no-watch"])
-        == 0
-    )
+    assert main(["studio", str(project.root), "--no-live", "--no-open"]) == 0
     out = capsys.readouterr().out
     assert "held by michael" in out
     assert pj.lock_state(project.root) is None  # taken for the run, then released

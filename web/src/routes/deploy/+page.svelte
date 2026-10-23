@@ -15,9 +15,19 @@
 		type DeployPage,
 		type DeployPlan,
 		type DeployPublish,
+		type DeployShip,
 		type DeployVerify
 	} from '$lib/api/client';
-	import { ArrowUpRight, Eye, Package, Rocket, Scissors, Send, ShieldCheck } from '@lucide/svelte';
+	import {
+		ArrowUpRight,
+		Eye,
+		Package,
+		Rocket,
+		Scissors,
+		Send,
+		ShieldCheck,
+		Upload
+	} from '@lucide/svelte';
 
 	let facts = $state<DeployPage | null>(null);
 	let release = $state<number | null>(null);
@@ -26,6 +36,8 @@
 	let outcome = $state<DeployOutcome | null>(null);
 	let verified = $state<DeployVerify | null>(null);
 	let publish = $state<DeployPublish | null>(null);
+	let ship = $state<DeployShip | null>(null);
+	let shard = $state({ feed_url: '', game_server: '' });
 	let reading = $state<string | null>(null);
 	let busy = $state(false);
 	let error = $state<string | null>(null);
@@ -49,6 +61,11 @@
 		try {
 			facts = await api.deploy();
 			publish = facts.publish;
+			ship = facts.ship;
+			shard = {
+				feed_url: facts.shard.feed_url ?? '',
+				game_server: facts.shard.game_server ?? ''
+			};
 			if (release === null) release = facts.releases[0]?.number ?? null;
 			if (env === null) env = facts.environments[0]?.name ?? null;
 			await planOnly();
@@ -83,6 +100,64 @@
 		try {
 			publish = (await api.deployPublish()).progress;
 			await followPublish();
+			await load();
+		} catch (problem) {
+			say(problem);
+		} finally {
+			busy = false;
+		}
+	}
+
+	function shipping(found: DeployShip): string {
+		if (found.stage === 'publishing') return 'building, signing and pushing…';
+		if (found.stage === 'done') return 'shipped';
+		return found.stage;
+	}
+
+	async function followShip(): Promise<void> {
+		while (ship?.running) {
+			await new Promise((done) => setTimeout(done, 600));
+			ship = (await api.deployShipProgress()).progress;
+		}
+		if (ship?.error) error = ship.error;
+	}
+
+	async function shipRelease(): Promise<void> {
+		busy = true;
+		error = null;
+		try {
+			ship = (await api.deployShip({ release: newest })).progress;
+			await followShip();
+			await load();
+		} catch (problem) {
+			say(problem);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function saveShard(): Promise<void> {
+		busy = true;
+		error = null;
+		try {
+			const saved = await api.deployShard(shard);
+			shard = {
+				feed_url: saved.feed_url ?? '',
+				game_server: saved.game_server ?? ''
+			};
+			await load();
+		} catch (problem) {
+			say(problem);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function commitLog(): Promise<void> {
+		busy = true;
+		error = null;
+		try {
+			await api.deployCommitLog();
 			await load();
 		} catch (problem) {
 			say(problem);
@@ -267,12 +342,23 @@
 			</button>
 			<button
 				class="tool"
-				title={publish?.running ? publishing(publish) : "publish the players' update"}
-				aria-label="Publish"
+				title={publish?.running ? publishing(publish) : "build the players' feed"}
+				aria-label="Publish the feed"
 				disabled={busy || publish?.running || !facts || facts.read_only}
 				onclick={publishFeed}
 			>
 				<Send size={17} />
+			</button>
+			<button
+				class="tool"
+				title={ship?.running
+					? shipping(ship)
+					: `ship release ${String(newest ?? 0).padStart(4, '0')}: feed, signature, deploy branch, push`}
+				aria-label="Ship the release"
+				disabled={busy || ship?.running || !facts || facts.read_only || newest === null}
+				onclick={shipRelease}
+			>
+				<Upload size={17} />
 			</button>
 		</nav>
 
@@ -522,11 +608,63 @@
 						</p>
 					{:else}
 						<p class="hint">
-							No feed yet. <strong>Publish</strong> builds it with the daemon's
-							<code>CAMELOT_FEED_URL</code> and <code>CAMELOT_GAME_SERVER</code>; the
-							CLI verb is <code>camelot project feed</code>.
+							No feed yet. <strong>Publish</strong> builds it from the shard's feed URL and
+							game address (the card beside this one); the CLI verb is
+							<code>camelot project feed</code>.
 						</p>
 						<p class="path">{facts?.feed.path ?? ''}</p>
+					{/if}
+				</section>
+
+				<section class="card" aria-label="shard">
+					<h3>
+						Shard
+						<span class="card-meta">every player reads these</span>
+					</h3>
+					<label class="shard-row">
+						<span>feed URL</span>
+						<input bind:value={shard.feed_url} placeholder="https://feed.example.com/" />
+					</label>
+					<label class="shard-row">
+						<span>game</span>
+						<input bind:value={shard.game_server} placeholder="play.example.com:10300" />
+					</label>
+					<button
+						class="btn btn--secondary"
+						disabled={busy || facts?.read_only}
+						onclick={saveShard}>Save</button
+					>
+					<p class="hint">
+						they live in <code>project.json</code>, so every machine agrees
+					</p>
+					<p class="line" class:warn={!facts?.signing.key}>
+						signing:
+						{#if facts?.signing.key}
+							<code>{facts.signing.key}</code>
+						{:else}
+							unsigned — name a <code>release_key</code> in <code>machine.json</code>
+						{/if}
+					</p>
+					{#if facts?.log_dirty}
+						<p class="line warn">
+							<code>deploy/log.jsonl</code> has a line HEAD does not carry yet
+						</p>
+						<button class="btn btn--secondary" disabled={busy} onclick={commitLog}>
+							Commit the log
+						</button>
+					{/if}
+					{#if ship?.running}
+						<p class="line">shipping — {shipping(ship)}</p>
+					{:else if ship?.error}
+						<p class="line warn">{ship.error}</p>
+					{:else if ship?.stage === 'done'}
+						<p class="line ok">
+							shipped {ship.release ? `release ${ship.release}` : ''} — {ship.commit?.slice(
+								0,
+								12
+							)}
+							{#if ship.pushed}· pushed to {ship.pushed}{/if}
+						</p>
 					{/if}
 				</section>
 			</div>
@@ -749,6 +887,30 @@
 		font-size: var(--fs-small);
 		color: var(--text-3);
 		overflow-wrap: anywhere;
+	}
+	.shard-row {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		margin-top: 8px;
+	}
+	.shard-row span {
+		font-size: 10.5px;
+		letter-spacing: 0.09em;
+		text-transform: uppercase;
+		color: var(--text-4);
+	}
+	.shard-row input {
+		background: var(--surface-input);
+		border: 1px solid var(--border);
+		border-radius: var(--r-lg);
+		color: var(--text-2);
+		padding: 6px 9px;
+		font: inherit;
+		font-size: var(--fs-small);
+	}
+	.card .btn {
+		margin-top: 10px;
 	}
 	.path {
 		color: var(--text-4);

@@ -241,3 +241,39 @@ def test_the_feed_target_reads_the_feed_that_is_already_built(tmp_path, monkeypa
         "https://other.example/",
         "other:1",
     )
+
+
+def test_the_feed_target_reads_the_shards_own_record(tmp_path, monkeypatch):
+    """The public addresses are facts of the project (`project.json`), read
+    before the feed that happens to be built beside them."""
+    root = _project(tmp_path)
+    pj.set_shard(root, feed_url="https://shard.example", game_server="play.example:10300")
+    monkeypatch.delenv("CAMELOT_FEED_URL", raising=False)
+    monkeypatch.delenv("CAMELOT_GAME_SERVER", raising=False)
+
+    assert pub.feed_target(root) == ("https://shard.example/", "play.example:10300")
+
+
+def test_ensure_commit_makes_the_first_commit_once(tmp_path):
+    """A page-created repository has no HEAD; the ship gives it one, once."""
+    root = tmp_path / "avalon"
+    pj.new(root, name="Avalon", git=True)
+
+    head = pub.ensure_commit(root)
+
+    assert head and _git(root, "rev-parse", "HEAD").strip() == head
+    assert pub.ensure_commit(root) == head
+
+
+def test_commit_log_commits_the_log_alone(tmp_path):
+    """The publish leaves the content branch alone; the page's one explicit
+    action commits the log line, and nothing else in the working tree."""
+    root = _project(tmp_path)
+    (root / "deploy" / "log.jsonl").write_text('{"kind": "publish"}\n', encoding="utf-8")
+    (root / "notes.md").write_text("an uncommitted edit\n", encoding="utf-8")
+
+    assert pub.log_dirty(root) is True
+    commit = pub.commit_log(root)
+
+    assert commit and pub.log_dirty(root) is False
+    assert "notes.md" in _git(root, "status", "--porcelain")

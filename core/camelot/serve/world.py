@@ -156,6 +156,33 @@ class World:
 
 # --- the server's rows --------------------------------------------------------
 
+#: The driver's codes for the failures an operator can act on, and the sentence
+#: the viewer says instead of the tuple.
+_DB_DOWN = (2002, 2003)
+_DB_AUTH = (1045,)
+_DB_MISSING = (1049,)
+
+
+def _live_problem(error, connection) -> str:
+    """A database that is down is a fact about the environment, not a pymysql
+    tuple: name the address and the way out."""
+    args = getattr(error, "args", ())
+    code = args[0] if args and isinstance(args[0], int) else None
+    where = ""
+    if connection:
+        where = f" on {connection.get('host')}:{connection.get('port')}"
+    if code in _DB_DOWN:
+        return f"no MySQL{where} — the environment's database is not running"
+    if code in _DB_AUTH:
+        return f"MySQL{where} refused the credentials in the serverconfig.xml"
+    if code in _DB_MISSING:
+        return (
+            f"MySQL{where} has no database {connection.get('database')!r} — "
+            "run `camelot env provision`"
+        )
+    return f"live database: {error}"
+
+
 class ServerRows:
     """The server's own rows per zone — snapshot, or live MySQL (spec §5).
 
@@ -212,7 +239,7 @@ class ServerRows:
             except serverrows.mysql_errors() as error:
                 # pymysql missing, DB down, bad row: the viewer says what
                 # broke and still draws the client's world.
-                return {}, [f"live database: {error}"]
+                return {}, [_live_problem(error, self._connection)]
             self._live[zone.info.zone_id] = (now, rows)
             return rows, []
         return {}, [

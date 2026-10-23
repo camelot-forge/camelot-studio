@@ -19,11 +19,14 @@ from fastapi import APIRouter, HTTPException
 
 from .. import clientinstall, feedbuild
 from .. import feed as feed_mod
+from .. import machine as machine_mod
 from .. import pipeline as pipeline_mod
 from .. import project as project_mod
+from .. import publish as publish_mod
 from .. import release as release_mod
+from .. import sign as sign_mod
 from .config import ServeConfig
-from .models import DeployAsk, DeployEnvAsk
+from .models import DeployAsk, DeployEnvAsk, DeployShardAsk, DeployShipAsk
 
 #: How many log lines the page shows. The log itself is never truncated: this
 #: is a window on the newest attempts, not the record.
@@ -137,6 +140,37 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
     def publish_progress() -> dict:
         return {"progress": dict(progress)}
 
+    #: A ship is the CLI's `project publish`: build the feed, sign the record,
+    #: commit the deploy branch and push it. It runs in the background because
+    #: the push is the slow half; the page polls it like the feed build.
+    ship_progress = {
+        "running": False,
+        "stage": "",
+        "error": None,
+        "release": None,
+        "commit": None,
+        "pushed": None,
+        "signed": None,
+    }
+    ship_guard = threading.Lock()
+
+    def ship_in_background(root, number, remote: str) -> None:
+        try:
+            report = publish_mod.publish(root, number, build=True, remote=remote)
+            ship_progress.update(
+                {
+                    "stage": "done",
+                    "release": report["release"],
+                    "commit": report["commit"],
+                    "pushed": report["pushed"],
+                    "signed": (report["signature"] or {}).get("key"),
+                }
+            )
+        except (publish_mod.PublishError, project_mod.ProjectError) as error:
+            ship_progress.update({"stage": "error", "error": str(error)})
+        finally:
+            ship_progress["running"] = False
+
     def publish_target() -> tuple[str, str]:
         """The two values the feed server will serve: the daemon's environment,
         or the feed that is already built beside the project. The same rule as
@@ -190,7 +224,11 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
                 "environments": _environments(project, live),
                 "releases": _releases(root, live),
                 "feed": pipeline_mod.feed(root),
+                "shard": project_mod.shard(root),
+                "signing": {"key": sign_mod.configured(None, machine_mod.document(root))},
+                "log_dirty": publish_mod.log_dirty(root),
                 "publish": dict(progress),
+                "ship": dict(ship_progress),
                 "log": list(reversed(project_mod.deploy_log(root)[-LOG_LINES:])),
             }
         except (release_mod.ReleaseError, project_mod.ProjectError) as error:
@@ -247,6 +285,69 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
             clientinstall.InstallError,
         ) as error:
             raise _refused(error) from error
+
+    @router.post("/deploy/shard")
+    def deploy_shard(body: DeployShardAsk) -> dict:
+        """The shard's public addresses, written into `project.json` (tracked):
+        what the feed says to players, and where the game is. The page stops
+        asking the operator for environment variables (`F §D4`)."""
+        root = _root(config)
+        _writable(config)
+        try:
+            return project_mod.set_shard(
+                root, feed_url=body.feed_url, game_server=body.game_server
+            )
+        except project_mod.ProjectError as error:
+            raise _refused(error) from error
+
+    @router.post("/deploy/commit-log")
+    def deploy_commit_log() -> dict:
+        """Commit `deploy/log.jsonl` alone, on the working branch, on demand:
+        a publish leaves that branch untouched (`remote.md` §D5)."""
+        root = _root(config)
+        _writable(config)
+        try:
+            return {"commit": publish_mod.commit_log(root), "dirty": False}
+        except publish_mod.PublishError as error:
+            raise _refused(error) from error
+
+    @router.post("/deploy/ship")
+    def deploy_ship(body: DeployShipAsk | None = None) -> dict:
+        """Ship the newest (or the named) release: the CLI's `project publish`,
+        with the feed build, the signature and the push to the deploy branch."""
+        root = _root(config)
+        _writable(config)
+        remote = (body.remote if body else "") or "origin"
+        number = body.release if body else None
+        try:
+            publish_mod.ensure_commit(root)
+        except publish_mod.PublishError as error:
+            raise _refused(error) from error
+        with ship_guard:
+            if ship_progress["running"]:
+                raise HTTPException(status_code=409, detail="a publish is already running")
+            ship_progress.update(
+                {
+                    "running": True,
+                    "stage": "publishing",
+                    "error": None,
+                    "release": number,
+                    "commit": None,
+                    "pushed": None,
+                    "signed": None,
+                }
+            )
+            threading.Thread(
+                target=ship_in_background,
+                args=(root, number, remote),
+                daemon=True,
+            ).start()
+        return {"progress": dict(ship_progress)}
+
+    @router.get("/deploy/ship")
+    def deploy_ship_status() -> dict:
+        """The ship's state; the page polls it after starting one."""
+        return {"progress": dict(ship_progress)}
 
     @router.get("/deploy/publish")
     def deploy_publish_progress() -> dict:
