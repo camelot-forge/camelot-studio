@@ -665,11 +665,10 @@ class DeployShardAsk(BaseModel):
     game_server: str = ""
 
 
-class DeployShipAsk(BaseModel):
-    """A ship: the release to publish (the newest when omitted) and the git
-    remote to push the deploy branch to."""
+class DeployPublishAsk(BaseModel):
+    """A publish: cut when the journal has edits, then push the deploy branch
+    to this git remote."""
 
-    release: int | None = None
     remote: str = "origin"
 
 

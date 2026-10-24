@@ -176,15 +176,16 @@ export interface DeployFeed {
 	base_url: string;
 }
 
-/** The feed build's progress (`F §D4`): the page polls it after Publish. */
+/** One publish (`F §D4`): cut when the journal has edits, build the feed,
+ * sign it, commit the deploy branch, push. The page polls this one state. */
 export interface DeployPublish {
 	running: boolean;
 	stage: string;
-	done: number;
-	total: number;
 	error: string | null;
-	version: number | null;
-	path: string | null;
+	release: number | null;
+	commit: string | null;
+	pushed: string | null;
+	signed: string | null;
 }
 
 /** The shard's public addresses, which live in `project.json` (tracked). */
@@ -198,15 +199,13 @@ export interface DeploySigning {
 	key: string | null;
 }
 
-/** `project publish` from the page: feed, signature, deploy branch, push. */
-export interface DeployShip {
-	running: boolean;
-	stage: string;
-	error: string | null;
-	release: number | null;
-	commit: string | null;
-	pushed: string | null;
-	signed: string | null;
+/** What `Test locally` just did: the release it cut, the files the deploy
+ * wrote, and the files the local install applied. */
+export interface DeployTest {
+	release: number;
+	wrote: number;
+	applied: number;
+	unchanged: boolean;
 }
 
 /** One line of `deploy/log.jsonl` — the record of an attempt. */
@@ -300,7 +299,6 @@ export interface DeployPage {
 	/** `deploy/log.jsonl` has a line HEAD does not carry yet. */
 	log_dirty: boolean;
 	publish: DeployPublish;
-	ship: DeployShip;
 	log: DeployLogLine[];
 }
 
@@ -704,15 +702,6 @@ export interface EditorEdit {
 	patches: Record<string, unknown>[];
 }
 
-export interface EditorBuild {
-	pack: string | null;
-	entries: Record<string, unknown>[];
-	files: string[];
-	report: Record<string, unknown>;
-	install: Record<string, unknown> | null;
-	patches: number;
-}
-
 /** What a full restore took back: the client half that *was* installed, the
  * server rows put back, and the session as it stands after. */
 export interface EditorRestore {
@@ -971,8 +960,6 @@ export const api = {
 	worldEditApply: (zoneId: number, op: Record<string, unknown>) =>
 		send<EditorEdit>('POST', `/world/zone/${zoneId}/edits`, op),
 	worldEditUndo: (zoneId: number) => send<EditorEdit>('DELETE', `/world/zone/${zoneId}/edits`),
-	worldModBuild: () => send<EditorBuild>('POST', '/world/mod/build'),
-	worldModApply: () => send<EditorBuild>('POST', '/world/mod/apply'),
 	worldModRevert: () => send<EditorState>('POST', '/world/mod/revert'),
 	worldModRestore: () => send<EditorRestore>('POST', '/world/mod/restore'),
 
@@ -982,12 +969,10 @@ export const api = {
 	deployPush: (ask: DeployAsk) => send<DeployOutcome>('POST', '/deploy/deploy', ask),
 	deployCut: () => send<DeployCut>('POST', '/deploy/cut'),
 	deployVerify: (env: string) => send<DeployVerify>('POST', '/deploy/verify', { env }),
-	deployPublish: () => send<{ progress: DeployPublish }>('POST', '/deploy/publish'),
+	deployPublish: (remote = 'origin') =>
+		send<{ progress: DeployPublish }>('POST', '/deploy/publish', { remote }),
 	deployPublishProgress: () => get<{ progress: DeployPublish }>('/deploy/publish'),
 	deployShard: (ask: DeployShard) => send<DeployShard>('POST', '/deploy/shard', ask),
-	deployShip: (ask: { release?: number | null; remote?: string }) =>
-		send<{ progress: DeployShip }>('POST', '/deploy/ship', ask),
-	deployShipProgress: () => get<{ progress: DeployShip }>('/deploy/ship'),
-	deployCommitLog: () =>
-		send<{ commit: string; dirty: boolean }>('POST', '/deploy/commit-log')
+	deployTest: () => send<DeployTest>('POST', '/deploy/test'),
+	deployCommitLog: () => send<{ commit: string; dirty: boolean }>('POST', '/deploy/commit-log')
 };

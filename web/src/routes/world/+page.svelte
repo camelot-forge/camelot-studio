@@ -3,6 +3,7 @@
 	// the client renders, the fixtures it places, its bounds, water and jumps —
 	// and pick an object to inspect and recentre on (the editor's first slice).
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 	import AppBar from '$lib/components/AppBar.svelte';
 	import Dock from '$lib/components/Dock.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
@@ -151,6 +152,7 @@
 	let editStatus = $state<string | null>(null);
 	let editError = $state<string | null>(null);
 	let busyEdit = $state(false);
+	let testing = $state(false);
 	/** The floating panel: closed until something is selected or the panel is
 	 * asked for, and it remembers where the operator put it. */
 	let tab = $state<'inspect' | 'journal'>('inspect');
@@ -168,21 +170,22 @@
 	// Written = in the server's database; the rest is the journal's promise.
 	const writtenRows = $derived(editPatches.filter((patch) => patch.applied === true).length);
 	const editClient = $derived(edit?.client ?? null);
-	/** The objects a save would still write — counted by the daemon now
+	/** The objects a release would carry — counted by the daemon
 	 * (`Editor.pending_counts`, one definition for the chip, the panel and
 	 * Home): the *items* the journal owes, never the gestures. */
 	const changes = $derived((edit?.pending?.fixtures ?? 0) + (edit?.pending?.rows ?? 0));
-	/** Like a repository: unsaved changes exist, or they do not. */
+	/** Whether anything is waiting for a release — never "published": a local test
+	 * cuts one too, and only Deploy knows whether the feed carries it. */
 	const dirty = $derived(changes > 0);
 	/** The journal, read the way the operator reads it (lib/world/journal). */
 	const journals = $derived(journalView({ zones: edit?.zones ?? [], rows: edit?.rows ?? [] }));
 	// The client's half is the client's own authority: `revert` cannot touch it.
 	const clientNote = $derived.by(() => {
 		const client = edit?.client;
-		if (!client) return 'client: unknown';
-		if (!client.installed) return `client: no ${client.mod} half installed`;
+		if (!client) return 'no client files';
+		if (!client.installed) return 'no client files changed';
 		const claims = client.claims.length;
-		return `client: ${client.mod} installed (${claims} claim${claims === 1 ? '' : 's'})`;
+		return `${claims} client file${claims === 1 ? '' : 's'} changed`;
 	});
 	const selectedSpawn = $derived(selectedRow && spawns ? rowOf(spawns, selectedRow) : null);
 	// What the proposal is made of, named: a castle's box holds its doors *and*
@@ -774,38 +777,22 @@
 		});
 	}
 
-	async function build() {
-		if (busyEdit) return;
+	async function testLocally() {
+		if (busyEdit || testing) return;
 		busyEdit = true;
+		testing = true;
 		editError = null;
 		try {
-			const result = await api.worldModBuild();
-			editStatus = result.pack
-				? `built ${result.pack}`
-				: `journaled ${result.patches} server row patch${result.patches === 1 ? '' : 'es'}`;
+			const result = await api.deployTest();
+			const number = String(result.release).padStart(4, '0');
+			editStatus = result.unchanged
+				? `release ${number} was already installed on this computer`
+				: `release ${number} installed on this computer (${result.applied} file${result.applied === 1 ? '' : 's'}) — launch the game to check`;
 			edit = await api.worldEdit();
 		} catch (e) {
 			editError = e instanceof Error ? e.message : String(e);
 		} finally {
-			busyEdit = false;
-		}
-	}
-
-	async function apply() {
-		if (busyEdit) return;
-		busyEdit = true;
-		editError = null;
-		try {
-			const result = await api.worldModApply();
-			const mod = (result.install ?? {}).mod ?? edit?.mod.id ?? '';
-			editStatus = result.install
-				? `installed ${mod}`
-				: `wrote ${result.patches} server row${result.patches === 1 ? '' : 's'} (no client half)`;
-			await reloadSpawns();
-			edit = await api.worldEdit();
-		} catch (e) {
-			editError = e instanceof Error ? e.message : String(e);
-		} finally {
+			testing = false;
 			busyEdit = false;
 		}
 	}
@@ -903,14 +890,13 @@
 		}
 	}
 
-	/** The in-game commands the operator has to type: the client's clipboard, so
-	 * a reload is a paste away (the bridge will make it a button). */
+	/** The in-game commands the operator has to type after a local test: the
+	 * client's clipboard, so a reload is a paste away. */
 	async function copyCommands() {
-		const region = zone?.info.region ?? '';
-		const text = ['/reload doors', `/reload mob`, `/reload object`].join('\n');
+		const text = ['/reload doors', '/reload mob', '/reload object'].join('\n');
 		try {
 			await navigator.clipboard.writeText(text);
-			editStatus = `copied the reload commands (region ${region})`;
+			editStatus = 'reload commands copied';
 		} catch {
 			editStatus = text.replace(/\n/g, ' · ');
 		}
@@ -953,12 +939,12 @@
 					undo
 				</button>
 				<button
-					class="btn btn--primary"
-					onclick={apply}
-					disabled={busyEdit || !changes}
-					title="write the client's files and the server's rows (the game reads them after /reload)"
+					class="btn btn--secondary"
+					onclick={testLocally}
+					disabled={testing || edit.read_only}
+					title="install the newest release, or cut the pending edits, on this computer's local test server"
 				>
-					save{dirty ? ` (${changes})` : ''}
+					{testing ? 'installing…' : 'test locally'}{changes ? ` (${changes})` : ''}
 				</button>
 			{/if}
 		{/snippet}
@@ -1245,7 +1231,9 @@
 			<Dock
 				id="world.editor"
 				title="Editor"
-				sub={dirty ? `${edit.mod.id} · ${changes} not saved` : `${edit.mod.id} · saved`}
+				sub={dirty
+					? `${edit.mod.id} · ${changes} not in a release`
+					: `${edit.mod.id} · no edits waiting`}
 				icon={PanelRight}
 				side="right"
 				tabs={editorTabs}
@@ -1428,8 +1416,8 @@
 				{:else}
 					{#if journals.count === 0}
 						<p class="hint">
-							No edits yet — the scene is the client's own. Every edit is written here first; a
-							<strong>save</strong> is what writes the client and the rows.
+							No edits yet — the scene is the client's own. Every edit is kept here automatically;
+							nothing reaches players until you publish from Deploy.
 						</p>
 					{:else}
 						{#each journals.zones as journalZone (journalZone.id)}
@@ -1484,23 +1472,16 @@
 					{/if}
 
 					<section class="section">
-						<h4>Publish <span class="card-meta">{clientNote}</span></h4>
+						<h4>Changes <span class="card-meta">{clientNote}</span></h4>
 						<div class="row">
-							<button
-								type="button"
-								onclick={build}
-								disabled={busyEdit || !changes}
-								title="build the pack from these edits"
-							>
-								build
-							</button>
+							<a class="btn btn--secondary" href={resolve('/deploy')}>Review and publish</a>
 							<button
 								type="button"
 								onclick={revert}
 								disabled={busyEdit}
 								title="drop every pending edit (what is already published stays; restore all takes it back)"
 							>
-								revert
+								discard changes
 							</button>
 							<button
 								class="danger"
@@ -1513,23 +1494,17 @@
 							</button>
 						</div>
 						<p class="hint">
-							journal: {editOps} fixture edit{editOps === 1 ? '' : 's'},
-							{editRows} row patch{editRows === 1 ? '' : 'es'}{writtenRows
-								? ` (${writtenRows} written)`
-								: ''}
+							{changes} edit{changes === 1 ? '' : 's'} waiting for a release · journal: {editOps} fixture
+							edit{editOps === 1 ? '' : 's'}, {editRows} row patch{editRows === 1
+								? ''
+								: 'es'}{writtenRows ? ` (${writtenRows} written)` : ''}
 						</p>
 						{#if writtenRows || editClient?.installed}
 							<p class="hint">
-								the running game reads the database at startup: in game <code>/reload doors</code>,
-								<code>/reload mob</code>, <code>/reload object</code> (region {zone?.info.region})
+								Installed: restart the game server, or in game type
+								<code>/reload doors</code>, <code>/reload mob</code>,
+								<code>/reload object</code>.
 								<button type="button" class="link" onclick={copyCommands}>copy</button>
-							</p>
-						{/if}
-						{#if edit.pack}
-							<p class="hint">
-								pack {(edit.pack.size / 1000).toFixed(0)} kB · {new Date(
-									edit.pack.modified * 1000
-								).toLocaleTimeString()}
 							</p>
 						{/if}
 						{#if editStatus}<p class="hint">{editStatus}</p>{/if}
@@ -1577,7 +1552,7 @@
 		{/snippet}
 		{#snippet right()}
 			{#if editing && edit}
-				<span class="sb-nums" title="what a save would write, and what is already published">
+				<span class="sb-nums" title="what is waiting for a release, and what is already written">
 					{clientNote} · journal: {editOps} fixture edit{editOps === 1 ? '' : 's'}, {editRows} row patch{editRows ===
 					1
 						? ''

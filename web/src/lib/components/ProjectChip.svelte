@@ -61,7 +61,7 @@
 					: 'read-only'
 				: facts.pending > 0
 					? `${facts.pending} ${facts.pending === 1 ? 'edit' : 'edits'} to publish`
-					: 'all published'
+					: 'nothing waiting'
 	);
 	const warn = $derived(facts !== null && (facts.readOnly || facts.pending > 0));
 	const title = $derived(

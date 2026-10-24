@@ -17,8 +17,9 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from .. import clientinstall, feedbuild
-from .. import feed as feed_mod
+from .. import clientinstall
+from .. import envs as envs_mod
+from .. import installer as installer_mod
 from .. import machine as machine_mod
 from .. import pipeline as pipeline_mod
 from .. import project as project_mod
@@ -26,7 +27,7 @@ from .. import publish as publish_mod
 from .. import release as release_mod
 from .. import sign as sign_mod
 from .config import ServeConfig
-from .models import DeployAsk, DeployEnvAsk, DeployShardAsk, DeployShipAsk
+from .models import DeployAsk, DeployEnvAsk, DeployPublishAsk, DeployShardAsk
 
 #: How many log lines the page shows. The log itself is never truncated: this
 #: is a window on the newest attempts, not the record.
@@ -126,24 +127,11 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
     """The Deploy page's routes: its facts, the dry run, the push, the read-back
     and the feed build. `world` is only read, for the work the chip shows."""
     router = APIRouter(prefix="/api/v1")
-    progress = {
-        "running": False,
-        "stage": "",
-        "done": 0,
-        "total": 0,
-        "error": None,
-        "version": None,
-        "path": None,
-    }
-    guard = threading.Lock()
 
-    def publish_progress() -> dict:
-        return {"progress": dict(progress)}
-
-    #: A ship is the CLI's `project publish`: build the feed, sign the record,
-    #: commit the deploy branch and push it. It runs in the background because
-    #: the push is the slow half; the page polls it like the feed build.
-    ship_progress = {
+    #: One publish at a time: cut when the journal has edits, build the feed,
+    #: sign the record, commit the deploy branch, push it. The page polls it;
+    #: the stages are the operator's words, not the pipeline's.
+    publish_state = {
         "running": False,
         "stage": "",
         "error": None,
@@ -152,12 +140,31 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
         "pushed": None,
         "signed": None,
     }
-    ship_guard = threading.Lock()
+    publish_guard = threading.Lock()
 
-    def ship_in_background(root, number, remote: str) -> None:
+    def cut_if_pending(root) -> int | None:
+        """The release a publish carries: a new one when the journal holds
+        edits, the newest one otherwise (a retry after a failed push)."""
         try:
+            return int(release_mod.cut(root)["number"])
+        except release_mod.ReleaseError as error:
+            if "nothing to release" not in str(error):
+                raise
+            records = release_mod.releases(root)
+            return int(records[-1]["number"]) if records else None
+
+    def publish_in_background(root, remote: str) -> None:
+        try:
+            publish_state["stage"] = "preparing"
+            number = cut_if_pending(root)
+            if number is None:
+                raise release_mod.ReleaseError(
+                    "nothing to publish: the journal holds no edit and no release exists"
+                )
+            publish_state["release"] = number
+            publish_state["stage"] = "publishing"
             report = publish_mod.publish(root, number, build=True, remote=remote)
-            ship_progress.update(
+            publish_state.update(
                 {
                     "stage": "done",
                     "release": report["release"],
@@ -166,41 +173,10 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
                     "signed": (report["signature"] or {}).get("key"),
                 }
             )
-        except (publish_mod.PublishError, project_mod.ProjectError) as error:
-            ship_progress.update({"stage": "error", "error": str(error)})
+        except (release_mod.ReleaseError, publish_mod.PublishError, project_mod.ProjectError) as error:
+            publish_state.update({"stage": "error", "error": str(error)})
         finally:
-            ship_progress["running"] = False
-
-    def publish_target() -> tuple[str, str]:
-        """The two values the feed server will serve: the daemon's environment,
-        or the feed that is already built beside the project. The same rule as
-        `project publish` (`F §D4`), so the page and the CLI cannot disagree."""
-        from .. import publish as publish_mod
-
-        try:
-            return publish_mod.feed_target(_root(config))
-        except publish_mod.PublishError as error:
-            raise _refused(error) from error
-
-    def publish_in_background(project, base, feed_url: str, server: str) -> None:
-        def step(stage: str, done: int = 0, total: int = 0) -> None:
-            progress.update({"stage": stage, "done": done, "total": total})
-
-        try:
-            report = feedbuild.build(
-                project,
-                base=base,
-                base_url=feed_url,
-                server=server,
-                on_step=step,
-            )
-            progress["version"] = report["version"]
-            progress["path"] = report["path"]
-        except (feedbuild.FeedError, feed_mod.FeedError, clientinstall.InstallError, OSError) as error:
-            progress["error"] = str(error)
-            progress["stage"] = "error"
-        finally:
-            progress["running"] = False
+            publish_state["running"] = False
 
     def work_waiting() -> dict[str, int]:
         editor = getattr(world, "editor", None)
@@ -227,8 +203,7 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
                 "shard": project_mod.shard(root),
                 "signing": {"key": sign_mod.configured(None, machine_mod.document(root))},
                 "log_dirty": publish_mod.log_dirty(root),
-                "publish": dict(progress),
-                "ship": dict(ship_progress),
+                "publish": dict(publish_state),
                 "log": list(reversed(project_mod.deploy_log(root)[-LOG_LINES:])),
             }
         except (release_mod.ReleaseError, project_mod.ProjectError) as error:
@@ -311,86 +286,74 @@ def build_deploy_router(config: ServeConfig, world=None) -> APIRouter:
         except publish_mod.PublishError as error:
             raise _refused(error) from error
 
-    @router.post("/deploy/ship")
-    def deploy_ship(body: DeployShipAsk | None = None) -> dict:
-        """Ship the newest (or the named) release: the CLI's `project publish`,
-        with the feed build, the signature and the push to the deploy branch."""
+    @router.post("/deploy/publish")
+    def deploy_publish(body: DeployPublishAsk | None = None) -> dict:
+        """Publish the edits: cut a release when the journal has some, then build
+        the feed, sign it, commit `camelot-deploy` and push. One action, because
+        that is the operator's whole question ("are my changes live?")."""
         root = _root(config)
         _writable(config)
         remote = (body.remote if body else "") or "origin"
-        number = body.release if body else None
         try:
             publish_mod.ensure_commit(root)
         except publish_mod.PublishError as error:
             raise _refused(error) from error
-        with ship_guard:
-            if ship_progress["running"]:
+        with publish_guard:
+            if publish_state["running"]:
                 raise HTTPException(status_code=409, detail="a publish is already running")
-            ship_progress.update(
+            publish_state.update(
                 {
                     "running": True,
-                    "stage": "publishing",
+                    "stage": "preparing",
                     "error": None,
-                    "release": number,
+                    "release": None,
                     "commit": None,
                     "pushed": None,
                     "signed": None,
                 }
             )
             threading.Thread(
-                target=ship_in_background,
-                args=(root, number, remote),
+                target=publish_in_background,
+                args=(root, remote),
                 daemon=True,
             ).start()
-        return {"progress": dict(ship_progress)}
-
-    @router.get("/deploy/ship")
-    def deploy_ship_status() -> dict:
-        """The ship's state; the page polls it after starting one."""
-        return {"progress": dict(ship_progress)}
+        return {"progress": dict(publish_state)}
 
     @router.get("/deploy/publish")
-    def deploy_publish_progress() -> dict:
-        """The feed build's state; the page polls it after starting one."""
-        return publish_progress()
+    def deploy_publish_status() -> dict:
+        """The publish's state; the page polls it after starting one."""
+        return {"progress": dict(publish_state)}
 
-    @router.post("/deploy/publish")
-    def deploy_publish() -> dict:
-        """Build the players' feed in the background: the same `feedbuild.build`
-        as `camelot project feed`, with the public URL and game address read from
-        the daemon's environment (`F §D4`)."""
+    @router.post("/deploy/test")
+    def deploy_test() -> dict:
+        """Put the pending edits on this machine's local environment: the same
+        cut, the same deploy and the Installer's own apply. What the operator
+        sees in game is the release they are about to publish."""
         root = _root(config)
         _writable(config)
-        feed_url, server = publish_target()
-        with guard:
-            if progress["running"]:
-                raise HTTPException(status_code=409, detail="a feed build is already running")
-            try:
-                project = project_mod.load(root)
-                # The feed's base is the project's own client (`machine.json.client`),
-                # not the daemon's root: a local daemon edits an environment's install,
-                # and a feed built against that would compare a tree with itself. The
-                # daemon's root is only a fallback for a project that names none.
-                base = project_mod.client_root(project) or config.root
-            except project_mod.ProjectError as error:
-                raise _refused(error) from error
-            progress.update(
-                {
-                    "running": True,
-                    "stage": "staging",
-                    "done": 0,
-                    "total": 0,
-                    "error": None,
-                    "version": None,
-                    "path": None,
-                }
-            )
-            threading.Thread(
-                target=publish_in_background,
-                args=(project, base, feed_url, server),
-                daemon=True,
-            ).start()
-        return publish_progress()
+        try:
+            number = cut_if_pending(root)
+            if number is None:
+                raise release_mod.ReleaseError(
+                    "nothing to test: the journal holds no edit and no release exists"
+                )
+            deployed = pipeline_mod.deploy(root, number, env="local")
+            applied = envs_mod.apply(project_mod.load(root), "local", release=number)
+            return {
+                "release": number,
+                "wrote": len(deployed.get("wrote") or []),
+                "applied": len(applied.get("applied") or []),
+                "unchanged": bool(applied.get("unchanged")),
+            }
+        except (
+            pipeline_mod.PipelineError,
+            release_mod.ReleaseError,
+            project_mod.ProjectError,
+            clientinstall.InstallError,
+            envs_mod.EnvError,
+            installer_mod.InstallerError,
+        ) as error:
+            raise _refused(error) from error
 
     @router.post("/deploy/verify")
     def deploy_verify(body: DeployEnvAsk) -> dict:

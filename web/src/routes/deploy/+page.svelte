@@ -1,53 +1,59 @@
 <script lang="ts">
-	// The Deploy page (`pipeline.md` §6, draft 5): the releases the project cut,
-	// the environments this machine names, the dry run of one release against
-	// one environment — the table opened before any push — and the feed the
-	// players' launcher reads. Every write goes through `pipeline`, the same
-	// verbs the CLI runs: this page is a face on them, never a second
-	// implementation.
+	// The Deploy page (`pipeline.md` §6): one question, one button. Publishing
+	// cuts the release, builds the players' feed, signs it, commits the deploy
+	// branch and pushes — the verbs `publish` already implements. The details
+	// and the settings are folded away: an admin needs to know what is waiting,
+	// what publishing does, and whether it worked.
 	import { onMount } from 'svelte';
 	import AppBar from '$lib/components/AppBar.svelte';
 	import ProjectChip from '$lib/components/ProjectChip.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import {
 		api,
-		type DeployOutcome,
 		type DeployPage,
 		type DeployPlan,
 		type DeployPublish,
-		type DeployShip,
-		type DeployVerify
+		type DeployTest
 	} from '$lib/api/client';
-	import {
-		ArrowUpRight,
-		Eye,
-		Package,
-		Rocket,
-		Scissors,
-		Send,
-		ShieldCheck,
-		Upload
-	} from '@lucide/svelte';
+	import { Eye, Package, Play, Send } from '@lucide/svelte';
 
 	let facts = $state<DeployPage | null>(null);
-	let release = $state<number | null>(null);
-	let env = $state<string | null>(null);
-	let plan = $state<DeployPlan | null>(null);
-	let outcome = $state<DeployOutcome | null>(null);
-	let verified = $state<DeployVerify | null>(null);
 	let publish = $state<DeployPublish | null>(null);
-	let ship = $state<DeployShip | null>(null);
-	let shard = $state({ feed_url: '', game_server: '' });
-	let reading = $state<string | null>(null);
+	let testing = $state(false);
+	let tested = $state<DeployTest | null>(null);
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 
+	let showing = $state(false);
+	let plan = $state<DeployPlan | null>(null);
+	let planEnv = $state<string | null>(null);
+	let planning = $state(false);
+	let planError = $state<string | null>(null);
+
+	let shardDraft = $state({ feed_url: '', game_server: '' });
+
 	const pending = $derived(facts ? (facts.pending?.fixtures ?? 0) + (facts.pending?.rows ?? 0) : 0);
-	const chosen = $derived(facts?.releases.find((item) => item.number === release) ?? null);
-	const chosenEnv = $derived(facts?.environments.find((item) => item.name === env) ?? null);
-	const newest = $derived(facts?.releases[0]?.number ?? null);
-	const chunk = $derived(plan?.items.filter((item) => item.verdict !== 'unchanged') ?? []);
+	const objects = $derived(facts?.pending?.fixtures ?? 0);
+	const rows = $derived(facts?.pending?.rows ?? 0);
+	const newest = $derived(facts?.releases[0] ?? null);
+	const feedRelease = $derived(facts?.feed.release ?? null);
+	const stale = $derived(pending > 0 || (newest !== null && feedRelease !== newest.number));
+	//: The release the next Publish carries: a fresh cut when the journal holds
+	//: edits, the newest one when it is already cut (Test locally cuts too).
+	const next = $derived(pending > 0 ? (newest?.number ?? 0) + 1 : (newest?.number ?? null));
+	const localEnv = $derived(facts?.environments.find((item) => item.name === 'local') ?? null);
+	const canPublish = $derived(
+		!!facts && !facts.read_only && !publish?.running && (stale || (!!newest && !!publish?.error))
+	);
+
+	const writes = $derived(plan?.items.filter((item) => item.verdict === 'write') ?? []);
 	const drifts = $derived(plan?.items.filter((item) => item.verdict === 'drift') ?? []);
+	const byFamily = $derived.by(() => {
+		const counted: Record<string, number> = {};
+		for (const item of writes) counted[item.family] = (counted[item.family] ?? 0) + 1;
+		return Object.entries(counted);
+	});
+
 	const lastLine = $derived(
 		facts?.log?.find((line) => line.kind === 'deploy' || line.kind === 'promote')
 	);
@@ -56,50 +62,47 @@
 		error = problem instanceof Error ? problem.message : String(problem);
 	}
 
+	function sleep(ms: number): Promise<void> {
+		return new Promise((done) => setTimeout(done, ms));
+	}
+
 	async function load(): Promise<void> {
 		error = null;
 		try {
 			facts = await api.deploy();
 			publish = facts.publish;
-			ship = facts.ship;
-			shard = {
+			shardDraft = {
 				feed_url: facts.shard.feed_url ?? '',
 				game_server: facts.shard.game_server ?? ''
 			};
-			if (release === null) release = facts.releases[0]?.number ?? null;
-			if (env === null) env = facts.environments[0]?.name ?? null;
-			await planOnly();
-			if (publish?.running) {
-				await followPublish();
+			if (publish.running) {
+				publish = await followPublish();
 				facts = await api.deploy();
+				publish = facts.publish;
 			}
+			if (showing) await refreshPlan();
 		} catch (problem) {
 			say(problem);
 		}
 	}
 
-	function publishing(found: DeployPublish): string {
-		if (found.stage === 'staging') return 'applying the release to the base…';
-		if (found.stage === 'walking') return 'walking the client…';
-		if (found.stage === 'writing') return `${found.done} / ${found.total} file(s)`;
-		if (found.stage === 'done') return 'done';
-		return found.stage;
-	}
-
-	async function followPublish(): Promise<void> {
-		while (publish?.running) {
-			await new Promise((done) => setTimeout(done, 400));
-			publish = (await api.deployPublishProgress()).progress;
+	async function followPublish(): Promise<DeployPublish> {
+		let state = (await api.deployPublishProgress()).progress;
+		while (state.running) {
+			await sleep(400);
+			state = (await api.deployPublishProgress()).progress;
 		}
-		if (publish?.error) error = publish.error;
+		return state;
 	}
 
-	async function publishFeed(): Promise<void> {
+	async function publishNow(): Promise<void> {
 		busy = true;
 		error = null;
+		tested = null;
 		try {
 			publish = (await api.deployPublish()).progress;
-			await followPublish();
+			publish = await followPublish();
+			if (publish.error) error = publish.error;
 			await load();
 		} catch (problem) {
 			say(problem);
@@ -108,31 +111,40 @@
 		}
 	}
 
-	function shipping(found: DeployShip): string {
-		if (found.stage === 'publishing') return 'building, signing and pushing…';
-		if (found.stage === 'done') return 'shipped';
-		return found.stage;
-	}
-
-	async function followShip(): Promise<void> {
-		while (ship?.running) {
-			await new Promise((done) => setTimeout(done, 600));
-			ship = (await api.deployShipProgress()).progress;
-		}
-		if (ship?.error) error = ship.error;
-	}
-
-	async function shipRelease(): Promise<void> {
+	async function testLocally(): Promise<void> {
 		busy = true;
+		testing = true;
 		error = null;
+		tested = null;
 		try {
-			ship = (await api.deployShip({ release: newest })).progress;
-			await followShip();
+			tested = await api.deployTest();
 			await load();
 		} catch (problem) {
 			say(problem);
 		} finally {
+			testing = false;
 			busy = false;
+		}
+	}
+
+	async function toggleDetails(): Promise<void> {
+		showing = !showing;
+		if (showing) await refreshPlan();
+	}
+
+	async function refreshPlan(): Promise<void> {
+		plan = null;
+		planError = null;
+		planEnv = null;
+		if (newest === null || localEnv === null) return;
+		planning = true;
+		try {
+			plan = await api.deployPlan({ release: newest.number, env: localEnv.name });
+			planEnv = localEnv.name;
+		} catch (problem) {
+			planError = problem instanceof Error ? problem.message : String(problem);
+		} finally {
+			planning = false;
 		}
 	}
 
@@ -140,8 +152,8 @@
 		busy = true;
 		error = null;
 		try {
-			const saved = await api.deployShard(shard);
-			shard = {
+			const saved = await api.deployShard(shardDraft);
+			shardDraft = {
 				feed_url: saved.feed_url ?? '',
 				game_server: saved.game_server ?? ''
 			};
@@ -166,91 +178,37 @@
 		}
 	}
 
-	/** The table, without touching the outcome line: a push refreshes the facts
-	 * and the table, and the operator keeps reading what it just wrote. */
-	async function planOnly(): Promise<void> {
-		plan = null;
-		if (release === null || env === null) return;
-		try {
-			plan = await api.deployPlan({ release, env });
-		} catch (problem) {
-			say(problem);
-		}
+	function stage(found: DeployPublish | null): string {
+		if (!found) return '';
+		if (found.stage === 'preparing') return 'Cutting the release…';
+		if (found.stage === 'publishing') return 'Building the update and sending it…';
+		if (found.stage === 'done') return 'Published';
+		return found.stage;
 	}
 
-	/** The operator asking for it again: the previous outcome no longer stands. */
-	async function dry(): Promise<void> {
-		outcome = null;
-		await planOnly();
-	}
+	/** The dry run's writes, grouped the way a release's record groups them. */
+	const writesByFamily = $derived(describe(byFamily));
 
-	async function select(ask: { release?: number; env?: string }): Promise<void> {
-		if (ask.release !== undefined) release = ask.release;
-		if (ask.env !== undefined) env = ask.env;
-		verified = null;
-		await dry();
-	}
+	/** What a release holds, in the operator's words: the record counts families
+	 * of work (`client`, `server`, `world`, `rows`, `dropped`), not files only. */
+	const FAMILY_NAMES: Record<string, [string, string]> = {
+		client: ['client file', 'client files'],
+		server: ['server file', 'server files'],
+		world: ['world object', 'world objects'],
+		rows: ['database row', 'database rows'],
+		dropped: ['dropped edit', 'dropped edits']
+	};
 
-	async function cut(): Promise<void> {
-		busy = true;
-		error = null;
-		try {
-			const record = await api.deployCut();
-			outcome = null;
-			verified = null;
-			release = record.number;
-			await load();
-		} catch (problem) {
-			say(problem);
-		} finally {
-			busy = false;
-		}
-	}
-
-	/** Promote asks the other environment to vouch for the release: the bytes
-	 * travel from where they are live, never from a rebuild (§D4). */
-	async function promote(): Promise<void> {
-		if (release === null || env === null || !facts) return;
-		const source = facts.environments.find(
-			(item) => item.name !== env && item.live?.release === release
-		);
-		if (!source) {
-			say(`no other environment holds release ${release}: deploy it there first`);
-			return;
-		}
-		await push(false, source.name);
-	}
-
-	async function push(adopt: boolean, source?: string): Promise<void> {
-		if (release === null || env === null) return;
-		busy = true;
-		error = null;
-		try {
-			outcome = await api.deployPush({ release, env, adopt, source });
-			await load();
-		} catch (problem) {
-			say(problem);
-		} finally {
-			busy = false;
-		}
-	}
-
-	async function readBack(name: string): Promise<void> {
-		reading = name;
-		verified = null;
-		error = null;
-		try {
-			verified = await api.deployVerify(name);
-		} catch (problem) {
-			say(problem);
-		} finally {
-			reading = null;
-		}
+	function describe(counts: [string, number][]): string {
+		const parts = counts.map(([name, count]) => {
+			const [one, many] = FAMILY_NAMES[name] ?? [name, `${name}s`];
+			return `${count.toLocaleString()} ${count === 1 ? one : many}`;
+		});
+		return parts.length ? parts.join(' · ') : 'no changes';
 	}
 
 	function families(found: Record<string, number>): string {
-		const parts = Object.entries(found).map(([name, count]) => `${name} ${count}`);
-		return parts.length ? parts.join(' · ') : '—';
+		return describe(Object.entries(found));
 	}
 
 	function when(stamp: string | null | undefined): string {
@@ -273,14 +231,6 @@
 		return `${value.toFixed(value < 10 && unit > 0 ? 1 : 0)} ${units[unit]}`;
 	}
 
-	function envState(name: string): { label: string; tone: string } {
-		const found = facts?.environments.find((item) => item.name === name);
-		if (found?.problem) return { label: 'no folder', tone: 'muted' };
-		if (!found?.live) return { label: 'nothing deployed', tone: 'muted' };
-		if (found.live.release === newest) return { label: 'live', tone: 'ok' };
-		return { label: `behind (${found.live.release})`, tone: 'warn' };
-	}
-
 	onMount(load);
 </script>
 
@@ -295,409 +245,333 @@
 		{/snippet}
 	</AppBar>
 
-	<div class="body">
-		<nav class="rail" aria-label="the pipeline">
-			<button
-				class="tool"
-				title="cut a release (the range since the last one)"
-				aria-label="Cut a release"
-				disabled={busy}
-				onclick={cut}
-			>
-				<Scissors size={17} />
-			</button>
-			<button
-				class="tool"
-				title="dry run: what would be written, and why"
-				aria-label="Dry run"
-				onclick={dry}
-			>
-				<Eye size={17} />
-			</button>
-			<button
-				class="tool"
-				title={`deploy ${String(release ?? 0).padStart(4, '0')} to ${env ?? 'an environment'}`}
-				aria-label="Deploy"
-				disabled={busy || !plan || plan.refusals.length > 0 || chunk.length === 0}
-				onclick={() => push(false)}
-			>
-				<Rocket size={17} />
-			</button>
-			<button
-				class="tool"
-				title="promote: the same bytes, from the environment that already holds it"
-				aria-label="Promote"
-				disabled={busy || release === null}
-				onclick={promote}
-			>
-				<ArrowUpRight size={17} />
-			</button>
-			<button
-				class="tool"
-				title="read the environment back"
-				aria-label="Read it back"
-				onclick={() => env && readBack(env)}
-			>
-				<ShieldCheck size={17} />
-			</button>
-			<button
-				class="tool"
-				title={publish?.running ? publishing(publish) : "build the players' feed"}
-				aria-label="Publish the feed"
-				disabled={busy || publish?.running || !facts || facts.read_only}
-				onclick={publishFeed}
-			>
-				<Send size={17} />
-			</button>
-			<button
-				class="tool"
-				title={ship?.running
-					? shipping(ship)
-					: `ship release ${String(newest ?? 0).padStart(4, '0')}: feed, signature, deploy branch, push`}
-				aria-label="Ship the release"
-				disabled={busy || ship?.running || !facts || facts.read_only || newest === null}
-				onclick={shipRelease}
-			>
-				<Upload size={17} />
-			</button>
-		</nav>
+	<main class="page">
+		<header class="head">
+			<h1>Deploy</h1>
+			<p>
+				Your changes reach players only after they are published. Publishing builds the update,
+				signs it and sends it to the server.
+			</p>
+		</header>
 
-		<main class="deploy">
-			<header class="head">
-				<h1>Deploy</h1>
-				<p>
-					{#if facts}
-						{facts.project} · {facts.environments.length} environment(s) ·
-						{facts.releases.length} release(s){chosenEnv?.live
-							? ` · ${chosenEnv.name} holds ${chosenEnv.live.release}`
-							: ''}
+		{#if error}
+			<p class="problem" role="alert">{error}</p>
+		{/if}
+
+		<section class="card hero" aria-label="publish">
+			{#if facts === null}
+				<p class="big">Reading the project…</p>
+			{:else}
+				<div class="state">
+					{#if pending > 0}
+						<p class="big">
+							{pending}
+							{pending === 1 ? 'change is' : 'changes are'} not published
+						</p>
+						<p class="sub">
+							{objects}
+							{objects === 1 ? 'object' : 'objects'} edited
+							{#if rows > 0}
+								· {rows} database {rows === 1 ? 'row' : 'rows'} to write
+							{/if}
+						</p>
+						{#if newest}
+							<p class="sub muted">
+								Publishing will cut release {String(next ?? 0).padStart(4, '0')}.
+							</p>
+						{/if}
+					{:else if newest && feedRelease !== newest.number}
+						<p class="big">
+							Release {String(newest.number).padStart(4, '0')} is ready to publish
+						</p>
+						<p class="sub">
+							Cut on {when(newest.cut_at)} · {families(newest.families)} · not live for players yet
+						</p>
+					{:else if newest}
+						<p class="big">Everything is published</p>
+						<p class="sub">
+							Release {String(newest.number).padStart(4, '0')} is live for players
+							{#if facts.feed.version !== null}· update version {facts.feed.version}{/if}
+						</p>
 					{:else}
-						reading the project…
+						<p class="big">Nothing to publish yet</p>
+						<p class="sub">Edit the world, then come back here to publish your changes.</p>
 					{/if}
-				</p>
-			</header>
+				</div>
 
-			{#if error}
-				<p class="problem" role="alert">{error}</p>
+				{#if publish?.running}
+					<p class="working" aria-live="polite">
+						<span class="dot" aria-hidden="true"></span>
+						{stage(publish)}
+					</p>
+				{:else if publish?.stage === 'done' && publish.release !== null && !stale}
+					<p class="done" aria-live="polite">
+						Release {String(publish.release).padStart(4, '0')} published. Players get it the next time
+						they launch the game.
+					</p>
+				{:else if publish?.error}
+					<p class="problem inline" role="alert">The last publish failed: {publish.error}</p>
+				{/if}
+
+				{#if tested}
+					<p class="done" aria-live="polite">
+						{#if tested.unchanged}
+							Release {String(tested.release).padStart(4, '0')} is already installed on this computer.
+						{:else}
+							Release {String(tested.release).padStart(4, '0')} installed on this computer ({tested.applied}
+							{tested.applied === 1 ? 'file' : 'files'}). Start the game to check it.
+						{/if}
+					</p>
+				{/if}
+
+				<div class="acts">
+					<button class="btn btn--primary" disabled={busy || !canPublish} onclick={publishNow}>
+						<Send size={15} />
+						{publish?.running
+							? 'Publishing…'
+							: publish?.error && !stale
+								? 'Try publishing again'
+								: 'Publish'}
+					</button>
+					<button
+						class="btn btn--secondary"
+						aria-expanded={showing}
+						disabled={facts.read_only || (!newest && pending === 0)}
+						onclick={toggleDetails}
+					>
+						<Eye size={15} />
+						{showing ? 'Hide details' : 'See details'}
+					</button>
+					<button
+						class="btn btn--secondary"
+						disabled={busy || facts.read_only || !localEnv || (pending === 0 && !newest)}
+						onclick={testLocally}
+					>
+						<Play size={15} />
+						{testing ? 'Installing…' : 'Test locally'}
+					</button>
+				</div>
+
+				{#if facts.read_only}
+					<p class="note">Another window holds this project: close it to publish or test.</p>
+				{:else if pending > 0 && next !== null}
+					<p class="note">
+						Publishing will create release {String(next).padStart(4, '0')} with
+						{#if objects > 0}
+							{objects} edited {objects === 1 ? 'object' : 'objects'}
+						{/if}
+						{#if objects > 0 && rows > 0}and
+						{/if}
+						{#if rows > 0}
+							{rows} database {rows === 1 ? 'row' : 'rows'}
+						{/if}.
+					</p>
+				{:else if newest && feedRelease !== newest.number}
+					<p class="note">
+						Publishing sends release {String(newest.number).padStart(4, '0')} to the update address.
+					</p>
+				{/if}
+
+				{#if showing}
+					<div class="details">
+						<h3>What installing it here would change</h3>
+						{#if pending > 0 && newest}
+							<p class="note">
+								{pending} unpublished
+								{pending === 1 ? 'change is' : 'changes are'} not in a release yet. Publish, or Test locally,
+								to cut them into a release.
+							</p>
+						{/if}
+						{#if newest === null}
+							<p class="note">No release exists yet: there is nothing to inspect.</p>
+						{:else if localEnv === null}
+							<p class="note">
+								This project names no <code>local</code> environment, so there is no test install to inspect.
+							</p>
+						{:else if planning}
+							<p class="note">Reading release {String(newest.number).padStart(4, '0')}…</p>
+						{:else if planError}
+							<p class="problem inline">{planError}</p>
+						{:else if plan}
+							<p class="note">
+								Release {String(plan.release).padStart(4, '0')} → {planEnv} · read-only, nothing was written.
+							</p>
+							{#if writes.length === 0 && drifts.length === 0 && plan.refusals.length === 0}
+								<p class="line ok">Already installed here: nothing would change.</p>
+							{:else}
+								<p class="line">Would write {writesByFamily}.</p>
+								{#if drifts.length}
+									<p class="line warn">
+										{drifts.length}
+										{drifts.length === 1 ? 'file was' : 'files were'} changed outside the tool since the
+										install: publishing would replace them.
+									</p>
+								{/if}
+								{#each plan.refusals as refusal (refusal)}
+									<p class="problem inline">{refusal}</p>
+								{/each}
+							{/if}
+							{#if plan.needs.restart}
+								<p class="note">The game server restarts when this is installed.</p>
+							{:else if plan.needs.reload?.length}
+								<p class="note">
+									After installing, the server reloads: {plan.needs.reload.join(', ')}.
+								</p>
+							{/if}
+						{/if}
+					</div>
+				{/if}
 			{/if}
+		</section>
 
+		{#if facts}
 			<div class="grid">
 				<section class="card" aria-label="releases">
 					<h3>
 						Releases
-						<span class="card-meta"
-							>{facts?.releases.length ?? 0} cut(s) · newest {newest ?? '—'}</span
-						>
+						<span class="card-meta">{facts.releases.length}</span>
 					</h3>
-					{#if facts && facts.releases.length}
+					{#if facts.releases.length}
 						<ul class="rows">
 							{#each facts.releases as item (item.number)}
 								<li>
-									<button
-										class="row"
-										class:on={item.number === release}
-										aria-pressed={item.number === release}
-										onclick={() => select({ release: item.number })}
-									>
-										<span class="num">{String(item.number).padStart(4, '0')}</span>
-										<span class="what">{families(item.families)}</span>
-										<span class="where" class:live={item.live_in.length > 0}>
-											{item.live_in.length ? item.live_in.join(' · ') : 'not deployed'}
-										</span>
-										<span class="when">{when(item.cut_at)}</span>
-									</button>
+									<span class="num">{String(item.number).padStart(4, '0')}</span>
+									<span class="what">{families(item.families)}</span>
+									<span class="where" class:live={item.live_in.length > 0}>
+										{item.live_in.length
+											? `installed on ${item.live_in.join(', ')}`
+											: 'not installed'}
+									</span>
+									<span class="when">{when(item.cut_at)}</span>
 								</li>
 							{/each}
 						</ul>
-						<p class="hint">
-							A cut is rebuilt from the journal, never stored twice:
-							<code>camelot project verify --rebuild {newest ?? 'N'}</code>
-						</p>
 					{:else}
-						<p class="hint">
-							No release yet. Cut one with <code>camelot project release</code> once edits are recorded.
-						</p>
+						<p class="hint">No release yet. Your first Publish will create one.</p>
 					{/if}
 				</section>
 
-				<section class="card" aria-label="environments">
-					<h3>
-						Environments
-						<span class="card-meta">{facts?.environments.length ?? 0} declared</span>
-					</h3>
-					<div class="envs">
-						{#each facts?.environments ?? [] as item (item.name)}
-							<article class="env" class:on={item.name === env}>
-								<header>
-									<strong>{item.name}</strong>
-									<span
-										class="pill"
-										class:ok={envState(item.name).tone === 'ok'}
-										class:warn={envState(item.name).tone === 'warn'}
-									>
-										{envState(item.name).label}
-									</span>
-								</header>
-								<p class="path">{item.problem ?? item.root ?? 'no folder on this machine'}</p>
-								{#if item.live}
-									<p class="line">
-										release {item.live.release} · since {when(item.live.at)}{item.live.from
-											? ` · promoted from ${item.live.from}`
-											: ''}
-									</p>
-								{:else}
-									<p class="line muted">nothing was deployed there yet</p>
-								{/if}
-								<p class="line muted">
-									client {item.client?.exists ? 'ok' : 'missing'}
-									{#if item.client}· {item.client.path}{/if}
+				<details class="card settings">
+					<summary>
+						<span>Update address and settings</span>
+						<span class="card-meta">{facts.shard.feed_url || 'no update address'}</span>
+					</summary>
+					<div class="fold">
+						<label class="field">
+							<span>Update address (players' launcher)</span>
+							<input
+								bind:value={shardDraft.feed_url}
+								placeholder="https://feed.example.com/"
+								disabled={facts.read_only}
+							/>
+						</label>
+						<label class="field">
+							<span>Game address</span>
+							<input
+								bind:value={shardDraft.game_server}
+								placeholder="play.example.com:10300"
+								disabled={facts.read_only}
+							/>
+						</label>
+						<button
+							class="btn btn--secondary"
+							disabled={busy || facts.read_only}
+							onclick={saveShard}>Save addresses</button
+						>
+						<p class="hint">
+							They live in <code>project.json</code>, so every machine agrees. Publish again after
+							changing them.
+						</p>
+
+						<h3>Update feed</h3>
+						{#if facts.feed.present}
+							<p class="line">
+								Version {facts.feed.version ?? '—'} · {facts.feed.files.toLocaleString()} files ·
+								{size(facts.feed.bytes)}
+								{facts.feed.release
+									? ` · release ${String(facts.feed.release).padStart(4, '0')}`
+									: ''}
+							</p>
+							{#if facts.feed.base_url}
+								<p class="path">{facts.feed.base_url}</p>
+							{/if}
+							{#if facts.feed.release && newest && facts.feed.release > newest.number}
+								<p class="line warn">
+									The feed carries release {facts.feed.release}, newer than the newest release here.
 								</p>
-								<div class="acts">
-									<button class="btn btn--secondary" onclick={() => select({ env: item.name })}>
-										Dry run here
-									</button>
-									<button
-										class="btn btn--ghost"
-										disabled={reading === item.name}
-										onclick={() => readBack(item.name)}
-									>
-										{reading === item.name ? 'reading…' : 'Read it back'}
-									</button>
-								</div>
-								{#if verified?.env === item.name}
-									<p class="line" class:ok={verified.ok}>
-										{verified.ok
-											? `read back: release ${verified.release ?? '—'} and its client are what the project says`
-											: verified.problems.slice(0, 3).join(' · ')}
-									</p>
-								{/if}
-							</article>
-						{/each}
-					</div>
-				</section>
-
-				<section class="card" aria-label="dry run">
-					<h3>
-						Dry run
-						<span class="card-meta">
-							{#if plan}{plan.items.length} item(s): {Object.entries(plan.counts)
-									.filter(([, count]) => count > 0)
-									.map(([verdict, count]) => `${count} ${verdict}`)
-									.join(' · ')}{/if}
-						</span>
-					</h3>
-					{#if release !== null && env !== null}
-						<p class="select-line">
-							<span class="lead">
-								<Rocket size={14} />
-								{String(release).padStart(4, '0')} → {env}
-							</span>
-							<span class="muted">{chosenEnv?.root ?? ''}</span>
-						</p>
-					{/if}
-
-					{#if plan}
-						{#each chunk as item (item.family + item.what)}
-							<div class="item">
-								<span class="verdict" data-v={item.verdict}>{item.verdict}</span>
-								<span class="what">{item.what}</span>
-								<span class="why">{item.why}</span>
-								<span class="bytes">
-									{#if item.theirs}theirs {item.theirs.replace('sha256:', '').slice(0, 4)}… ·
-									{/if}ours
-									{item.ours?.replace('sha256:', '').slice(0, 4) ?? '—'}…
-								</span>
-							</div>
-						{/each}
-						{#if chunk.length === 0}
-							<p class="hint">
-								Every destination already holds this release: the deploy would write nothing.
-							</p>
+							{:else if facts.feed.release === newest?.number}
+								<p class="line ok">The feed carries the newest release.</p>
+							{:else if facts.feed.release}
+								<p class="line warn">
+									The feed carries release {facts.feed.release}; the newest here is
+									{newest ? String(newest.number).padStart(4, '0') : 'none'}.
+								</p>
+							{/if}
+						{:else}
+							<p class="hint">No update feed yet. Publishing builds one.</p>
 						{/if}
-						<ul class="release-lines">
-							<li>order {plan.order}</li>
-							{#if plan.needs.reload?.length}
+
+						<h3>Signature</h3>
+						<p class="line" class:warn={!facts.signing.key}>
+							{#if facts.signing.key}
+								Signed: the launcher refuses an update that this key did not sign.
+							{:else}
+								Not signed. Name a <code>release_key</code> in <code>machine.json</code>.
+							{/if}
+						</p>
+
+						<h3>Environments</h3>
+						<ul class="rows">
+							{#each facts.environments as item (item.name)}
 								<li>
-									after the deploy:
-									{plan.needs.reload.map((name) => `/reload ${name}`).join(', ')}
+									<span class="num-em">{item.name}</span>
+									<span class="what">
+										{item.live
+											? `holds release ${String(item.live.release).padStart(4, '0')}`
+											: 'nothing installed'}
+									</span>
+									<span class="where">{item.problem ?? item.root ?? 'no folder'}</span>
 								</li>
-							{/if}
-							<li>
-								{plan.ids.checked} id(s) checked against {plan.env} · {plan.ids.collisions.length}
-								already held
-							</li>
-							<li>
-								evidence {plan.evidence.present ? 'is there' : 'is not there yet'} ·
-								{plan.evidence.path}
-							</li>
+							{/each}
 						</ul>
-						{#each plan.refusals as refusal (refusal)}
-							<p class="problem">{refusal}</p>
-						{/each}
-						<div class="acts end">
-							<button class="btn btn--secondary" onclick={dry}>Dry run again</button>
-							{#if drifts.length}
-								<button class="btn btn--ghost" disabled={busy} onclick={() => push(true)}>
-									Adopt what is there now ({drifts.length})
-								</button>
-							{/if}
-							<button
-								class="btn btn--primary"
-								disabled={busy || plan.refusals.length > 0 || chunk.length === 0}
-								onclick={() => push(false)}
-							>
-								{busy
-									? 'deploying…'
-									: `Deploy ${String(release ?? 0).padStart(4, '0')} → ${env ?? ''}`}
+
+						{#if facts.log_dirty}
+							<p class="line warn">The deploy history is not saved in git yet.</p>
+							<button class="btn btn--secondary" disabled={busy} onclick={commitLog}>
+								Save the deploy history
 							</button>
-						</div>
-					{:else}
-						<p class="hint">
-							Pick a release and an environment: the table of what would be written appears here,
-							and the deploy follows it.
-						</p>
-					{/if}
-					{#if outcome}
-						<p class="line" class:ok={outcome.outcome !== 'unchanged'}>
-							{outcome.outcome === 'unchanged'
-								? `nothing written: ${outcome.plan.env} already holds release ${String(outcome.plan.release).padStart(4, '0')}`
-								: `${outcome.wrote.length} file(s) written — read it back from the environment's card`}
-						</p>
-					{/if}
-				</section>
-
-				<section class="card" aria-label="feed">
-					<h3>
-						Feed
-						<span class="card-meta">the players' update</span>
-					</h3>
-					{#if publish?.running}
-						<p class="line">building the feed — {publishing(publish)}</p>
-					{:else if publish?.error}
-						<p class="line warn">{publish.error}</p>
-					{/if}
-					{#if facts?.feed.present}
-						<p class="version">version {facts.feed.version ?? '—'}</p>
-						<p class="line">
-							{facts.feed.files} file(s) · {size(facts.feed.bytes)}
-							{#if facts.feed.published}
-								· {facts.feed.published} published ({size(facts.feed.published_bytes)})
-							{/if}
-							{facts.feed.release ? ` · release ${facts.feed.release}` : ''}
-						</p>
-						<p class="path">{facts.feed.path}</p>
-						{#if facts.feed.base_url}
-							<p class="path">{facts.feed.base_url}</p>
 						{/if}
-						{#if facts.feed.release && newest && facts.feed.release > newest}
-							<p class="line warn">
-								the feed carries {facts.feed.release}, newer than the newest release here
-							</p>
-						{:else if chosenEnv?.live && facts.feed.release && facts.feed.release > chosenEnv.live.release}
-							<p class="line warn">
-								the feed carries {facts.feed.release}; {chosenEnv.name} holds {chosenEnv.live
-									.release}
-								— players would fetch content the server does not have yet
-							</p>
-						{:else}
-							<p class="line ok">the feed matches what is live</p>
-						{/if}
-						<p class="hint">
-							the launcher reads <code>version-new.txt</code>, then
-							<code>patchlist-new.txt</code> (path, md5, size)
-						</p>
-					{:else}
-						<p class="hint">
-							No feed yet. <strong>Publish</strong> builds it from the shard's feed URL and
-							game address (the card beside this one); the CLI verb is
-							<code>camelot project feed</code>.
-						</p>
-						<p class="path">{facts?.feed.path ?? ''}</p>
-					{/if}
-				</section>
-
-				<section class="card" aria-label="shard">
-					<h3>
-						Shard
-						<span class="card-meta">every player reads these</span>
-					</h3>
-					<label class="shard-row">
-						<span>feed URL</span>
-						<input bind:value={shard.feed_url} placeholder="https://feed.example.com/" />
-					</label>
-					<label class="shard-row">
-						<span>game</span>
-						<input bind:value={shard.game_server} placeholder="play.example.com:10300" />
-					</label>
-					<button
-						class="btn btn--secondary"
-						disabled={busy || facts?.read_only}
-						onclick={saveShard}>Save</button
-					>
-					<p class="hint">
-						they live in <code>project.json</code>, so every machine agrees
-					</p>
-					<p class="line" class:warn={!facts?.signing.key}>
-						signing:
-						{#if facts?.signing.key}
-							<code>{facts.signing.key}</code>
-						{:else}
-							unsigned — name a <code>release_key</code> in <code>machine.json</code>
-						{/if}
-					</p>
-					{#if facts?.log_dirty}
-						<p class="line warn">
-							<code>deploy/log.jsonl</code> has a line HEAD does not carry yet
-						</p>
-						<button class="btn btn--secondary" disabled={busy} onclick={commitLog}>
-							Commit the log
-						</button>
-					{/if}
-					{#if ship?.running}
-						<p class="line">shipping — {shipping(ship)}</p>
-					{:else if ship?.error}
-						<p class="line warn">{ship.error}</p>
-					{:else if ship?.stage === 'done'}
-						<p class="line ok">
-							shipped {ship.release ? `release ${ship.release}` : ''} — {ship.commit?.slice(
-								0,
-								12
-							)}
-							{#if ship.pushed}· pushed to {ship.pushed}{/if}
-						</p>
-					{/if}
-				</section>
+					</div>
+				</details>
 			</div>
-		</main>
-	</div>
+		{/if}
+	</main>
 
 	<StatusBar>
 		{#snippet left()}
-			{#if chosenEnv}
-				<span class="sb-strong">{chosenEnv.name}</span>
-				<span>{chosenEnv.live ? `release ${chosenEnv.live.release}` : 'nothing deployed'}</span>
-			{/if}
-			{#if chosen}
-				<span>· order {chosen.order}</span>
+			{#if facts}
+				<span class="sb-strong">
+					{facts.feed.present ? `update version ${facts.feed.version ?? '—'}` : 'no update feed'}
+				</span>
+				{#if newest}
+					<span>· release {String(newest.number).padStart(4, '0')}</span>
+				{/if}
 			{/if}
 		{/snippet}
 		{#snippet center()}
 			{#if lastLine}
 				<span>
-					{lastLine.kind === 'promote' ? 'promoted' : 'deployed'}
-					{String(lastLine.release ?? 0).padStart(4, '0')}
-					{lastLine.env}
-					{lastLine.outcome ?? ''} · {lastLine.wrote?.length ?? 0} file(s) ·
-					{when(lastLine.at)}
+					last install: release {String(lastLine.release ?? 0).padStart(4, '0')}
+					on {lastLine.env} · {lastLine.wrote?.length ?? 0} file(s) · {when(lastLine.at)}
 				</span>
-			{:else}
-				<span>no attempt recorded yet</span>
+			{:else if facts}
+				<span>no install recorded yet</span>
 			{/if}
 		{/snippet}
 		{#snippet right()}
-			{#if facts}
+			{#if facts?.shard.game_server}
 				<Package size={12} />
-				<span>{facts.root}</span>
+				<span>{facts.shard.game_server}</span>
 			{/if}
 		{/snippet}
 	</StatusBar>
@@ -705,219 +579,250 @@
 
 <style>
 	.shell {
-		display: flex;
-		flex-direction: column;
-		height: 100dvh;
-	}
-	.body {
-		flex: 1;
-		min-height: 0;
-		display: flex;
-	}
-	.rail {
-		width: 64px;
-		flex: 0 0 auto;
-		padding: 12px 0;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 8px;
-		background: var(--surface);
-		border-right: 1px solid var(--border);
-	}
-	.tool {
-		width: 40px;
-		height: 40px;
 		display: grid;
-		place-items: center;
-		border: none;
-		border-radius: var(--r-lg);
-		background: var(--surface-input);
-		color: var(--text-2);
-		cursor: pointer;
-		transition: color 120ms var(--ease);
+		grid-template-rows: var(--h-topbar) 1fr var(--h-statusbar);
+		height: 100vh;
 	}
-	.tool:hover:not(:disabled) {
-		color: var(--accent);
-	}
-	.tool:disabled {
-		color: var(--text-4);
-		cursor: not-allowed;
-	}
-	.deploy {
-		flex: 1;
-		min-height: 0;
-		overflow: auto;
-		padding: 24px 32px 32px;
+	.page {
+		overflow-y: auto;
+		padding: 28px 32px 48px;
 		display: flex;
 		flex-direction: column;
 		gap: 20px;
+		max-width: 1080px;
+		width: 100%;
+		margin: 0 auto;
+		min-height: 0;
 	}
 	.head h1 {
 		font-size: var(--fs-section);
-		font-weight: 600;
-		color: var(--text);
+		font-weight: 650;
+		letter-spacing: -0.02em;
 	}
 	.head p {
-		margin-top: 6px;
-		font-size: var(--fs-dense);
+		margin-top: 4px;
 		color: var(--text-3);
+		font-size: var(--fs-body);
+		max-width: 62ch;
 	}
 	.problem {
-		border: 1px solid var(--danger);
+		border: 1px solid var(--danger-border);
+		background: var(--danger-tint);
+		color: var(--danger-text);
 		border-radius: var(--r-md);
-		padding: 8px 12px;
+		padding: 10px 12px;
 		font-size: var(--fs-dense);
-		color: var(--danger);
+	}
+	.problem.inline {
+		margin-top: 10px;
+	}
+	.hero {
+		padding: 26px 28px;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.big {
+		font-size: 26px;
+		font-weight: 650;
+		letter-spacing: -0.02em;
+	}
+	.sub {
+		color: var(--text-3);
+		font-size: var(--fs-body);
+	}
+	.sub.muted {
+		color: var(--text-4);
+	}
+	.acts {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 10px;
+		margin-top: 18px;
+	}
+	.note {
+		margin-top: 10px;
+		font-size: 12px;
+		line-height: 1.4;
+		color: var(--text-4);
+	}
+	.working {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-top: 12px;
+		font-size: var(--fs-dense);
+		color: var(--accent);
+	}
+	.dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--accent);
+		animation: pulse 1s ease-in-out infinite alternate;
+	}
+	@keyframes pulse {
+		from {
+			opacity: 0.3;
+		}
+		to {
+			opacity: 1;
+		}
+	}
+	.done {
+		margin-top: 12px;
+		font-size: var(--fs-dense);
+		color: var(--accent);
 	}
 	.grid {
 		display: grid;
-		grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-		gap: 20px;
-		align-items: start;
-	}
-	@media (max-width: 1100px) {
-		.grid {
-			grid-template-columns: minmax(0, 1fr);
-		}
+		grid-template-columns: minmax(0, 1fr);
+		gap: 16px;
 	}
 	.rows {
+		list-style: none;
 		display: flex;
 		flex-direction: column;
-		list-style: none;
-		margin: 0;
-		padding: 0;
+		gap: 1px;
 	}
-	.row {
-		display: grid;
-		grid-template-columns: 56px minmax(0, 1fr) 180px 96px;
-		align-items: center;
+	.rows li {
+		display: flex;
+		align-items: baseline;
 		gap: 12px;
-		width: 100%;
-		padding: 9px 10px;
-		border: 1px solid transparent;
-		border-radius: var(--r-md);
-		background: transparent;
-		font: inherit;
-		text-align: left;
+		padding: 7px 8px;
+		border-radius: var(--r-sm);
+		font-size: var(--fs-dense);
 		color: var(--text-2);
-		cursor: pointer;
 	}
-	.row:hover {
-		background: var(--surface-2);
-	}
-	.row.on {
-		background: var(--surface-2);
-		border-color: var(--border-input);
+	.rows li:hover {
+		background: var(--surface-input);
 	}
 	.num {
 		font-variant-numeric: tabular-nums;
+		color: var(--text-3);
+		min-width: 34px;
+	}
+	.num-em {
+		min-width: 64px;
 		font-weight: 600;
-		color: var(--text);
 	}
 	.what {
+		flex: 1;
+		min-width: 0;
+	}
+	.where {
+		color: var(--text-4);
+		font-size: var(--fs-small);
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.where {
-		font-size: var(--fs-small);
-		color: var(--text-4);
-	}
 	.where.live {
-		color: var(--text-3);
-	}
-	.where.live::before {
-		content: '●';
-		margin-right: 6px;
 		color: var(--accent);
-		font-size: 8px;
 	}
 	.when {
-		font-size: var(--fs-small);
-		text-align: right;
 		color: var(--text-4);
-		font-variant-numeric: tabular-nums;
+		font-size: var(--fs-small);
+		white-space: nowrap;
 	}
-	.envs {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
+	details.settings {
+		padding: 0;
 	}
-	.env {
-		border: 1px solid var(--border);
-		border-radius: var(--r-lg);
-		padding: 12px 14px;
-		background: var(--surface-2);
-	}
-	.env.on {
-		border-color: var(--border-input);
-	}
-	.env header {
+	details.settings > summary {
 		display: flex;
 		align-items: center;
-		gap: 10px;
-	}
-	.env strong {
-		font-size: var(--fs-title);
-		font-weight: 600;
-		color: var(--text);
-	}
-	.pill {
-		margin-left: auto;
-		padding: 2px 8px;
-		border-radius: var(--r-sm);
-		background: var(--surface);
-		font-size: var(--fs-label);
+		gap: 8px;
+		padding: 14px;
+		cursor: pointer;
+		font-size: 12px;
+		font-weight: 500;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--text-4);
-	}
-	.pill.ok {
-		background: var(--accent-tint-14);
-		color: var(--accent);
-	}
-	.pill.warn {
-		background: var(--warn-tint);
-		color: var(--warn-text);
-	}
-	.path,
-	.line {
-		margin-top: 6px;
-		font-size: var(--fs-small);
 		color: var(--text-3);
-		overflow-wrap: anywhere;
+		list-style: none;
+		user-select: none;
 	}
-	.shard-row {
+	details.settings > summary::-webkit-details-marker {
+		display: none;
+	}
+	details.settings > summary::after {
+		content: '▾';
+		margin-left: auto;
+		color: var(--text-4);
+		transition: transform var(--dur) var(--ease);
+	}
+	details.settings[open] > summary::after {
+		transform: rotate(180deg);
+	}
+	details.settings > summary .card-meta {
+		margin-left: 0;
+		font-size: 11px;
+		font-weight: 400;
+		text-transform: none;
+		letter-spacing: 0;
+		color: var(--text-4);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.fold {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
+		gap: 10px;
+		padding: 0 14px 16px;
+	}
+	.fold > h3 {
 		margin-top: 8px;
-	}
-	.shard-row span {
-		font-size: 10.5px;
-		letter-spacing: 0.09em;
+		font-size: 12px;
+		font-weight: 500;
 		text-transform: uppercase;
-		color: var(--text-4);
+		letter-spacing: 0.06em;
+		color: var(--text-3);
 	}
-	.shard-row input {
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		font-size: 12px;
+		color: var(--text-3);
+	}
+	.field input {
+		width: 100%;
 		background: var(--surface-input);
-		border: 1px solid var(--border);
-		border-radius: var(--r-lg);
+		border: 1px solid var(--border-input);
+		border-radius: var(--r-input);
+		padding: 9px 12px;
+		font-size: 13px;
+		color: var(--text);
+	}
+	.field input:hover {
+		border-color: var(--border-hover);
+	}
+	.field input:focus-visible {
+		outline: none;
+		border-color: var(--accent);
+	}
+	.fold .btn {
+		align-self: flex-start;
+	}
+	.details {
+		margin-top: 16px;
+		padding-top: 14px;
+		border-top: 1px solid var(--border);
+	}
+	.details h3 {
+		font-size: 12px;
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--text-3);
+		margin-bottom: 8px;
+	}
+	.line {
+		font-size: var(--fs-dense);
 		color: var(--text-2);
-		padding: 6px 9px;
-		font: inherit;
-		font-size: var(--fs-small);
-	}
-	.card .btn {
-		margin-top: 10px;
-	}
-	.path {
-		color: var(--text-4);
-	}
-	.line.muted,
-	.muted {
-		color: var(--text-4);
+		margin-top: 4px;
 	}
 	.line.ok {
 		color: var(--accent);
@@ -925,90 +830,16 @@
 	.line.warn {
 		color: var(--warn-text);
 	}
-	.acts {
-		display: flex;
-		gap: 8px;
-		margin-top: 10px;
-	}
-	.acts.end {
-		justify-content: flex-end;
-		margin-top: 14px;
-	}
-	.select-line {
-		display: flex;
-		align-items: baseline;
-		gap: 10px;
-		margin-bottom: 10px;
-		font-size: var(--fs-dense);
-		color: var(--text-2);
-	}
-	.select-line .lead {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		font-variant-numeric: tabular-nums;
-	}
-	.item {
-		display: grid;
-		grid-template-columns: 92px minmax(0, 1fr);
-		gap: 4px 12px;
-		padding: 8px 0;
-		border-top: 1px solid var(--border);
-	}
-	.verdict {
-		font-size: var(--fs-label);
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		color: var(--accent);
-	}
-	.verdict[data-v='unchanged'] {
+	.path {
+		font-size: 11.5px;
 		color: var(--text-4);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
-	.verdict[data-v='drift'] {
-		color: var(--warn-text);
-	}
-	.verdict[data-v='refused'] {
-		color: var(--danger);
-	}
-	.item .what {
-		font-size: var(--fs-dense);
-		color: var(--text-2);
-		overflow-wrap: anywhere;
-	}
-	.item .why {
-		grid-column: 2;
-		font-size: var(--fs-small);
+	.hint {
+		font-size: 12px;
+		line-height: 1.4;
 		color: var(--text-4);
-	}
-	.item .bytes {
-		grid-column: 2;
-		font-size: var(--fs-small);
-		color: var(--text-4);
-		font-variant-numeric: tabular-nums;
-	}
-	.release-lines {
-		margin: 12px 0 0;
-		padding: 10px 12px;
-		list-style: none;
-		border-radius: var(--r-md);
-		background: var(--surface-2);
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		font-size: var(--fs-small);
-		color: var(--text-4);
-	}
-	.version {
-		font-size: 26px;
-		font-weight: 600;
-		color: var(--text);
-	}
-	code {
-		font-family: inherit;
-		color: var(--text-3);
-		background: var(--surface-2);
-		border-radius: var(--r-xs);
-		padding: 1px 4px;
 	}
 </style>

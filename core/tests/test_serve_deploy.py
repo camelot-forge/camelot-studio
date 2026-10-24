@@ -18,8 +18,6 @@ from test_release import served_client  # noqa: F401  (what `project_client` wra
 from test_serve_editor import editing  # noqa: F401
 from test_zones import FIXTURES, world  # noqa: F401
 
-from camelot import feed as feed_mod
-from camelot import feedbuild
 from camelot import project as pj
 from camelot import release as rel
 from camelot.mpak import write_mpak
@@ -215,89 +213,149 @@ def _published(api, deadline=10.0):
     raise AssertionError("the feed build did not finish")
 
 
-def test_the_publish_route_builds_the_feed_in_the_background(
-    project_client, tmp_path, monkeypatch
-):
-    """`POST /deploy/publish` is `feedbuild.build` with the public URL and the
-    game address the daemon's environment names; the page polls the progress."""
+def _with_client(project, client) -> None:
+    document = json.loads((project.root / pj.MACHINE_FILE).read_text(encoding="utf-8"))
+    document["client"] = str(client)
+    (project.root / pj.MACHINE_FILE).write_text(json.dumps(document), encoding="utf-8")
+
+
+def test_publish_cuts_the_edits_then_pushes_the_branch(project_client, tmp_path, monkeypatch):
+    """One action: the journal's new edits become a release, and that release
+    is built, signed and pushed. The operator never sees "cut" and "ship"."""
     project, _record, _local, _production = _ready(tmp_path, project_client)
-    machine = project.root / "machine.json"
-    document = json.loads(machine.read_text(encoding="utf-8"))
-    document["client"] = str(project_client)
-    machine.write_text(json.dumps(document), encoding="utf-8")
-    monkeypatch.setenv("CAMELOT_FEED_URL", "https://patch.example")
-    monkeypatch.setenv("CAMELOT_GAME_SERVER", "play.example:10300")
-    # The daemon's root is the environment it edits, not the feed's base: the
-    # publish must use the project's own client (`machine.json.client`).
-    daemon_root = tmp_path / "daemon-client"
-    daemon_root.mkdir()
-    api = _api(daemon_root, project.root)
+    _with_client(project, project_client)
+    _move(_editor(project, project_client))  # one edit beyond release 1
+    calls = {}
 
-    started = api.post("/api/v1/deploy/publish")
+    def fake(root, number=None, *, build=True, remote=None, **kwargs):
+        calls.update({"number": number, "build": build, "remote": remote})
+        return {
+            "release": number,
+            "branch": "camelot-deploy",
+            "commit": "abc123def456",
+            "pushed": remote,
+            "signature": None,
+            "feed": {},
+        }
 
-    assert started.status_code == 200
-    assert "progress" in started.json()
-    progress = _published(api)
-    assert progress["error"] is None and progress["version"] == 1
-    feed_dir = project.root / "feed"
-    assert progress["path"] == str(feed_dir)
-    assert (feed_dir / "version-new.txt").read_text(encoding="utf-8").strip() == "1"
-    patchlist = (feed_dir / "patchlist-new.txt").read_text(encoding="utf-8").splitlines()
-    assert patchlist[0] == "https://patch.example/"
-    assert len(patchlist) == 1 + len(feed_mod.walk(project_client))
-    launcher = json.loads((feed_dir / "launcher.json").read_text(encoding="utf-8"))
-    assert launcher["feed"] == "https://patch.example/"
-    assert launcher["server"] == "play.example:10300"
-    body = api.get("/api/v1/deploy").json()
-    assert body["publish"]["version"] == 1
-    assert body["feed"]["present"] is True
+    from camelot.serve import deploy as deploy_mod
 
-
-def test_the_publish_route_names_the_missing_public_value(
-    project_client, tmp_path, monkeypatch
-):
-    """No guessed URL: the daemon says which variable the container and the
-    publish share (`F §D4`)."""
-    project, _record, _local, _production = _ready(tmp_path, project_client)
-    monkeypatch.delenv("CAMELOT_FEED_URL", raising=False)
-    monkeypatch.delenv("CAMELOT_GAME_SERVER", raising=False)
+    monkeypatch.setattr(deploy_mod.publish_mod, "publish", fake)
+    monkeypatch.setattr(deploy_mod.publish_mod, "ensure_commit", lambda root: "head")
     api = _api(project_client, project.root)
 
-    missing_feed = api.post("/api/v1/deploy/publish")
-    assert missing_feed.status_code == 400
-    assert "CAMELOT_FEED_URL" in missing_feed.json()["detail"]
+    started = api.post("/api/v1/deploy/publish")
+    assert started.status_code == 200
+    progress = _published(api)
 
-    monkeypatch.setenv("CAMELOT_FEED_URL", "https://patch.example/")
-    missing_server = api.post("/api/v1/deploy/publish")
-    assert missing_server.status_code == 400
-    assert "CAMELOT_GAME_SERVER" in missing_server.json()["detail"]
+    assert calls == {"number": 2, "build": True, "remote": "origin"}
+    assert progress["stage"] == "done" and progress["release"] == 2
+    assert progress["commit"] == "abc123def456" and progress["pushed"] == "origin"
+
+
+def test_publish_without_edits_publishes_the_newest_release(
+    project_client, tmp_path, monkeypatch
+):
+    """A retry after a failed push: nothing to cut, so the newest release goes."""
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+    _with_client(project, project_client)
+    seen = {}
+
+    def fake(root, number=None, *, build=True, remote=None, **kwargs):
+        seen["number"] = number
+        return {
+            "release": number,
+            "commit": "abc123def456",
+            "pushed": remote,
+            "signature": None,
+            "feed": {},
+        }
+
+    from camelot.serve import deploy as deploy_mod
+
+    monkeypatch.setattr(deploy_mod.publish_mod, "publish", fake)
+    monkeypatch.setattr(deploy_mod.publish_mod, "ensure_commit", lambda root: "head")
+
+    api = _api(project_client, project.root)
+    assert api.post("/api/v1/deploy/publish").status_code == 200
+    progress = _published(api)
+
+    assert seen["number"] == 1
+    assert progress["stage"] == "done" and progress["error"] is None
 
 
 def test_a_second_publish_is_refused_while_one_runs(project_client, tmp_path, monkeypatch):
-    """One build at a time: two walks of the same client would fight over the
-    same feed files."""
+    """One publish at a time: two commits of the same branch would race."""
     project, _record, _local, _production = _ready(tmp_path, project_client)
-    monkeypatch.setenv("CAMELOT_FEED_URL", "https://patch.example/")
-    monkeypatch.setenv("CAMELOT_GAME_SERVER", "play.example:10300")
+    _with_client(project, project_client)
     started = threading.Event()
     release = threading.Event()
 
-    def held(project, *, base_url="", server="", on_step=None, **_kwargs):
+    def held(root, number=None, **kwargs):
         started.set()
         release.wait(5)
-        return {"version": 1, "path": str(project.root / "feed")}
+        return {
+            "release": 1,
+            "commit": "abc123def456",
+            "pushed": "origin",
+            "signature": None,
+            "feed": {},
+        }
 
-    monkeypatch.setattr(feedbuild, "build", held)
+    from camelot.serve import deploy as deploy_mod
+
+    monkeypatch.setattr(deploy_mod.publish_mod, "publish", held)
+    monkeypatch.setattr(deploy_mod.publish_mod, "ensure_commit", lambda root: "head")
     api = _api(project_client, project.root)
     try:
         assert api.post("/api/v1/deploy/publish").status_code == 200
         assert started.wait(5)
         again = api.post("/api/v1/deploy/publish")
-        assert again.status_code == 409
-        assert "already running" in again.json()["detail"]
+        assert again.status_code == 409 and "already running" in again.json()["detail"]
     finally:
         release.set()
         _published(api)
+
+
+def test_a_publish_error_is_shown_in_the_progress(project_client, tmp_path, monkeypatch):
+    from camelot import publish as publish_mod
+    from camelot.serve import deploy as deploy_mod
+
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+    _with_client(project, project_client)
+
+    def refused(root, number=None, **kwargs):
+        raise publish_mod.PublishError("no feed URL: pass --feed-url or set CAMELOT_FEED_URL")
+
+    monkeypatch.setattr(deploy_mod.publish_mod, "publish", refused)
+    monkeypatch.setattr(deploy_mod.publish_mod, "ensure_commit", lambda root: "head")
+    api = _api(project_client, project.root)
+
+    assert api.post("/api/v1/deploy/publish").status_code == 200
+    progress = _published(api)
+
+    assert progress["stage"] == "error" and "CAMELOT_FEED_URL" in progress["error"]
+
+
+def test_the_local_test_deploys_and_applies(project_client, tmp_path, monkeypatch):
+    """Test locally is the same release, written to `local` and applied by the
+    Installer, before the operator publishes it."""
+    from camelot.serve import deploy as deploy_mod
+
+    project, _record, _local, _production = _ready(tmp_path, project_client)
+    _with_client(project, project_client)
+    monkeypatch.setattr(
+        deploy_mod.pipeline_mod, "deploy", lambda root, number, env: {"wrote": ["a", "b"]}
+    )
+    monkeypatch.setattr(
+        deploy_mod.envs_mod,
+        "apply",
+        lambda project, env, release: {"applied": [{}, {}], "unchanged": False},
+    )
+
+    answer = _api(project_client, project.root).post("/api/v1/deploy/test").json()
+
+    assert answer == {"release": 1, "wrote": 2, "applied": 2, "unchanged": False}
 
 
 def test_the_shard_addresses_are_written_to_the_project(project_client, tmp_path):
@@ -327,68 +385,6 @@ def test_a_shard_address_that_is_not_host_port_is_refused(project_client, tmp_pa
     )
 
     assert refused.status_code == 400 and "host:port" in refused.json()["detail"]
-
-
-def test_the_publish_route_reads_the_shards_own_addresses(
-    project_client, tmp_path, monkeypatch
-):
-    """No environment variable in a browser session: the project says where the
-    feed and the game are."""
-    project, _record, _local, _production = _ready(tmp_path, project_client)
-    monkeypatch.delenv("CAMELOT_FEED_URL", raising=False)
-    monkeypatch.delenv("CAMELOT_GAME_SERVER", raising=False)
-    api = _api(project_client, project.root)
-    api.post(
-        "/api/v1/deploy/shard",
-        json={"feed_url": "https://feed.example/", "game_server": "play.example:10300"},
-    )
-
-    started = api.post("/api/v1/deploy/publish")
-
-    assert started.status_code == 200
-    progress = _published(api)
-    assert progress["error"] is None and progress["version"] == 1
-    launcher = json.loads((project.root / "feed" / "launcher.json").read_text(encoding="utf-8"))
-    assert launcher["feed"] == "https://feed.example/"
-    assert launcher["server"] == "play.example:10300"
-
-
-def test_the_ship_route_runs_the_publish_verb(project_client, tmp_path, monkeypatch):
-    """The page's Ship is `project publish`: feed, signature, deploy branch and
-    the push to `origin`, in the background."""
-    project, _record, _local, _production = _ready(tmp_path, project_client)
-    calls = {}
-
-    def fake(root, number=None, *, build=True, feed_url=None, server=None, remote=None, **kwargs):
-        calls.update(
-            {"root": Path(root), "number": number, "build": build, "remote": remote}
-        )
-        return {
-            "release": 1,
-            "branch": "camelot-deploy",
-            "commit": "abc123def456",
-            "pushed": remote,
-            "signature": None,
-            "feed": {},
-        }
-
-    from camelot.serve import deploy as deploy_mod
-
-    monkeypatch.setattr(deploy_mod.publish_mod, "publish", fake)
-    monkeypatch.setattr(deploy_mod.publish_mod, "ensure_commit", lambda root: "head")
-    api = _api(project_client, project.root)
-
-    started = api.post("/api/v1/deploy/ship", json={"release": 1})
-    assert started.status_code == 200
-    for _ in range(100):
-        progress = api.get("/api/v1/deploy/ship").json()["progress"]
-        if not progress["running"]:
-            break
-        time.sleep(0.02)
-
-    assert calls == {"root": project.root, "number": 1, "build": True, "remote": "origin"}
-    assert progress["stage"] == "done" and progress["commit"] == "abc123def456"
-    assert progress["pushed"] == "origin"
 
 
 def test_the_page_says_which_key_signs(project_client, tmp_path):
