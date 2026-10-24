@@ -1,11 +1,13 @@
 # The Console
 
 What is live on a running server, read from the Installer's own state
-(`notes/console.md` §D3), plus the actions the channel allows: stop the
-server, which a supervisor turns into a restart (7b), and **pull** the deploy
-branch — fetch, verify, hand over, mark wanted (7d). Every attempt writes one
-line to an audit log; the environment folder is read-only except for
-`server/camelot/`, where the handover and the wanted marker land.
+(`notes/console.md` §D3), plus the one action an admin needs: **Install
+update** — pull the published release, restart the game server, and wait for
+the Installer to record it. The page also shows who is connected, by name. The
+underlying Pull, Restart and Reverse actions remain available in the page's
+folds. Every attempt writes one line to an audit log; the environment folder is
+read-only except for `server/camelot/`, where the handover and the wanted marker
+land.
 
 The channel was measured (M-3, 2026-10-18): OpenDAoC's API on `:5000`
 (`atlas_api`) is read-only apart from `/utils/shutdown`, and the server has no
@@ -63,6 +65,29 @@ what, when, the target and the result.
 Measured (M-3): `/utils/shutdown` is the only remote action OpenDAoC exposes.
 `/reload`, messages, kicks and bans are in-game GM commands.
 
+## Install update (the admin flow)
+
+**Install update** is one button and one audit line. It runs three steps and
+shows them as they happen, refreshing the page every 3 seconds:
+
+1. **pull** — the same fetch, signature check, hash check, handover and feed
+   mirror as below;
+2. **restart** — `GET /utils/shutdown/{api_password}`; the supervisor (Docker's
+   `restart: unless-stopped`, systemd, …) starts the game server again;
+3. **apply** — the Console polls the Installer's `state.json` until the pulled
+   release is recorded. A full boot takes tens of seconds; `UPDATE_TIMEOUT`
+   (180 s) bounds the wait, and a release that is not recorded is reported, never
+   called a success.
+
+It requires `CAMELOT_CONSOLE_ALLOW_RESTART=1`, the API URL and password, the
+deploy checkout, and a writable audit. Without them the button is disabled and
+the page says which piece is missing. Connected players see the restart; the
+page says so before the click.
+
+The audit line is `action: update`, `result: updated` or `error`, with the
+release number and the step that failed. A Console restart forgets the
+in-progress state; the Installer's `state.json` remains the truth.
+
 ## Pull (7d)
 
 The pull needs a **checkout of the `camelot-deploy` branch** on the server and
@@ -92,8 +117,8 @@ client half stays in the feed;
 The pull **hands over and stops**; the Installer applies the rows (`S §D1`). On a
 server that is `camelot env apply <env>`, or the C# plugin at boot; the Console's
 page shows the wanted release as `pending` until the state file records it. The
-server install bakes the plugin into `core`, so the admin flow is Pull →
-Restart.
+server install bakes the plugin into `core`, so the admin flow is one **Install
+update** click.
 
 ## Reverse (7e)
 

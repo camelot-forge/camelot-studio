@@ -32,6 +32,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -69,6 +70,11 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8770
 #: How many deploy-log lines the page shows. The log is never truncated.
 LOG_LINES = 20
+
+#: How long the one-click update waits for the Installer's state to record the
+#: release after the restart. A full shard boot is tens of seconds; a server
+#: that has not answered by then is reported, never silently called a success.
+UPDATE_TIMEOUT = 180
 #: How many audit lines the page shows; the file keeps them all.
 AUDIT_LINES = 10
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
@@ -109,6 +115,7 @@ OUTCOMES = {
             "warn",
         ),
         "disabled": ("disabled", "Restart is disabled on this Console.", "warn"),
+        "busy": ("busy", "An update is running; wait for it to finish.", "warn"),
         "api": ("no API", "The API URL or password is missing.", "warn"),
         "token": (
             "expired form",
@@ -125,6 +132,7 @@ OUTCOMES = {
         ),
         "error": ("failed", "The pull refused; the audit line has the reason.", "warn"),
         "disabled": ("disabled", "Pull is disabled on this Console.", "warn"),
+        "busy": ("busy", "An update is running; wait for it to finish.", "warn"),
         "deploy": (
             "no checkout",
             "No deploy checkout is configured (--deploy).",
@@ -136,6 +144,26 @@ OUTCOMES = {
             "warn",
         ),
         "confirm": ("not confirmed", "The confirmation was not ticked.", "warn"),
+    },
+    "update": {
+        "started": (
+            "started",
+            "The update is running. This page follows it by itself.",
+            "ok",
+        ),
+        "busy": ("busy", "An update is already running.", "warn"),
+        "disabled": ("disabled", "Install update is disabled on this Console.", "warn"),
+        "error": (
+            "failed",
+            "The update did not finish; the reason is above.",
+            "warn",
+        ),
+        "token": (
+            "expired form",
+            "The form token is no longer valid; reload the page and try again.",
+            "warn",
+        ),
+        "confirm": ("not confirmed", "The confirmation was not sent.", "warn"),
     },
     "reverse": {
         "asked": (
@@ -149,6 +177,7 @@ OUTCOMES = {
             "warn",
         ),
         "disabled": ("disabled", "Reverse is disabled on this Console.", "warn"),
+        "busy": ("busy", "An update is running; wait for it to finish.", "warn"),
         "token": (
             "expired form",
             "The form token is no longer valid; reload the page and try again.",
@@ -794,6 +823,10 @@ def _page_health(document: dict) -> str:
         if isinstance(clients, dict) and clients:
             names = ", ".join(sorted(clients))
             found.append(f'<p class="muted">online: {_e(names)}</p>')
+        elif clients is None and not api.get("problems"):
+            found.append(
+                '<p class="muted">The player list needs the server API password.</p>'
+            )
         for problem in api.get("problems") or ():
             found.append(f'<p class="warn">{_e(problem)}</p>')
     else:
@@ -1137,30 +1170,264 @@ def _page_problems(document: dict) -> str:
     return "\n".join(found)
 
 
+def _players(document: dict) -> tuple[int | None, list[str]]:
+    """Who is connected, from OpenDAoC's own `/utils/query_clients` (`None`
+    when the API is off: a missing count is not a zero)."""
+    api = (document.get("health") or {}).get("api") or {}
+    clients = api.get("clients")
+    if isinstance(clients, dict):
+        return len(clients), sorted(str(name) for name in clients)
+    return None, []
+
+
+def _update_facts(document: dict, update: dict | None) -> dict:
+    """What the update card needs: what the deploy branch publishes, what the
+    Installer recorded, and what is already handed over but not applied."""
+    remote = document.get("remote")
+    publish = (remote or {}).get("publish") or {}
+    published = _int(publish.get("release"))
+    installed = _int((document.get("release") or {}).get("number"))
+    pending = [int(number) for number in ((remote or {}).get("pending") or ())]
+    actions = document.get("actions") or {}
+    return {
+        "published": published,
+        "installed": installed,
+        "available": published if published and published > installed else 0,
+        "pending": pending,
+        "configured": bool((remote or {}).get("present")),
+        "pull": bool((actions.get("pull") or {}).get("enabled")),
+        "restart": bool((actions.get("restart") or {}).get("enabled")),
+        "update": update or {},
+    }
+
+
+def _step_list(update: dict) -> str:
+    """The three steps, drawn as they happen: the admin sees where the update
+    is, and never has to read a log to know whether it worked."""
+    stage = str(update.get("stage") or "")
+    failed = str(update.get("failed") or "")
+    release = _int(update.get("release"))
+    steps = [
+        ("pull", "Fetch the published release"),
+        ("restart", "Restart the game server"),
+        ("apply", f"Apply release {release:04d}" if release else "Apply the release"),
+    ]
+    order = {"pull": 0, "restart": 1, "apply": 2}
+    reached = len(steps) if stage == "done" else order.get(stage, -1)
+    found = []
+    for index, (key, label) in enumerate(steps):
+        if failed == key:
+            kind = "failed"
+        elif index < reached:
+            kind = "done"
+        elif index == reached and update.get("running"):
+            kind = "current"
+        else:
+            kind = ""
+        found.append(f'<li class="{kind}">{_e(label)}</li>')
+    return '<ol class="steps">' + "".join(found) + "</ol>"
+
+
+def _update_form(action: str, label: str, token: str | None = None) -> str:
+    """The one-click forms: the per-process token is the CSRF guard, so the
+    common flow does not ask the admin to tick a box before every restart."""
+    return f"""
+      <form method="post" action="/action/{_e(action)}" class="main">
+        <input type="hidden" name="token" value="{_e(token or '')}">
+        <input type="hidden" name="confirm" value="yes">
+        <button type="submit">{_e(label)}</button>
+      </form>
+    """
+
+
+def _page_update(
+    document: dict, update: dict | None, *, token: str | None = None
+) -> str:
+    """The admin's whole flow: is there a newer release, and install it.
+
+    One button. The Console pulls, restarts, then waits for the Installer's own
+    state to record the release — the three steps are shown as they happen.
+    """
+    facts = _update_facts(document, update)
+    state = update or {}
+    actions = document.get("actions") or {}
+    pull_why = str(
+        (actions.get("pull") or {}).get("why") or "the update checkout is not configured"
+    )
+    restart_why = str(
+        (actions.get("restart") or {}).get("why") or "restart is not enabled"
+    )
+    found: list[str] = []
+
+    if state.get("error"):
+        found.append(f'<p class="alert">{_e(state["error"])}</p>')
+    if state.get("running"):
+        found.append('<p class="big">Installing the update…</p>')
+        found.append(_step_list(state))
+        found.append(
+            '<p class="muted">This page refreshes by itself. Players are disconnected '
+            "while the game server restarts.</p>"
+        )
+        return "\n".join(found)
+    if (
+        state.get("stage") == "done"
+        and state.get("release")
+        and facts["installed"]
+        and facts["installed"] >= facts["published"]
+    ):
+        online = bool(((document.get("health") or {}).get("game_server") or {}).get("open"))
+        found.append(f'<p class="big">Release {_int(state["release"]):04d} installed</p>')
+        found.append(_step_list(state))
+        found.append(
+            f'<p class="{"ok" if online else "muted"}">'
+            + ("The game server is back online." if online else "The game server is starting.")
+            + "</p>"
+        )
+        found.append('<p class="muted">Players reconnect on their own.</p>')
+        return "\n".join(found)
+    if facts["available"]:
+        found.append(f'<p class="big">Release {facts["available"]:04d} is available</p>')
+        if facts["installed"]:
+            found.append(
+                f'<p class="muted">Installed now: release {facts["installed"]:04d}.</p>'
+            )
+        else:
+            found.append('<p class="muted">Nothing is installed on this server yet.</p>')
+        if facts["pull"] and facts["restart"]:
+            found.append(_update_form("update", "Install update", token))
+            found.append(
+                '<p class="muted">The server restarts. Players connected now are '
+                "disconnected for a few seconds.</p>"
+            )
+        elif not facts["pull"]:
+            found.append(
+                f'<p class="empty">This console cannot fetch updates: {_e(pull_why)}.</p>'
+            )
+        else:
+            found.append(
+                '<p class="empty">This console cannot restart the server: '
+                f"{_e(restart_why)}.</p>"
+            )
+        return "\n".join(found)
+    if facts["pending"]:
+        numbers = ", ".join(f"{int(number):04d}" for number in facts["pending"])
+        found.append(f'<p class="big">Release {numbers} is fetched</p>')
+        found.append('<p class="muted">The server applies it when it starts.</p>')
+        if facts["restart"]:
+            found.append(_update_form("restart", "Finish update", token))
+            found.append(
+                '<p class="muted">The server restarts. Players connected now are '
+                "disconnected for a few seconds.</p>"
+            )
+        else:
+            found.append(f'<p class="empty">Restart is disabled: {_e(restart_why)}.</p>')
+        return "\n".join(found)
+    if facts["published"] and facts["installed"]:
+        found.append('<p class="big">Up to date</p>')
+        found.append(
+            f'<p class="muted">Release {facts["installed"]:04d} is installed and the '
+            "update feed carries it.</p>"
+        )
+        if facts["restart"]:
+            found.append(_update_form("restart", "Restart server", token))
+            found.append(
+                '<p class="muted">The server stops and a supervisor starts it again.</p>'
+            )
+        else:
+            found.append(f'<p class="empty">Restart is disabled: {_e(restart_why)}.</p>')
+        return "\n".join(found)
+    if not facts["configured"]:
+        found.append('<p class="big">Updates are not set up</p>')
+        found.append(
+            '<p class="muted">This console has no checkout of the published releases.</p>'
+        )
+        found.append(f'<p class="empty">{_e(pull_why)}.</p>')
+    else:
+        found.append('<p class="big">No published release found</p>')
+        found.append('<p class="muted">The update checkout carries no release to install.</p>')
+    if facts["restart"]:
+        found.append(_update_form("restart", "Restart server", token))
+        found.append(
+            '<p class="muted">The server stops and a supervisor starts it again.</p>'
+        )
+    else:
+        found.append(f'<p class="empty">Restart is disabled: {_e(restart_why)}.</p>')
+    return "\n".join(found)
+
+
+def _page_players(document: dict) -> str:
+    count, names = _players(document)
+    if count is None:
+        return (
+            '<p class="big">Player count is off</p>'
+            '<p class="muted">The player list is unavailable. Server details say why.</p>'
+        )
+    if count == 0:
+        return '<p class="big">No player connected</p>'
+    chips = "".join(f'<span class="name">{_e(name)}</span>' for name in names)
+    return (
+        f'<p class="big">{count} player{"s" if count != 1 else ""} connected</p>'
+        f'<p class="names">{chips}</p>'
+    )
+
+
 def page(
     document: dict,
     *,
     action_token: str | None = None,
     outcome: str | None = None,
     outcome_action: str | None = None,
+    update: dict | None = None,
 ) -> str:
-    """The Console's page, rendered from the same document `/api/live` returns."""
+    """The Console's page, rendered from the same document `/api/live` returns.
+
+    The common flow is one card and one button; everything an engineer reads is
+    folded under it, so an admin never has to learn the pipeline's vocabulary to
+    keep a shard online.
+    """
     env = document.get("env") or {}
     latest = document.get("release") or {}
-    status = "not installed"
-    if latest:
-        status = f'release {latest["number"]:04d}'
-    if document.get("problems"):
-        status = "attention"
     project = env.get("project") or "Server"
-    name = env.get("name") or "—"
+    game = (document.get("health") or {}).get("game_server") or {}
+    online = bool(game.get("open"))
+    count, _names = _players(document)
+    running = bool((update or {}).get("running"))
+    actions = document.get("actions") or {}
+    asked = [int(number) for number in ((document.get("reverse") or {}).get("pending") or ())]
+    repair_asked = (
+        '<p class="warn">Release '
+        + ", ".join(f"{number:04d}" for number in asked)
+        + " was asked to be put back; the Installer's step has not run yet.</p>"
+        if asked
+        else ""
+    )
+    chosen = OUTCOMES.get(str(outcome_action) or "", {})
+    message = ""
+    if outcome in chosen:
+        label, text, kind = chosen[outcome]
+        message = f'<p class="banner">{_chip(label, kind)} {_e(text)}</p>'
+
+    bits = []
+    if game.get("address"):
+        bits.append(
+            f'<span class="dot {"ok" if online else "bad"}"></span>'
+            + ("Online" if online else "Not responding")
+        )
+    else:
+        bits.append("Game address not set")
+    if count is not None:
+        bits.append(f"{count} player{'s' if count != 1 else ''}")
+    if latest:
+        bits.append(f"release {latest['number']:04d} installed")
+    status = " · ".join(bits)
+    address = _e(game.get("address") or "no game address")
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="15">
+<meta http-equiv="refresh" content="{"3" if running else "20"}">
 <title>Camelot Console — {_e(project)}</title>
 <style>
   :root {{
@@ -1191,36 +1458,69 @@ def page(
   * {{ box-sizing: border-box; }}
   body {{
     margin: 0; background: var(--bg); color: var(--ink);
-    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }}
-  header, main, footer {{ width: min(1100px, calc(100% - 2rem)); margin: 0 auto; }}
-  header {{ padding: 2.5rem 0 1rem; border-bottom: 1px solid var(--line); }}
+  header, main, footer {{ width: min(980px, calc(100% - 2rem)); margin: 0 auto; }}
+  header {{ padding: 2.2rem 0 1.2rem; border-bottom: 1px solid var(--line); }}
   .eyebrow {{ margin: 0; color: var(--accent); font-size: .78rem;
     letter-spacing: .12em; text-transform: uppercase; }}
-  h1 {{ margin: .35rem 0 .25rem; font-size: clamp(1.6rem, 3vw, 2.3rem); }}
-  h2 {{ margin: 0 0 .6rem; font-size: 1rem; letter-spacing: .04em; }}
+  h1 {{ margin: .35rem 0 .4rem; font-size: clamp(1.7rem, 3vw, 2.4rem); }}
+  h2 {{ margin: 0 0 .7rem; font-size: 1.05rem; }}
+  h3 {{ margin: 1.1rem 0 .35rem; font-size: .8rem; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--muted); }}
+  .status {{ margin: .15rem 0; font-size: 1.02rem; color: var(--ink); }}
+  .dot {{ display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
+    margin-right: .4rem; vertical-align: .05em; }}
+  .dot.ok {{ background: var(--ok); }}
+  .dot.bad {{ background: var(--bad); }}
+  main {{ padding: 1.4rem 0 3rem; display: flex; flex-direction: column; gap: 1rem; }}
+  .card {{ background: var(--panel); border: 1px solid var(--line);
+    border-radius: 16px; padding: 1.2rem 1.3rem; }}
+  .hero {{ border-left: 4px solid var(--accent); }}
+  .banner {{ margin: 0 0 1rem; }}
+  .big {{ margin: .15rem 0 .3rem; font-size: 1.5rem; font-weight: 650; }}
   .muted {{ color: var(--muted); }}
-  .empty {{ color: var(--muted); font-style: italic; }}
+  .empty {{ color: var(--muted); }}
+  .ok {{ color: var(--ok); }}
   .warn {{ color: var(--warn); }}
+  .alert {{ border: 1px solid var(--bad); color: var(--bad); border-radius: 10px;
+    padding: .6rem .8rem; margin: .2rem 0 .8rem; }}
   .chip {{ display: inline-block; padding: .15rem .5rem; border-radius: 999px;
     border: 1px solid var(--line); font-size: .78rem; }}
   .chip.ok {{ color: var(--ok); border-color: currentColor; }}
   .chip.warn {{ color: var(--warn); border-color: currentColor; }}
   .chip.bad {{ color: var(--bad); border-color: currentColor; }}
-  .big {{ margin: .2rem 0; font-size: 2rem; font-weight: 650; font-variant-numeric: tabular-nums; }}
-  .grid {{ display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }}
-  article {{ background: var(--panel); border: 1px solid var(--line);
-    border-radius: 14px; padding: 1rem 1.1rem; }}
-  section {{ margin: 2rem 0; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: .92rem; }}
-  th, td {{ text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--line); }}
-  th {{ color: var(--muted); font-weight: 600; }}
-  code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; }}
-  form {{ display: grid; gap: .7rem; max-width: 42rem; }}
+  .steps {{ list-style: none; margin: .9rem 0; padding: 0;
+    display: flex; flex-direction: column; gap: .45rem; }}
+  .steps li {{ display: flex; align-items: center; gap: .6rem; color: var(--muted); }}
+  .steps li::before {{ content: '○'; width: 1.1rem; text-align: center; }}
+  .steps li.done {{ color: var(--ink); }}
+  .steps li.done::before {{ content: '●'; color: var(--ok); }}
+  .steps li.current {{ color: var(--ink); font-weight: 600; }}
+  .steps li.current::before {{ content: '◐'; color: var(--accent); }}
+  .steps li.failed {{ color: var(--bad); font-weight: 600; }}
+  .steps li.failed::before {{ content: '×'; color: var(--bad); }}
+  .names {{ display: flex; flex-wrap: wrap; gap: .4rem; margin: .5rem 0 0; }}
+  .name {{ padding: .2rem .6rem; border: 1px solid var(--line);
+    border-radius: 999px; font-size: .88rem; }}
+  details.card {{ padding: 0; }}
+  details.card > summary {{ list-style: none; cursor: pointer; padding: 1rem 1.3rem;
+    font-weight: 600; user-select: none; display: flex; align-items: center; }}
+  details.card > summary::-webkit-details-marker {{ display: none; }}
+  details.card > summary::after {{ content: '▾'; margin-left: auto; color: var(--muted); }}
+  details.card[open] > summary::after {{ transform: rotate(180deg); }}
+  .fold {{ padding: 0 1.3rem 1.2rem; }}
+  form {{ display: grid; gap: .6rem; max-width: 42rem; }}
+  form.main {{ margin-top: 1rem; }}
   .check {{ display: flex; gap: .5rem; align-items: flex-start; }}
-  button {{ justify-self: start; padding: .5rem .9rem; border-radius: 9px;
+  button {{ justify-self: start; padding: .6rem 1.1rem; border-radius: 10px;
     border: 1px solid var(--line); background: var(--accent); color: var(--panel);
-    font: inherit; cursor: pointer; }}
+    font: inherit; font-weight: 600; cursor: pointer; }}
+  button:hover {{ filter: brightness(1.06); }}
+  table {{ width: 100%; border-collapse: collapse; font-size: .9rem; }}
+  th, td {{ text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); }}
+  th {{ color: var(--muted); font-weight: 600; }}
+  code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .86em; }}
   ul {{ margin: .3rem 0; padding-left: 1.2rem; }}
   footer {{ padding: 1rem 0 3rem; color: var(--muted); font-size: .85rem; }}
   a {{ color: var(--accent); }}
@@ -1229,27 +1529,64 @@ def page(
 <body>
 <header>
   <p class="eyebrow">Camelot Forge · Console</p>
-  <h1>{_e(project)} {_chip(status, "warn" if document.get("problems") else "ok")}</h1>
-  <p class="muted">environment {_e(name)} · <code>{_e(env.get("root"))}</code>
-    · read {_e(document.get("at"))}</p>
+  <h1>{_e(project)}</h1>
+  <p class="status">{status}</p>
+  <p class="muted">{address} · checked {_e(document.get("at"))}</p>
 </header>
 <main>
-  <section class="grid">
-    <article><h2>Live release</h2>{_page_release(document)}</article>
-    <article><h2>Game server</h2>{_page_health(document)}</article>
-    <article><h2>Reload</h2>{_page_reload(document)}</article>
-    <article><h2>Feed</h2>{_page_feed(document)}</article>
+  {message}
+  <section class="card hero">
+    <h2>Update</h2>
+    {_page_update(document, update, token=action_token)}
   </section>
-  <section><h2>Releases</h2>{_page_releases(document)}</section>
-  <section><h2>Rows in the newest release</h2>{_page_rows(document)}</section>
-  <section><h2>Deploy log</h2>{_page_log(document)}</section>
-  <section><h2>Remote (deploy branch)</h2>{_page_remote(document)}</section>
-  <section><h2>Actions</h2>{_page_actions(document, token=action_token, action=outcome_action, outcome=outcome)}</section>
-  <section><h2>Audit</h2>{_page_audit(document)}</section>
-  <section><h2>What this console can do</h2>{_page_channel(document)}</section>
-  <section><h2>Problems</h2>{_page_problems(document)}</section>
+  <section class="card">
+    <h2>Players</h2>
+    {_page_players(document)}
+  </section>
+  <details class="card">
+    <summary>Server details</summary>
+    <div class="fold">
+      <h3>Game server</h3>{_page_health(document)}
+      <h3>Installed release</h3>{_page_release(document)}
+      <h3>Feed</h3>{_page_feed(document)}
+      <h3>Reload</h3>{_page_reload(document)}
+      <h3>Rows in the newest release</h3>{_page_rows(document)}
+    </div>
+  </details>
+  <details class="card">
+    <summary>Applied releases and deploy log</summary>
+    <div class="fold">
+      <h3>Applied releases</h3>{_page_releases(document)}
+      <h3>Deploy log</h3>{_page_log(document)}
+    </div>
+  </details>
+  <details class="card">
+    <summary>Update source</summary>
+    <div class="fold">
+      {_page_remote(document)}
+      <h3>Fetch without restarting</h3>
+      {_action_form("pull", actions.get("pull") or {}, token=action_token)}
+    </div>
+  </details>
+  <details class="card">
+    <summary>Repair</summary>
+    <div class="fold">
+      <p class="muted">Undo the last installed release if it broke the server. Players
+      keep the files they already downloaded; the next publish puts the release back.</p>
+      {repair_asked}
+      {_action_form("reverse", actions.get("reverse") or {}, token=action_token)}
+    </div>
+  </details>
+  <details class="card">
+    <summary>Audit and diagnostics</summary>
+    <div class="fold">
+      <h3>Audit</h3>{_page_audit(document)}
+      <h3>Problems</h3>{_page_problems(document)}
+      <h3>What this console can do</h3>{_page_channel(document)}
+    </div>
+  </details>
 </main>
-<footer>Read-only unless Restart is enabled · phase 7a/7b ·
+<footer>Read-only unless an action is enabled ·
   <a href="/api/live">live JSON</a></footer>
 </body>
 </html>
@@ -1289,6 +1626,22 @@ class _ConsoleState:
         self.feed = Path(str(feed)).expanduser() if feed else None
         self.token = token or secrets.token_urlsafe(32)
         self.lock = threading.Lock()
+        #: The one-click update's progress (`pull` → `restart` → `apply`). It
+        #: lives in the process, not on disk: a Console restart leaves the
+        #: Installer's own state as the truth, and the next page reads it.
+        self.update = {
+            "running": False,
+            "stage": "",
+            "failed": "",
+            "error": None,
+            "release": None,
+            "started": None,
+            "finished": None,
+        }
+
+    def update_state(self) -> dict:
+        """A copy the page can render while the worker changes it."""
+        return dict(self.update)
 
     def pull_enabled(self) -> bool:
         """The pull needs a checkout and an environment to hand over to."""
@@ -1425,6 +1778,77 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
                 return self._json({"ok": False, "error": error}, status=500)
             return self._redirect("reverse", "asked")
 
+        def _run_update(self, state) -> None:
+            """Pull, restart, then wait for the Installer to record the release.
+
+            The request that starts this returns at once; the page follows the
+            state. Every outcome, success or failure, writes one audit line.
+            """
+
+            def audit(result: str, detail: str) -> None:
+                try:
+                    append_audit(
+                        state.audit,
+                        {
+                            "format": AUDIT_FORMAT,
+                            "user": audit_user,
+                            "action": "update",
+                            "result": result,
+                            "target": state.api_url or "",
+                            "detail": detail,
+                            "remote": self.client_address[0] if self.client_address else "",
+                        },
+                    )
+                except ConsoleError as error:
+                    state.update["error"] = str(error)
+
+            stage = "pull"
+            try:
+                state.update["stage"] = stage
+                report = remote_mod.pull(
+                    state.deploy,
+                    state.env,
+                    remote=state.remote,
+                    feed=state.feed,
+                    release_key=state.release_key,
+                    by=audit_user,
+                )
+                number = int(report["release"])
+                state.update["release"] = number
+                stage = "restart"
+                state.update["stage"] = stage
+                ok, detail = _shutdown(state.api_url, state.api_password)
+                if not ok:
+                    raise ConsoleError(f"the game server refused the restart: {detail}")
+                stage = "apply"
+                state.update["stage"] = stage
+                deadline = time.monotonic() + UPDATE_TIMEOUT
+                while time.monotonic() < deadline:
+                    try:
+                        recorded = installer.read_state(state.root)
+                    except installer.InstallerError:
+                        recorded = {}
+                    if installer.released(recorded, number) is not None:
+                        state.update["stage"] = "done"
+                        audit(
+                            "updated",
+                            f"release {number:04d} pulled, restarted and applied",
+                        )
+                        return
+                    time.sleep(2)
+                raise ConsoleError(
+                    f"release {number:04d} was not applied within {UPDATE_TIMEOUT} seconds; "
+                    "the server may still be starting"
+                )
+            except (remote_mod.PullError, project_mod.ProjectError, ConsoleError) as error:
+                state.update.update({"stage": "error", "failed": stage, "error": str(error)})
+                audit("error", str(error))
+            except Exception as error:  # noqa: BLE001 - a worker must never die silently
+                state.update.update({"stage": "error", "failed": stage, "error": str(error)})
+                audit("error", str(error))
+            finally:
+                state.update.update({"running": False, "finished": _now()})
+
         def _get(self, *, head: bool = False) -> None:
             path = urllib.parse.urlparse(self.path).path
             if path == "/healthz":
@@ -1435,6 +1859,7 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
                 document_value = document()
             except ConsoleError as error:
                 return self._json({"ok": False, "error": str(error)}, status=500, head=head)
+            document_value["update"] = self.server.console.update_state()
             if path in ("/", "/index.html"):
                 query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 outcome = (query.get("outcome") or [None])[0]
@@ -1444,6 +1869,7 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
                     action_token=self.server.console.token,
                     outcome=outcome,
                     outcome_action=outcome_action,
+                    update=self.server.console.update_state(),
                 )
                 return self._send(
                     200,
@@ -1460,6 +1886,7 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
             routes = {
                 "restart": "/action/restart",
                 "pull": "/action/pull",
+                "update": "/action/update",
                 "reverse": "/action/reverse",
             }
             kind = next((name for name, route in routes.items() if route == path), None)
@@ -1486,9 +1913,18 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
                 return self._redirect(kind, outcome)
 
             with state.lock:
+                if state.update.get("running") and kind != "update":
+                    return refuse("busy", "an update is running")
                 enabled = {
                     "restart": state.allow_restart,
                     "pull": state.pull_enabled(),
+                    "update": bool(
+                        state.pull_enabled()
+                        and state.allow_restart
+                        and state.api_url
+                        and state.api_password
+                        and state.root
+                    ),
                     "reverse": state.reverse_enabled(),
                 }[kind]
                 if not enabled:
@@ -1501,6 +1937,24 @@ def handler_for(document, *, user: str | None = None, password: str | None = Non
                     return refuse("token", "form token")
                 if confirm != "yes":
                     return refuse("confirm", "confirmation not ticked")
+                if kind == "update":
+                    if state.update.get("running"):
+                        return refuse("busy", "an update is already running")
+                    state.update.update(
+                        {
+                            "running": True,
+                            "stage": "pull",
+                            "failed": "",
+                            "error": None,
+                            "release": None,
+                            "started": _now(),
+                            "finished": None,
+                        }
+                    )
+                    threading.Thread(
+                        target=self._run_update, args=(state,), daemon=True
+                    ).start()
+                    return self._redirect("update", "started")
                 if kind == "reverse":
                     return self._reverse(state, refuse)
                 if kind == "restart":

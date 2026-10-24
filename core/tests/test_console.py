@@ -10,6 +10,7 @@ import http.client
 import json
 import socket
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -598,7 +599,8 @@ def test_the_restart_action_stops_the_server_and_writes_the_audit(tmp_path):
     )
     assert read_back["audit"]["entries"][0]["result"] == "requested"
     rendered = console.page(read_back, action_token="t", outcome="requested")
-    assert "Restart (stop; supervisor restarts)" in rendered
+    assert "Restart server" in rendered
+    assert "a supervisor starts it again" in rendered
     assert "/action/restart" in rendered
 
 
@@ -710,8 +712,8 @@ def test_the_action_page_says_when_restart_is_disabled(tmp_path):
     )
     assert enabled["actions"]["restart"]["enabled"] is True
     rendered = console.page(enabled, action_token="t")
-    assert "Restart (stop; supervisor restarts)" in rendered
-    assert "Without a supervisor this is a stop" in rendered
+    assert "Restart server" in rendered
+    assert "a supervisor starts it again" in rendered
 
 
 # --- the other direction: the reverse ask (§D10, §D17) --------------------------
@@ -799,3 +801,155 @@ def test_the_page_says_an_ask_has_not_been_honoured_yet(tmp_path):
     assert document["reverse"]["pending"] == [1]
     assert document["reverse"]["by"] == "operator"
     assert "not run yet" in console.page(document)
+
+
+# --- the one-click update (§D4, §D5) -------------------------------------------
+
+
+def _checkout(tmp_path, release=2):
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / publish.MARKER).write_text(
+        json.dumps(
+            {
+                "release": release,
+                "feed": {"version": release},
+                "at": "2026-10-23T18:00:00Z",
+                "author": "operator",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return deploy
+
+
+def test_the_update_card_offers_the_published_release(tmp_path):
+    """The admin's whole question: is there something newer than what runs?"""
+    root = _environment(tmp_path)
+    deploy = _checkout(tmp_path)
+    document = console.live(
+        root,
+        env="staging",
+        deploy=deploy,
+        allow_restart=True,
+        api_url="http://127.0.0.1:5000",
+        api_password="secret",
+        audit=tmp_path / "audit.jsonl",
+    )
+    rendered = console.page(document, action_token="t")
+    assert "Release 0002 is available" in rendered
+    assert "Installed now: release 0001" in rendered
+    assert "Install update" in rendered
+    assert "/action/update" in rendered
+
+
+def test_the_update_card_shows_the_three_steps(tmp_path):
+    root = _environment(tmp_path)
+    document = console.live(root, env="staging")
+    rendered = console.page(
+        document, update={"running": True, "stage": "restart", "release": 2}
+    )
+    assert "Fetch the published release" in rendered
+    assert "Restart the game server" in rendered
+    assert "Apply release 0002" in rendered
+    assert 'class="current"' in rendered
+
+
+def test_the_update_action_pulls_restarts_and_waits_for_the_apply(tmp_path, monkeypatch):
+    root = _environment(tmp_path)
+    deploy = _checkout(tmp_path)
+    audit = tmp_path / "audit.jsonl"
+    api_url = "http://127.0.0.1:5000"
+
+    def fake_pull(where, env, **kwargs):
+        # what the C# Installer does at boot: record the release in the state
+        installer.written_state(
+            root,
+            {
+                "format": installer.STATE_FORMAT,
+                "project": "Forge Project",
+                "releases": {
+                    "0001": {"at": "2026-10-18T10:27:40Z", "needs": ["reload"]},
+                    "0002": {"at": "2026-10-23T18:00:00Z", "needs": ["reload"]},
+                },
+            },
+        )
+        return {"release": 2, "wrote": [], "feed": None, "signature": {"checked": False}}
+
+    monkeypatch.setattr(console.remote_mod, "pull", fake_pull)
+    monkeypatch.setattr(console, "_shutdown", lambda url, password: (True, "HTTP 200: true"))
+
+    bound = _serving(
+        lambda: console.live(
+            root,
+            env="staging",
+            deploy=deploy,
+            allow_restart=True,
+            api_url=api_url,
+            api_password="secret",
+            audit=audit,
+        ),
+        allow_restart=True,
+        api_url=api_url,
+        api_password="secret",
+        audit=audit,
+        env="staging",
+        root=root,
+        deploy=deploy,
+        token="t",
+    )
+    try:
+        status, location, _body = _post(
+            bound, "/action/update", {"token": "t", "confirm": "yes"}
+        )
+        assert status == 303 and "outcome=started" in location
+        deadline = time.monotonic() + 10
+        state = {}
+        while time.monotonic() < deadline:
+            state = json.loads(_get(bound, "/api/live")[1])["update"]
+            if not state["running"]:
+                break
+            time.sleep(0.05)
+        assert state["stage"] == "done"
+        assert state["release"] == 2
+    finally:
+        bound.shutdown()
+        bound.server_close()
+
+    lines = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+    assert lines[-1]["action"] == "update"
+    assert lines[-1]["result"] == "updated"
+    assert "0002" in lines[-1]["detail"]
+
+
+def test_the_update_action_is_disabled_without_a_checkout(tmp_path):
+    root = _environment(tmp_path)
+    audit = tmp_path / "audit.jsonl"
+    bound = _serving(
+        lambda: console.live(
+            root,
+            env="staging",
+            allow_restart=True,
+            api_url="http://127.0.0.1:5000",
+            api_password="secret",
+            audit=audit,
+        ),
+        allow_restart=True,
+        api_url="http://127.0.0.1:5000",
+        api_password="secret",
+        audit=audit,
+        env="staging",
+        root=root,
+        token="t",
+    )
+    try:
+        status, location, _body = _post(
+            bound, "/action/update", {"token": "t", "confirm": "yes"}
+        )
+        assert status == 303 and "outcome=disabled" in location
+    finally:
+        bound.shutdown()
+        bound.server_close()
+    entry = json.loads(audit.read_text(encoding="utf-8").splitlines()[-1])
+    assert entry["action"] == "update"
+    assert entry["result"] == "refused"

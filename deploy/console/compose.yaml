@@ -16,8 +16,9 @@ services:
       CAMELOT_CONSOLE_GAME_SERVER: ${CAMELOT_GAME_SERVER:-}
       CAMELOT_CONSOLE_API_URL: ${CAMELOT_CONSOLE_API_URL:-}
       CAMELOT_CONSOLE_API_PASSWORD: ${CAMELOT_API_PASSWORD:-}
-      # Actions are off until this is 1: the Restart action stops the server,
-      # and a supervisor (systemd, docker restart policy) starts it again.
+      # Actions are off until this is 1: Install update restarts the server, and
+      # a supervisor (Docker, systemd) starts it again. The API URL and password
+      # below are what it stops through.
       CAMELOT_CONSOLE_ALLOW_RESTART: ${CAMELOT_CONSOLE_ALLOW_RESTART:-0}
       CAMELOT_CONSOLE_AUDIT: /audit/audit.jsonl
       # The pull (D §D4): the checkout of the deploy branch, the remote it
