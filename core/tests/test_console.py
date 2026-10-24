@@ -598,10 +598,18 @@ def test_the_restart_action_stops_the_server_and_writes_the_audit(tmp_path):
         api_password="secret",
     )
     assert read_back["audit"]["entries"][0]["result"] == "requested"
-    rendered = console.page(read_back, action_token="t", outcome="requested")
+    rendered = console.page(
+        read_back,
+        action_token="t",
+        outcome="requested",
+        outcome_action="restart",
+    )
     assert "Restart server" in rendered
     assert "a supervisor starts it again" in rendered
     assert "/action/restart" in rendered
+    assert "The server is restarting" in rendered
+    assert 'content="8;url=/"' in rendered
+    assert "must start the server again" not in rendered
 
 
 def test_the_restart_form_needs_the_token_and_the_confirmation(tmp_path):
@@ -853,6 +861,7 @@ def test_the_update_card_shows_the_three_steps(tmp_path):
     assert "Restart the game server" in rendered
     assert "Apply release 0002" in rendered
     assert 'class="current"' in rendered
+    assert 'content="3;url=/"' in rendered
 
 
 def test_the_update_action_pulls_restarts_and_waits_for_the_apply(tmp_path, monkeypatch):

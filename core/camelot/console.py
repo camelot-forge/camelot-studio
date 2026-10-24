@@ -105,8 +105,8 @@ CHANNEL = {
 OUTCOMES = {
     "restart": {
         "requested": (
-            "requested",
-            "The API accepted the stop. The supervisor must start the server again.",
+            "restarting",
+            "The server is restarting. This page refreshes by itself.",
             "ok",
         ),
         "error": (
@@ -1421,13 +1421,21 @@ def page(
         bits.append(f"release {latest['number']:04d} installed")
     status = " · ".join(bits)
     address = _e(game.get("address") or "no game address")
+    #: A fresh action's outcome is shown once, then the query is dropped: a
+    #: restart banner must not survive the restart it announced.
+    if running:
+        refresh = "3;url=/"
+    elif outcome_action == "restart" and outcome == "requested":
+        refresh = "8;url=/"
+    else:
+        refresh = "20"
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="{"3" if running else "20"}">
+<meta http-equiv="refresh" content="{refresh}">
 <title>Camelot Console — {_e(project)}</title>
 <style>
   :root {{
