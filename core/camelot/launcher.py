@@ -556,21 +556,25 @@ def state(settings: dict) -> dict:
     """
     where = str(settings.get("client") or "")
     client = Path(where).expanduser() if where else None
+    client_ok = bool(client and (client / "connect.exe").is_file())
     internal = ("launcher_url", "wineprefix", "server_override", "shard_name", "shard_server")
     found = {
         "settings": {key: value for key, value in settings.items() if key not in internal},
         "settings_path": str(settings.get("path") or settings_path()),
         "client": str(client) if client else "",
         "client_there": bool(client and client.is_dir()),
+        "client_ok": client_ok,
         "account": str(settings.get("account") or ""),
         "installed": settings.get("installed"),
         "launcher": launcher_state(settings),
         "shard": {},
         "problems": [],
+        "feed_error": None,
+        "playable": False,
     }
     if not where:
         found["problems"].append("no client folder yet — pick one")
-    elif not (client / "connect.exe").is_file():
+    elif not client_ok:
         found["problems"].append(f"{client} does not look like a DAoC client (no connect.exe)")
     name = str(settings.get("shard_name") or "")
     fallback = str(
@@ -587,13 +591,19 @@ def state(settings: dict) -> dict:
     try:
         found["shard"] = shard_of(str(settings["feed"]), settings=settings)
     except LauncherError as error:
-        found["problems"].append(str(error))
+        found["feed_error"] = str(error)
+        # Offline fallback (`C §D17`): a shard whose feed is unreachable must not
+        # lock a player out of a client that is already installed.
+        found["playable"] = bool(
+            client_ok and found["installed"] is not None and fallback
+        )
         if name or fallback:
             found["shard"] = {"shard": name, "server": fallback}
         return found
     found["up_to_date"] = found["installed"] is not None and int(found["installed"]) >= int(
         found["shard"]["version"]
     )
+    found["playable"] = bool(client_ok and found["up_to_date"])
     if not found["shard"]["server"]:
         found["problems"].append(
             "the feed does not say where the game is — the launcher needs it to play"
@@ -681,7 +691,9 @@ def play(settings: dict, *, account: str, password: str, system: str | None = No
     and this check is the gate — a page in a browser is not one."""
     argv = command(settings, account=account, password=password, system=system)
     found = state(settings)
-    if not found.get("up_to_date"):
+    if not found.get("playable"):
+        if found.get("feed_error"):
+            raise LauncherError(found["feed_error"])
         if found["problems"]:
             raise LauncherError("; ".join(found["problems"]))
         installed = found.get("installed")

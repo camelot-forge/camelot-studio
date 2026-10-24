@@ -246,7 +246,9 @@ def test_state_reads_the_shard_from_the_feed(tmp_path, client):  # noqa: F811  (
     settings.update({"feed": f"{report['base_url']}nowhere/"})
     without = launcher.state(settings)
 
-    assert without["shard"] == {} and without["problems"][0].endswith("that is not a feed")
+    assert without["shard"] == {}
+    assert without["problems"] == []
+    assert without["feed_error"].endswith("that is not a feed")
     # and the folder the player pointed at is named in the state
     assert found["client"] == str(player)
 
@@ -373,6 +375,39 @@ def test_play_refuses_while_the_client_is_behind_the_feed(tmp_path, client):  # 
     settings["installed"] = report["version"] - 1 if report["version"] > 1 else 0
     with pytest.raises(launcher.LauncherError, match="update is waiting"):
         launcher.play(settings, account="forge", password="pw", system="linux")
+
+
+def test_an_unreachable_feed_leaves_the_installed_client_playable(tmp_path, client, monkeypatch):  # noqa: F811
+    """The fallback the handoff asked for: a shard whose feed is down must not lock
+    a player out of the client already on disk."""
+    settings, _player, _where, report = _ready(tmp_path, client)
+    settings["installed"] = report["version"]
+    settings["feed"] = f"{settings['feed']}nowhere/"
+    settings["shard_server"] = "fallback:1"
+
+    found = launcher.state(settings)
+    assert found["feed_error"]
+    assert found["playable"] is True
+
+    seen: dict = {}
+
+    def fake_popen(argv, **kwargs):
+        seen.update({"argv": argv, **kwargs})
+        return type("Handle", (), {"pid": 4242})()
+
+    monkeypatch.setattr(launcher.subprocess, "Popen", fake_popen)
+    launcher.play(settings, account="forge", password="pw", system="linux")
+    assert seen["argv"][-3] == "fallback:1"
+
+
+def test_an_unreachable_feed_with_nothing_installed_is_not_playable(tmp_path, client):  # noqa: F811
+    settings, _player, _where, _report = _ready(tmp_path, client)
+    settings["feed"] = f"{settings['feed']}nowhere/"
+    settings["shard_server"] = "fallback:1"
+
+    found = launcher.state(settings)
+    assert found["feed_error"]
+    assert found["playable"] is False
 
 
 # --- the page's own routes -----------------------------------------------------

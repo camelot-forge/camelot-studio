@@ -15,11 +15,14 @@
 	type LauncherState = {
 		client: string;
 		client_there: boolean;
+		client_ok: boolean;
 		account: string;
 		installed: number | null;
 		launcher: Launcher;
 		shard: Shard;
 		problems: string[];
+		feed_error: string | null;
+		playable: boolean;
 		up_to_date?: boolean;
 	};
 	type Progress = {
@@ -48,6 +51,9 @@
 	let busy = $state(false);
 	let restarting = $state(false);
 	let said = $state('');
+	//: One automatic attempt per client/version pair: a feed that is down must
+	//: not make the page retry forever, and a new publish gets its own try.
+	let auto_for = '';
 
 	async function call(path: string, body?: unknown) {
 		const answer = await fetch(path, {
@@ -71,6 +77,21 @@
 
 	async function refresh() {
 		read(await call('/api/state'));
+		await auto_update();
+	}
+
+	/** The client updates itself when the page opens (`C §D17`): an admin
+	 * publishes, and a player who launches is brought up to it without a click.
+	 * A feed that cannot be read leaves the installed client playable instead. */
+	async function auto_update() {
+		if (!state?.client_ok) return;
+		const published = state.shard?.version;
+		if (published === undefined) return;
+		if ((state.installed ?? -1) >= published) return;
+		const key = `${state.client}|${state.installed ?? 'none'}|${published}`;
+		if (auto_for === key) return;
+		auto_for = key;
+		await start_update();
 	}
 
 	async function start_update() {
@@ -138,6 +159,7 @@
 
 	async function save() {
 		read(await call('/api/settings', { client, account, remember: true }));
+		await auto_update();
 	}
 
 	$effect(() => {
@@ -161,8 +183,8 @@
 <main>
 	<h1>{state?.shard?.shard || 'Camelot Forge'}</h1>
 	<p class="where">
-		{state?.shard?.server ? state.shard.server : 'no game address yet'} · launcher{state
-			?.launcher?.installed
+		{state?.shard?.server ? state.shard.server : 'no game address yet'} · launcher{state?.launcher
+			?.installed
 			? ` ${state.launcher.installed}`
 			: ''}
 	</p>
@@ -187,9 +209,11 @@
 			</dl>
 			<p class="state" class:ok={state.up_to_date}>
 				{#if state.up_to_date}
-					up to date
+					up to date · version {state.installed}
+				{:else if state.feed_error}
+					the shard could not be checked
 				{:else if state.client_there}
-					an update is waiting
+					{progress.running ? 'updating…' : 'an update is waiting'}
 				{:else}
 					choose the game's folder
 				{/if}
@@ -197,10 +221,10 @@
 			<div class="buttons">
 				<button
 					class="primary"
-					disabled={busy || progress.running || !state.client_there}
+					disabled={busy || progress.running || !state.client_ok}
 					onclick={start_update}
 				>
-					{progress.running ? `${percent}%` : 'Update'}
+					{progress.running ? `${percent}%` : 'Update now'}
 				</button>
 				{#if progress.running}
 					<div class="bar"><span style={`width:${percent}%`}></span></div>
@@ -227,11 +251,7 @@
 				{:else if state.launcher?.available}
 					<p class="state">a launcher update is ready</p>
 					<div class="buttons">
-						<button
-							class="primary"
-							disabled={busy || progress.running}
-							onclick={update_launcher}
-						>
+						<button class="primary" disabled={busy || progress.running} onclick={update_launcher}>
 							Restart and update
 						</button>
 					</div>
@@ -255,15 +275,21 @@
 			<div class="buttons">
 				<button
 					class="primary"
-					disabled={busy || !account || !password || !state.shard.server || !state.up_to_date}
+					disabled={busy || !account || !password || !state.shard.server || !state.playable}
 					onclick={start_play}
 				>
 					Play
 				</button>
 				<button disabled={busy} onclick={save}>Remember</button>
 			</div>
-			{#if !state.up_to_date}
-				<p class="state">an update is waiting — Update is what makes Play possible</p>
+			{#if state.feed_error && state.playable}
+				<p class="state">The shard could not be checked; this installed client can still play.</p>
+			{:else if !state.up_to_date}
+				<p class="state">
+					{progress.running
+						? 'the client is updating — Play opens when it is done'
+						: 'an update is waiting — it starts by itself when the page opens'}
+				</p>
 			{/if}
 			{#if said}<p class="state">{said}</p>{/if}
 		</div>
@@ -275,7 +301,7 @@
 	{/if}
 
 	<p class="hint">
-		The launcher reads your shard's feed, brings this client up to it, and starts the game.
-		Nothing else on your machine is touched.
+		The launcher reads your shard's feed, brings this client up to it, and starts the game. Nothing
+		else on your machine is touched.
 	</p>
 </main>
