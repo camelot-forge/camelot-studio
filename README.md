@@ -103,7 +103,9 @@ the package's `version.txt`. The build writes the key from
 `packaging/launcher/build.py --launcher …`.
 
 `--feed` and `--server` override the feed's own values for a development run.
-`Play` is refused while the client is behind the feed.
+When the page opens it **updates the client by itself** to what the feed
+publishes; `Play` opens when that is done. A feed that cannot be read leaves an
+already-installed client playable; a first install needs the feed.
 
 ```sh
 .venv/bin/camelot launcher --feed /path/to/feed/ --client "$DAOC_CLIENT"
@@ -116,8 +118,9 @@ launcher's settings); on Windows it runs natively. The package is built by
 
 ## The Console
 
-`camelot console` is the running server's face: what is applied, what is wanted,
-and the actions — Pull, Restart, Reverse.
+`camelot console` is the running server's face: what is applied, who is
+connected, and one action — **Install update** (pull, restart, wait for the
+Installer). Pull, Restart and Reverse remain under the page's folds.
 
 ```sh
 .venv/bin/camelot console --root /path/to/env --env production \

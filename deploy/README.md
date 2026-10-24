@@ -53,9 +53,9 @@ the first release. The stack below is the same services with host paths, for a
 desk or a machine whose directories you manage yourself.
 
 The server install bakes the C# Installer into `core`
-(`deploy/core/Dockerfile`): the admin flow is **Pull → Restart**, and the plugin
-applies the handed-over release before the world loads. `docs/coolify.md` is the
-Coolify-specific production walk.
+(`deploy/core/Dockerfile`): the admin flow is **Install update** on the Console,
+and the plugin applies the handed-over release before the world loads.
+`docs/coolify.md` is the Coolify-specific production walk.
 
 ## Local
 
@@ -117,10 +117,9 @@ from outside the LAN is the check.
 ## An update
 
 ```text
-desk     project release N → project feed → project publish N --remote origin
-console  Pull          (fetch, verify sha256, hand over, mark wanted, mirror the feed)
-server   the plugin at boot (Pull → Restart), or camelot.sh apply on the bench
-players  their launchers read the feed and update themselves
+desk     project publish --remote origin (cut, feed, signature, push)
+console  Install update  (pull, verify, hand over, restart, wait for the apply)
+players  their launchers update themselves when they open
 ```
 
 The Console asks (`wanted.json`); the Installer writes (`S §D1`).

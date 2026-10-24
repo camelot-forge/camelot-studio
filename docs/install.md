@@ -8,7 +8,7 @@ done, and `deploy/README.md` maps the containers.
 | Studio | the desk | the world editor and the asset library (`camelot studio …`) |
 | Deploy | the desk | cuts releases, hands them to an environment, publishes the branch |
 | Feed | built on the desk, served on the server | what the players' launcher reads |
-| Console | the server | what is applied, what is wanted, Pull, Restart, Reverse |
+| Console | the server | what is applied, who is connected, Install update, Reverse |
 | Installer | the server | the only writer of the server's own rows |
 
 ```mermaid
@@ -432,7 +432,8 @@ Two ways to run the Installer, and the Console cannot tell them apart: the
 **The server install (`deploy/install/`) includes the plugin.** `core` is built
 from `deploy/core/Dockerfile`: OpenDAoC's pinned digest plus the three `.cs`,
 with `SCRIPT_ASSEMBLIES=Newtonsoft.Json` and the `forge-camelot` volume at
-`/app/camelot`. The admin flow is Pull → Restart.
+`/app/camelot`. The admin flow is **Install update** on the Console: pull,
+restart, and the plugin applies before the world loads.
 
 On a server without that image, copy the plugin once:
 
@@ -453,18 +454,18 @@ has the details.
 The sequence that carries one edit to the players, in the order it runs.
 
 ```sh
-# on the desk — or, in the browser: Deploy → Cut → Deploy → Ship
+# on the desk — or, in the browser: World → Test locally, then Deploy → Publish
 .venv/bin/camelot project release --dir ~/daoc/camelot-hills     # cuts release 0001
 .venv/bin/camelot project deploy 1 --env local --dir ~/daoc/camelot-hills
 .venv/bin/camelot env apply local --dir ~/daoc/camelot-hills     # or the Installer, at boot
 .venv/bin/camelot env reload local --dir ~/daoc/camelot-hills    # records the ritual, in game
 
-# feed, signature and the deploy branch in one verb (the page's Ship)
+# feed, signature and the deploy branch in one verb (the page's Publish)
 .venv/bin/camelot project publish 1 --remote origin --dir ~/daoc/camelot-hills
 
 # on the server
-#   Console → Pull        fetch, check the signature, verify the hashes, hand over, mark wanted
-#   Console → Restart     boot the server; the plugin applies the release before the world loads
+#   Console → Install update   pull, verify, hand over, restart, wait for the apply
+#   (Pull and Restart remain separate under Update source)
 
 # the players
 #   their launchers read the feed and update themselves

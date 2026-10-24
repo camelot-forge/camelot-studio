@@ -12,7 +12,7 @@ bare-VPS path is `install.sh` in that directory.
 | the `camelot-studio` repository | the project repository (`your-org/your-project`) |
 | the four images (`core`, `camelot-core`, `feed`, `console`) | the deploy key that reads `camelot-deploy` |
 | the proxy and the feed's TLS | the game's TCP/UDP ports |
-| the compose application | the Console's Pull, Restart and Reverse |
+| the compose application | the Console's Install update, Pull, Restart and Reverse |
 
 `camelot-studio` is the only repository linked to Coolify. The project
 repository is private and is cloned by `camelot-bootstrap` with the deploy key;
@@ -328,8 +328,8 @@ docker compose --env-file .env -f compose.yaml run --rm camelot-core \
 Do not run Watchtower on the game server. An OpenDAoC release can change its
 schema, and a restart interrupts play.
 
-**Content.** The desk publishes; the Console Pulls; the Console Restarts. The
-plugin applies at boot. The two cadences are independent.
+**Content.** The desk publishes; the Console's **Install update** pulls and
+restarts. The plugin applies at boot. The two cadences are independent.
 
 ## Backups
 
@@ -386,5 +386,5 @@ them together.
 - [ ] `CAMELOT_DB_PASSWORD` is set before the first `db` start.
 - [ ] Only `feed` has a domain, on port 8080.
 - [ ] `curl https://feed.example.com/healthz` answers.
-- [ ] The Console's Pull and Restart apply release 0001.
+- [ ] The Console's **Install update** applies release 0001.
 - [ ] The log says `Game WebAPI open for connections.`

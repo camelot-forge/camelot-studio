@@ -19,7 +19,7 @@ by a player's launcher. Every path and number below is from that walk.
 | **Studio** | the desk | the world editor and the asset library (`camelot studio …`) |
 | **Deploy** | the desk | cuts releases and hands them to an environment (`camelot project release`, `project deploy`, `project promote`) |
 | **Feed** | built on the desk, served on the server | what the players' launcher reads (`camelot project feed`, then `feedserve`) |
-| **Console** | the server | the running server's face: what is applied, what is wanted, Pull, Restart (`camelot console`) |
+| **Console** | the server | the running server's face: what is applied, who is connected, **Install update** (`camelot console`) |
 | **Installer** | the server | the only writer of the server's own rows (the C# plugin at boot on the server install; `camelot env apply` otherwise) |
 
 The **players' launcher** is a package you hand out (§7).
@@ -192,7 +192,7 @@ Around that folder, a server also has:
 ## 4. The daily flow, worked
 
 The example is real: a keep moved in the editor, one release, one publish, one
-pull, one player.
+click on the server, one player's launcher updating itself.
 
 ### 4.1 Edit, on the desk
 
@@ -208,111 +208,58 @@ rows; without it the page is read-only. The environment's database must be
 running for the mobs to appear: `camelot project check` says whether it is. The
 game server is not needed to edit — only to play and to `env deploy`.
 
-Open `/world`, select the keep, move it. Every edit lands in the project's
-journal as an operation.
+Open `/world`, select the keep, move it. Every edit is journaled immediately;
+nothing touches the database or a client until you test or publish. **Test
+locally** (in the World bar, or on Deploy) cuts the edits into a release and
+installs it on this machine's `local` environment; **Publish** then sends that
+same release to the server.
 
-### 4.2 Release
+### 4.2 Publish
 
-```sh
-camelot project release --dir ~/daoc/forge-project
-```
+Deploy → **Publish**. One click does what used to be three verbs:
 
-```text
-release 0001 · 2 op(s) · world 2, dropped 1 · client version 1
-```
+1. cuts the next release when the journal holds edits;
+2. builds the players' feed from it;
+3. signs the release record with this machine's `release_key`, commits
+   `releases/NNNN/**`, `feed/**` and `publish.json` to `camelot-deploy`, and
+   pushes `origin`.
 
-It writes `releases/0001/release.json`, the server pack
-(`releases/0001/server/forge-project.tar.gz`, 22 KB) and the client half's
-inventory (`releases/0001/client/patchlist.json`). The release records its own
-order: `client-first` when it touches the client, `server-only` otherwise.
+The card says what is waiting (`2 objects edited · 3 database rows`) and, once
+cut, the release number. **Test locally** is the same cut plus a deploy and an
+apply to `local`; **See details** is a read-only dry run of what installing the
+newest release here would change.
 
-In the browser, the same verb is **Deploy → Cut**.
-
-### 4.3 Test it on your own server
-
-```sh
-camelot project deploy 1 --env local --dir ~/daoc/forge-project
-camelot env apply local --dir ~/daoc/forge-project
-camelot env reload local --dir ~/daoc/forge-project
-```
-
-`deploy` is a dry run first — it prints what it would write and refuses a
-divergence — then hands the release over: the client half into the environment's
-client, the server half into `<env>/server/camelot/releases/0001/`. `apply`
-writes the rows (this walk patched none: the move lived in the client's fixture,
-so the release says `reload`), and `reload` records the in-game ritual the
-release named.
-
-Play it. If the keep moved in game, the desk is right and the rest is transport.
-
-### 4.4 Build the feed
+The CLI equivalent, for a desk without a browser:
 
 ```sh
-camelot project feed --dir ~/daoc/forge-project
+camelot project publish --dir ~/daoc/forge-project --remote origin
 ```
 
-```text
-feed · version 1 · 30731 file(s) listed · 1 published · 25254 bytes
-```
+It commits the payloads, the feed and a `publish.json` marker to
+`camelot-deploy` with git's plumbing, so your working branch and its index stay
+as they are. The content branch is where you version your work;
+`camelot-deploy` is the transport. The deploy log gains one `publish` line;
+the publish deliberately leaves your branch alone, so the settings fold offers
+**Save the deploy history** when that line is not committed yet.
 
-`feed/` now holds the protocol's two files (`version-new.txt`,
-`patchlist-new.txt` — the whole client, 2.1 MB, `path TAB md5 TAB size`), our own
-`release.json` and `launcher.json`, and **only the files that changed**
-(`zones/Zone000/csv000.mpk`, 25 KB).
+Without a `release_key` the release is published **unsigned**, and a server
+that checks signatures refuses it.
 
-The feed's public URL and the game's address live in `project.json` (`feed_url`,
-`game_server`), written once on the Deploy page's **Shard** card. Every machine
-and every publish reads them there; `--base-url`/`--server` override them for one
-build. The service that serves the feed still rewrites both on the way out
-(§5.2), so a feed built with a local URL works online unchanged.
+### 4.3 Install on the server
 
-### 4.5 Publish
+Console → **Install update**. One click: it pulls (fetch, verify the signature
+and the sha256s, hand the server half over, write `wanted.json`, mirror the
+feed), restarts the game server, then waits for the Installer's own state to
+record the release. The page shows the three steps and refreshes itself;
+**Players** shows who is connected by name.
 
-From the browser: **Deploy → Ship**. It builds the feed, signs the release record
-with this machine's `release_key`, commits the payloads and the feed to
-`camelot-deploy`, and pushes `origin`. The same thing from the desk's shell:
+On the server install the C# Installer runs at boot: the plugin reads
+`wanted.json` and `releases/NNNN/` before the world loads, writes the rows, and
+records `state.json` and `applied/NNNN/applied.json`. The Console then says
+"Up to date".
 
-```sh
-camelot project publish 1 --dir ~/daoc/forge-project --remote origin
-```
-
-It commits `releases/0001/**`, `feed/**` and a `publish.json` marker to the
-`camelot-deploy` branch and pushes it. The commit is built with git's plumbing,
-so your working branch and its index stay as they are, and a publish is safe with
-uncommitted work in the tree. The content branch (your `main`) is where you
-version your work; `camelot-deploy` is the transport.
-
-The Shard card says which key signs. Without one, the release is published
-**unsigned** and a server that checks signatures refuses it. The deploy log gains
-one `publish` line; the publish deliberately leaves `main` alone, so the card
-offers **Commit the log** when that line is not committed yet.
-
-### 4.6 Pull, on the server
-
-Console → **Pull**. The pull does five things and stops before the database:
-
-1. fetches the `camelot-deploy` branch and fast-forwards the checkout;
-2. checks the release's signature against the server's key, then recomputes the
-   sha256 of the pack, the rows and the client patchlist, and refuses a mismatch
-   by name;
-3. copies the **server half** into `<env>/server/camelot/releases/0001/`; the
-   client half goes to the feed;
-4. writes `wanted.json` — the ask, for the Installer;
-5. mirrors the pulled `feed/` into the directory the feed service serves
-   (files are added or replaced; a player behind still needs what earlier
-   publishes put there).
-
-The page then shows release 1 as **pending**, because nothing is applied yet.
-
-### 4.7 Apply, on the server
-
-On the server install the C# Installer runs at boot. The flow is **Pull**, then
-**Restart**: the plugin reads `wanted.json` and `releases/NNNN/` before the world
-loads, writes the rows, and records `state.json` and `applied/NNNN/applied.json`.
-The Console then shows the release applied.
-
-The `camelot-core` job is the same step without a restart, and the fallback for a
-server without the plugin:
+The `camelot-core` job is the same step without a restart, and the fallback for
+a server without the plugin:
 
 ```sh
 camelot env apply production --dir /srv/forge/deploy
@@ -323,15 +270,18 @@ what it wrote and the values they had before in `state.json`, and writes one lin
 per row in `applied/NNNN/applied.json`. All or nothing: a row that is not there
 refuses the whole release and writes nothing.
 
-Then the release's own ritual: `/reload doors` in game for an apply on a running
-server. An apply at boot has already loaded the rows, so it needs no reload.
+**Pull** and **Restart** remain, separately, under **Update source** for a manual
+sequence. The release's own ritual is unchanged: `/reload doors` in game for an
+apply on a running server; an apply at boot needs no reload.
 
-### 4.8 The players
+### 4.4 The players
 
-They open their launcher, which reads the feed: `version-new.txt` (1), compares
-it with what it installed, walks `patchlist-new.txt`, MD5s each local file and
-downloads only what differs — 25 KB here — then verifies what it wrote and
-enables Play. Play is refused while the client is behind the feed.
+They open their launcher. It reads the feed, compares it with what it installed,
+and **updates the client by itself** when the shard publishes something newer;
+Play opens when the update is done. If the feed is unreachable, an
+already-installed client stays playable (with a line saying the shard could not
+be checked); a first install needs the feed. Play is refused while the client is
+behind a reachable feed.
 
 ## 5. A new local test server
 
@@ -372,7 +322,7 @@ flowchart TD
     B --> C["project feed"]
     C --> D["project publish N --remote origin"]
     D --> E["git: camelot-deploy<br/>releases/NNNN/** + feed/** + publish.json"]
-    E --> F["server: Console Pull<br/>fetch, verify sha256, hand over"]
+    E --> F["server: Console → Install update<br/>pull, verify, hand over, restart"]
     F --> G["wanted.json"]
     G --> H["Installer at boot (plugin)<br/>rows + state.json"]
     H --> I["world loads; /reload only<br/>for an apply on a running server"]
@@ -450,7 +400,7 @@ back **for the players** is a new release.
 # on the desk: revert the change as a new operation, then
 camelot project release          # → N+1
 camelot project publish --remote origin
-# on the server: Console Pull, then Restart (the plugin applies at boot)
+# on the server: Console → Install update (pull, restart, apply)
 ```
 
 The clients converge on N+1 like any other update, and nobody rewrites the
@@ -532,8 +482,8 @@ Coolify-specific walk is `docs/coolify.md`.
 
 The bootstrap is idempotent and never drops a database that already has
 `serverproperty`. It sets the two properties the Console needs, so the first
-`core` boot has the API. The admin flow is **Pull → Restart**: the plugin applies
-the handed-over release before the world loads.
+`core` boot has the API. The admin flow is **Install update** on the Console:
+the plugin applies the handed-over release before the world loads.
 
 The Console listens on loopback. Reach it through an SSH tunnel, or serve it to
 the tailnet with `tailscale serve --bg 8770` and open
@@ -606,7 +556,7 @@ already there.
 | `the branch carries no release.json.sig` | this server checks signatures and the publish was unsigned: set `release_key` on the desk and publish again |
 | `the environment holds bytes this release does not record` | someone edited the server's files by hand; the pull refuses rather than overwrite |
 | `camelot studio` says the machine is not ready | `machine.json` is missing or names something the tool cannot reconcile. `camelot project check` lists each field; `camelot project machine` writes the missing answers. |
-| `an update is waiting — the client is at N, the shard publishes M` | the player's launcher refused Play until Update runs |
+| `an update is waiting — the client is at N, the shard publishes M` | the player's launcher refused Play until the client updates; it starts the update by itself when the page opens |
 | `release 0006 cannot be reversed while release 0007 is applied` | the newer release's values would be written over: reverse the newest first (`S §D17`) |
 | `release 0007 is not applied to this environment` | there is nothing to put back — the reversal needs the state the apply wrote |
 | `the feed does not say where the game is` | the feed was served without `launcher.json` or without `CAMELOT_GAME_SERVER` |
