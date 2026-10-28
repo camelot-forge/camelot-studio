@@ -1,10 +1,10 @@
-# The players' launcher, built on Windows (F §D5): PyInstaller does not
-# cross-compile, and the artifact is what a closed test hands out.
+# The players' launcher, built on Windows: PyInstaller does not cross-compile,
+# and the artifact is what a closed test hands out.
 #
 # Run it from the Actions tab: the version only moves forward (a package with a
-# greater one replaces a player's, `deployment.md` §D7), so bump it before
-# every hand-out. The two files it publishes are the zip and the manifest the
-# launcher fetches from the shard's `launcher` URL.
+# greater one replaces a player's), so bump it before every hand-out. The two
+# files it publishes are the zip and the manifest the launcher fetches from the
+# shard's `launcher` URL.
 name: launcher-windows
 
 on:

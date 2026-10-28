@@ -16,7 +16,7 @@ cd ../.. && .venv/bin/python packaging/launcher/build.py \
 ```
 
 `--version` is the launcher's own version: a package carrying a greater one is
-what replaces a player's (`deployment.md` §D7), so it only moves forward.
+what replaces a player's, so it only moves forward.
 `--launcher` is optional. It names the directory where the zip and the
 `launcher-manifest.json` are published; without it, the launcher has no
 self-update.
@@ -46,8 +46,7 @@ separator, so the same command works on both.
 ```
 
 `feed` is the only URL the player's package needs; the game address comes from
-the feed's `launcher.json` (`C §D15`), and an optional `server` pins one as a
-fallback. `--feed` and `--server` override for a development run, as do
+the feed's `launcher.json`, and an optional `server` pins one as a fallback. `--feed` and `--server` override for a development run, as do
 `CAMELOT_FEED_URL` and `CAMELOT_GAME_SERVER`.
 
 ## Its own update
@@ -61,8 +60,7 @@ A shard that publishes launcher packages adds a `launcher` URL:
 That directory holds the zip `build.py` wrote and the `launcher-manifest.json`
 beside it. The page reads the manifest, shows **Restart and update** when the
 manifest's version is greater than `version.txt`'s, checks the SHA-256, and
-stages the package in `<install parent>/update/<version>/`
-(`deployment.md` §D6-§D8).
+stages the package in `<install parent>/update/<version>/`.
 
 **Restart and update** writes `swap-launcher-<pid>.sh` (or `.bat`) beside the
 install and stops the process. The script waits for the pid to disappear,
@@ -84,4 +82,5 @@ on Linux); the password is never stored. `--no-open` is for a test harness.
 
 On Linux the game runs under Wine; on Windows, `connect.exe` runs directly.
 The Windows build is windowed: the page is the only window the player sees, and
-the swap script runs hidden.
+the swap script runs hidden. macOS is not packaged: the game client is Windows,
+and running it under Wine or CrossOver there is untested.

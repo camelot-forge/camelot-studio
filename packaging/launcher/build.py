@@ -110,8 +110,8 @@ def main(argv=None) -> int:
     (built / "shard.json").write_text(
         json.dumps(shard, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    # The launcher's own version, beside the binary (`deployment.md` §D7): a
-    # package with a greater one is what replaces this one.
+    # The launcher's own version, beside the binary: a package with a greater
+    # one is what replaces this one.
     (built / "version.txt").write_text(f"{args.version}\n", encoding="utf-8")
     archive = shutil.make_archive(
         str(DIST / f"{NAME}-{sys.platform}"),
@@ -121,7 +121,7 @@ def main(argv=None) -> int:
     )
     # The manifest the launcher fetches from the shard's `launcher` URL. Signed
     # by nothing: the hash binds the file it names, and the URL is the shard's
-    # own (`deployment.md` §D7).
+    # own.
     payload = Path(archive).read_bytes()
     manifest = {
         "version": args.version,

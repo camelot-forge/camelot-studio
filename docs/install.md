@@ -44,9 +44,10 @@ CI runs the Python suite on Ubuntu and macOS, and the web suite on Ubuntu.
 Windows is not covered by CI.
 
 The setup scripts are POSIX `sh`. On Windows, run them inside WSL2 and follow the
-Linux steps; there is no native Windows install path for the studio. A server is
-a Linux host. Docker Desktop on macOS or Windows runs the desk's bench only: its
-host networking does not carry the Console's loopback API
+Linux steps; there is no native Windows install path for the studio. In WSL2,
+pass `--no-open` and open the printed `viewer:` URL in the Windows browser. A
+server is a Linux host. Docker Desktop on macOS or Windows runs the desk's bench
+only: its host networking does not carry the Console's loopback API
 (`deploy/console/README.md`).
 
 ## 1. What you need
