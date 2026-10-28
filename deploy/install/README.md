@@ -1,7 +1,7 @@
 # The server install
 
 One compose file, named volumes, and a bootstrap job. It installs OpenDAoC and
-everything Camelot Forge attaches to it: the database, the feed, the Console,
+everything Camelot Studio attaches to it: the database, the feed, the Console,
 and the Installer's job.
 
 The desk stack (`deploy/compose.yaml`) keeps host paths for local testing. This
@@ -65,7 +65,7 @@ verify against that key.
 ## 3. The checkout and the values
 
 ```sh
-git clone git@github.com:camelot-forge/camelot-studio.git
+git clone https://github.com/camelot-forge/camelot-studio.git
 cd camelot-studio/deploy/install
 ./install.sh          # writes .env, generates the passwords, and exits
 $EDITOR .env          # the five FILL values
@@ -100,7 +100,7 @@ It runs `docker compose up -d` and waits for `camelot-bootstrap`. The bootstrap:
 3. clones OpenDAoC's complete database into the baseline volume;
 4. clones the project's `camelot-deploy` branch and writes this machine's
    `machine.json`;
-5. seeds the feed so `/version-new.txt` answers before the first Pull;
+5. seeds the feed so `/version-new.txt` answers before the first update;
 6. provisions the environment's database, once: it skips a database that already
    has `serverproperty`, so a restart never drops players' rows;
 7. sets `atlas_api` and `api_password`, so the Console's API is on when the game
@@ -142,16 +142,13 @@ The order is desk → branch → Console → Installer:
    ```
    then `http://127.0.0.1:8770/`, authenticated as `operator` with
    `CAMELOT_CONSOLE_PASSWORD`;
-3. **Pull**. It fetches the branch, verifies the signature and the hashes,
-   copies the server half into the environment, writes `wanted.json`, and mirrors
-   the feed;
-4. restart the game server:
-   ```sh
-   docker compose --env-file .env -f compose.yaml restart core
-   ```
-   The Installer plugin applies the handed-over release at boot, before the world
-   loads. The Console then shows the release applied.
-5. the players' launchers read the feed URL and update the client.
+3. **Install update**. One click: it fetches the branch, verifies the signature
+   and the hashes, copies the server half into the environment, writes
+   `wanted.json`, mirrors the feed, restarts the game server, and waits until the
+   Installer records the release. The page shows the three steps; Pull and
+   Restart remain separate under **Update source**.
+4. The Console then shows "Up to date". The players' launchers read the feed URL
+   and update the client when they open it.
 
 The `camelot-core` job remains the fallback for a server without the plugin, or
 for an apply without a restart:
@@ -235,7 +232,7 @@ Do not run Watchtower on the game server. A release of OpenDAoC may change its
 schema; `env verify` and `camelot server tables` are what tells you before the
 players see it.
 
-**Camelot Forge** is the checkout. Pull a new commit, rebuild the images,
+**Camelot Studio** is the checkout. Pull a new commit, rebuild the images,
 and leave the volumes alone:
 
 ```sh
@@ -243,5 +240,5 @@ git pull
 docker compose --env-file .env -f compose.yaml up -d --build
 ```
 
-The content releases travel on `camelot-deploy`; Pull applies them. The two
-cadences are independent.
+The content releases travel on `camelot-deploy`; the Console's Install update
+pulls and applies them. The two cadences are independent.

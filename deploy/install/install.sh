@@ -90,10 +90,7 @@ feed=$(value_of CAMELOT_FEED_URL)
 echo "  feed health:  ${feed%/}/healthz"
 port=$(value_of CAMELOT_CONSOLE_PORT)
 [ -n "$port" ] || port=8770
-environment=$(value_of CAMELOT_ENVIRONMENT)
-[ -n "$environment" ] || environment=production
 echo "  console:      http://127.0.0.1:${port}/ (or an SSH tunnel)"
 echo
-echo "next: publish a release from the desk, then Pull in the Console and apply:"
-echo "  docker compose --env-file .env -f compose.yaml run --rm camelot-core \\"
-echo "    env apply ${environment} --dir /deploy"
+echo "next: publish a release from the desk, then open the Console and click"
+echo "      Install update (pull, restart, verify)."

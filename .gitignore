@@ -3,7 +3,13 @@
 __pycache__/
 *.pyc
 *.egg-info/
+core/build/
 core/tests/output/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.playwright-mcp/
 
 # Conversion artifacts
 *.gltf
@@ -16,6 +22,7 @@ deploy/.env
 deploy/feed/.env
 deploy/console/.env
 deploy/server/.env
+deploy/install/.env
 
 # Deployment's scratch layout (a standalone stack's volumes and logs)
 deploy/*/data/

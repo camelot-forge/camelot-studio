@@ -15,6 +15,10 @@ dependencies = [
     "numpy>=1.26",
 ]
 
+[project.urls]
+Homepage = "https://github.com/camelot-forge/camelot-studio"
+Issues = "https://github.com/camelot-forge/camelot-studio/issues"
+
 [project.optional-dependencies]
 server = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "watchfiles>=1.0"]
 #: `camelot server export` and `camelot serve --db-config` read the server's
@@ -45,5 +49,5 @@ known-first-party = ["camelot"]
 [project.scripts]
 camelot = "camelot.cli:main"
 
-[tool.setuptools]
-packages = ["camelot"]
+[tool.setuptools.packages.find]
+include = ["camelot*"]
