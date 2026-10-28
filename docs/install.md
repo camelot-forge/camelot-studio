@@ -32,11 +32,28 @@ flowchart LR
 Releases reach the server as a git branch, `camelot-deploy`. Players' launchers
 fetch content over HTTP from the feed.
 
+## Platforms
+
+| What | Linux | macOS | Windows |
+|---|---|---|---|
+| Studio and CLI | supported | supported | WSL2 |
+| Server stack | supported | bench only | WSL2 or a Linux VM; bench only |
+| Players' launcher | Wine | not packaged | supported |
+
+CI runs the Python suite on Ubuntu and macOS, and the web suite on Ubuntu.
+Windows is not covered by CI.
+
+The setup scripts are POSIX `sh`. On Windows, run them inside WSL2 and follow the
+Linux steps; there is no native Windows install path for the studio. A server is
+a Linux host. Docker Desktop on macOS or Windows runs the desk's bench only: its
+host networking does not carry the Console's loopback API
+(`deploy/console/README.md`).
+
 ## 1. What you need
 
 ### The desk
 
-- Linux or macOS.
+- Linux or macOS, or WSL2 on Windows.
 - Python 3.11 or later.
 - Node 20 or later and `pnpm`, for the browser interface.
 - `git`, and OpenSSH 8.0 or later. `ssh -V` prints the version; 8.0 is where
@@ -47,7 +64,7 @@ fetch content over HTTP from the feed.
 
 ### The server
 
-- A machine you can ssh into, with Docker or Podman and the compose plugin.
+- A Linux machine you can ssh into, with Docker or Podman and the compose plugin.
 - `git`, and a read-only deploy key on the project's repository.
 - A clone of the studio repository: the `camelot-core` job is built from `core/`,
   so the server needs the source.

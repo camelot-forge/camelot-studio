@@ -5,6 +5,8 @@ a distribution of game assets.
 
 ## Prerequisites
 
+- Linux or macOS. On Windows, use WSL2 and follow the Linux steps; the setup
+  scripts are POSIX `sh`.
 - Python 3.11 or newer.
 - Node 20 or newer, with `pnpm`, for the browser interface.
 - A DAoC client only for the corpus tests. They skip when `DAOC_CLIENT` is unset.

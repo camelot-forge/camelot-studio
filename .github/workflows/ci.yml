@@ -7,10 +7,14 @@ on:
 
 jobs:
   lint-test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.13"]
+        include:
+          - os: macos-latest
+            python-version: "3.13"
     steps:
       - uses: actions/checkout@v7
 
@@ -31,7 +35,8 @@ jobs:
       - name: Patch pyffi for modern Python
         run: |
           SP=$(python -c "import pyffi, os; print(os.path.dirname(pyffi.__file__))")
-          sed -i 's/time\.clock()/time.perf_counter()/g' \
+          # perl -pi is the same on GNU and BSD (macOS).
+          perl -pi -e 's/time\.clock\(\)/time.perf_counter()/g' \
             "$SP/object_models/xml/__init__.py" \
             "$SP/object_models/xsd/__init__.py"
 

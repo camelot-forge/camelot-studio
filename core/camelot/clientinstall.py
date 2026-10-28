@@ -899,7 +899,7 @@ def _wine_client_dir(command_line: str, comm: str) -> str | None:
 
     On Linux the client runs under Wine, whose command lines carry Windows
     paths — measured on this machine: `connect.exe` launches
-    `Z:\\home\\michael\\daoc-client\\game1127.dll`, and Wine's `Z:` drive is
+    `Z:\\home\\player\\daoc-client\\game1127.dll`, and Wine's `Z:` drive is
     the root mapping. A relative token, another drive letter (`C:\\…`) or no
     token at all has no mapping we can *prove*, so they return None — and the
     callers treat "unknown" as "refuse the write", which is the safe side.

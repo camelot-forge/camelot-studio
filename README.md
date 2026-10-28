@@ -28,9 +28,11 @@ export DAOC_CLIENT="/path/to/DAOC CLIENT V2"
 browser interface also needs Node 20+ and `pnpm` (`cd web && pnpm install &&
 pnpm build`).
 
-The studio runs on Linux and macOS. The players' launcher is built for Windows
-and runs under Wine on Linux. `docs/install.md` walks the whole install, desk and
-server; `docs/admin.md` is the runbook once it is done.
+The studio runs on Linux and macOS, and in WSL2 on Windows. The players' launcher
+is built for Windows and runs under Wine on Linux; macOS is not packaged. The
+server runs on Linux. CI runs on Ubuntu, with a macOS Python job.
+`docs/install.md` walks the whole install, desk and server; `docs/admin.md` is
+the runbook once it is done.
 
 ## Architecture
 
