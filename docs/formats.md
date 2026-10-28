@@ -354,7 +354,7 @@ Texture names in the tables are `.tga` while the archive entry is `.dds`
 fall back to the NIF's own `NiSourceTexture` names searched across the skin
 archives (e.g. `fox_pet01` → `Fox_red01.dds` → `skin193.mpk`).
 
-**Historical coverage snapshot** (617 figures, `notes`):
+**Historical coverage snapshot** (617 figures):
 the older run reported 458 monster + 67 NIF-name fallback = **525 resolved
 (85%)**, but it did not validate final rendered bytes and predates the current
 `DAOC_CLIENT V2` profile. Re-run and version the report before using this as a
@@ -449,7 +449,7 @@ sample of, and `build_header` refuses them rather than guessing).
 | 0x118..0x11C | crc32 of the entry's compressed stream |
 
 **The game reads the stream lengths from the header, not from the
-streams.** Traced in the client (test A of `notes`): it
+streams.** Traced in the client: it
 reads exactly the header-declared s1/s2 bytes and, when the directory
 cannot be parsed from that read, retries the whole archive and exits
 during the loading screen — with no message anywhere (`error.log` /
@@ -588,8 +588,7 @@ Simpler static alternative first: an item on a `GROUND` node
 ## 11. Zones (the world)
 
 Measured 2026-10-11 on the OpenDAoC 1.127 client. The reader is
-`core/camelot/zones.py`; the probe and its numbers are in the private
-workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
+`core/camelot/zones.py`.
 
 - `zones/zones.mpk` → **`zones.dat`**: the client's own world index, a text
   INI (BOM, CRLF) with **483 `[zoneNNN]` and 358 `[regionNNN]`** sections. A
@@ -678,7 +677,7 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   **The composition is measured against the client's own bake**: for every
   patch it also ships `texXX-YY.dds` — its composite of exactly these layers
   at 16 units/texel — so the candidate models can be scored instead of
-  guessed (`notes/layer-compose.py`). Layer 0 first, then layers in
+  guessed. Layer 0 first, then layers in
   **ascending** order, each lerped over the accumulated colour by its own
   mask channel (R = 3K, G = 3K+1, B = 3K+2 of mask K, tied to the *file
   index*, not to the drawn rows). A sheet repeats `tiles` times **across the
@@ -693,8 +692,7 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   but the scores can: zone tiling beats patch-local 1.2–1.4× and descending
   order 1.2–2.0×, a v flip 1.5–1.8×, and the in-game pebbles pin the
   absolute size). v runs like the ground's own (no flip). The stack is at
-  most 9 layers / 3 masks (sampled over the corpus: `notes/`
-  `layer-span.py`); `rotate` is not measured (no rotated row in the sample).
+  most 9 layers / 3 masks. `rotate` is not measured (no rotated row in the sample).
   The viewer composes it in one pass per patch
   (`web/src/lib/world/ground.ts`) where the engine splits the stack across
   `PassTwo…PassFour` draws; how the engine blends between those draws (and
@@ -711,8 +709,7 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   measured 2026-10-12 against the in-game aerial). Increasing `A` turns the
   object **counter-clockwise in the client's `(x, y)` plane**, i.e. clockwise
   on a north-up map: `A = 90` is east, 180 south, 270 west — so `A` is the
-  object's *bearing*. The bridge probe
-  (`notes/heading-convention.py`) pins that sense, and only the sense:
+  object's *bearing*. The bridge probe pins that sense, and only the sense:
   every bridge in the corpus is `Hstonebridge.nif`, whose long axis measures
   **0.0°** in the NIF, where a rotation and a mirror agree — the "a dozen rows
   in six zones" the first reading claimed does not exist, and the 180°-off
@@ -727,7 +724,7 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
   `Z = 5000` with `Ground = 1` stood on the terrain in game (2 428 units under
   its authored height) while its `Ground = 0` twin floated at 5 000, so an
   editor emits `z = 0` + `Ground = 1` and never copies an authored `Z` onto a
-  ground row (`notes/w3-report.md`).
+  ground row.
 - **A world object ships one visible level, not three**: every zone object's
   visible branch is a `NiLODNode` with a `(near, far)` range per child *in
   file order* (the tavern lists the far child first, the guard tower the
@@ -760,12 +757,12 @@ workspace (`notes/`), and the design is `notes/phase6-world-editor.md`.
     in game, 2026-10-12), which the *bridges* could not have caught (their
     mesh axes are all 0.0°, see the heading entry above) while the server's
     own rows could: the keep's two `door` rows sit within **15 units** of the
-    mesh's two door nodes under the rotation and **357** under the reflection
-    (`notes/keep-door-nodes.py`, `server-doors.py`). The two `Albion
+    mesh's two door nodes under the rotation and **357** under the reflection.
+    The two `Albion
     Banner` worldobjects (1315 units north, facing north) and the road agree.
   Figures use the same rotation — the pipeline was right, the world was the
-  one that had been flipped. Proof of the map half: `notes/ground-
-  mosaic.py` assembles the client's own 64 baked `texXX-YY` sheets (sheet row
+  one that had been flipped. Proof of the map half: a mosaic of the client's
+  own 64 baked `texXX-YY` sheets (sheet row
   0 is the patch's lowest y, roads and the river bed continue across every
   seam, `sector.dat`'s banks land on the painted river).
 - **The sky is per zone, and the clock is the server's**: `sector.dat` carries

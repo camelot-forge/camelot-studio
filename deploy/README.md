@@ -1,6 +1,6 @@
 # Deploy
 
-The server side of Camelot Forge, as containers. Five services, one entry point
+The server side of Camelot Studio, as containers. Five services, one entry point
 (`compose.yaml`) and one environment file (`.env`). This file is the desk's
 bench: host paths, a checkout beside it. A server install is `install/`: named
 volumes, one bootstrap job, and `install.sh`.
@@ -32,8 +32,8 @@ flowchart LR
 | `feed` | `feed/README.md` | nothing: it serves a directory read-only |
 | `console` | `console/README.md` | `<env>/server/camelot/`, the audit, the feed mirror |
 
-`notes/remote.md` §D10 says what runs where; `docs/admin.md` is the runbook
-around it. `docs/install.md` walks the whole install, desk and server.
+`docs/admin.md` is the runbook around it. `docs/install.md` walks the whole
+install, desk and server.
 
 ## A server
 
@@ -70,7 +70,7 @@ For a local run the four paths point at the desk's own folders, and the two
 public values are loopback:
 
 ```dotenv
-CAMELOT_SERVER_ENV=/home/you/daoc/forge-env-local
+CAMELOT_SERVER_ENV=/home/you/daoc/env-local
 CAMELOT_DEPLOY_CHECKOUT=/home/you/daoc/forge-project
 CAMELOT_BASELINE_SOURCE=/home/you/daoc/OpenDAoC-Database/opendaoc-db-core
 CAMELOT_FEED_SOURCE=/home/you/daoc/forge-project/feed

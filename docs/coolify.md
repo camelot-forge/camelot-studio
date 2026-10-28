@@ -7,7 +7,7 @@ bare-VPS path is `install.sh` in that directory.
 
 ## What Coolify owns, and what it does not
 
-| Coolify | Camelot Forge |
+| Coolify | Camelot Studio |
 |---|---|
 | the `camelot-studio` repository | the project repository (`your-org/your-project`) |
 | the four images (`core`, `camelot-core`, `feed`, `console`) | the deploy key that reads `camelot-deploy` |
@@ -144,7 +144,7 @@ CAMELOT_DEPLOY_REPO=git@github.com:your-org/your-project.git
 CAMELOT_DEPLOY_KEY_B64=<base64 of the private deploy key>
 CAMELOT_RELEASE_PUBLIC_KEY=ssh-ed25519 AAAA... you@desk
 CAMELOT_BASELINE_REPO=https://github.com/OpenDAoC/OpenDAoC-Database.git
-CAMELOT_DB_NAME=forge_project_production
+CAMELOT_DB_NAME=camelot_hills_production
 CAMELOT_DB_PASSWORD=<secret 1>
 CAMELOT_DB_PORT=3307
 CAMELOT_GAME_PORT=10300
@@ -245,7 +245,7 @@ starts the services in order:
 1. `db` becomes healthy;
 2. `camelot-bootstrap` clones the OpenDAoC baseline and the project's
    `camelot-deploy` branch, writes this machine's `machine.json`, seeds the
-   feed, provisions `forge_project_production` once, and sets `atlas_api` and
+   feed, provisions `camelot_hills_production` once, and sets `atlas_api` and
    `api_password`;
 3. `core`, `feed` and `console` start;
 4. `camelot-core` runs `env status` and exits.
@@ -265,7 +265,7 @@ curl -s https://feed.example.com/version-new.txt
 curl -s https://feed.example.com/launcher.json
 ```
 
-Before the first Pull, `/healthz` answers with the feed and game addresses,
+Before the first update, `/healthz` answers with the feed and game addresses,
 `version-new.txt` is `0`, and `release.json` is a 404. That is the seed.
 
 On the server, check the game and the API:
@@ -291,12 +291,13 @@ connections.`
    ```
    then `http://127.0.0.1:8770/`, as `operator` with
    `CAMELOT_CONSOLE_PASSWORD`.
-3. **Pull**. It fetches `camelot-deploy`, checks the signature, verifies the
-   hashes, copies the server half, writes `wanted.json`, and mirrors the feed.
-4. **Restart**. The C# Installer runs at boot, before the world loads, and
-   applies the handed-over release.
-5. The Console shows `wanted` = `applied`, `pending` empty, and the feed's
-   version matches the server.
+3. **Install update**. One click: it fetches `camelot-deploy`, checks the
+   signature, verifies the hashes, copies the server half, writes `wanted.json`,
+   mirrors the feed, restarts the game server, and waits for the Installer to
+   record the release.
+4. The C# Installer runs at boot, before the world loads, and applies the
+   handed-over release.
+5. The Console shows `Up to date`, and the feed's version matches the server.
 
 The `camelot-core` job is the fallback, for an apply without a restart or a
 server without the plugin:
@@ -312,7 +313,7 @@ so `sudo cd` does not exist: open `sudo -i` and `cd` there.
 
 ## Updates
 
-**Camelot Forge.** Push to `main`; Coolify redeploys (GitHub App) or you click
+**Camelot Studio.** Push to `main`; Coolify redeploys (GitHub App) or you click
 **Redeploy**. `camelot-bootstrap` is idempotent: it skips the existing baseline,
 checkout and database, and the named volumes stay.
 
@@ -336,7 +337,7 @@ restarts. The plugin applies at boot. The two cadences are independent.
 | What | Where |
 |---|---|
 | the project and its journal | the desk, and the project repository |
-| the database | a `mariadb-dump` of `forge_project_production` |
+| the database | a `mariadb-dump` of `camelot_hills_production` |
 | the environment and the Installer's state | the `forge-env` and `forge-camelot` volumes |
 | the feed | the `forge-feed` volume; reproducible from `camelot-deploy` |
 | the deploy key | the desk, and the `forge-ssh` volume |

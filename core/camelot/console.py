@@ -1510,7 +1510,7 @@ def page(
 </head>
 <body>
 <header>
-  <p class="eyebrow">Camelot Forge · Console</p>
+  <p class="eyebrow">Camelot Studio · Console</p>
   <h1>{_e(project)}</h1>
   <p class="status">{status}</p>
   <p class="muted">{address} · checked {_e(document.get("at"))}</p>

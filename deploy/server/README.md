@@ -1,6 +1,6 @@
 # The server stack
 
-What runs on the machine that serves the game (`notes/remote.md` §D10):
+What runs on the machine that serves the game:
 the database, OpenDAoC, and the job that applies a release.
 
 | Service | What it is |

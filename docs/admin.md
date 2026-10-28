@@ -8,7 +8,7 @@ contributor (that is `AGENTS.md`, `docs/formats.md`, `docs/status.md`).
 `docs/install.md` is the way in. This document is what you keep open once it is
 done.
 
-The worked example is the workshop's own walk of 2026-10-18: a keep moved in
+The worked example is a walk of 2026-10-18: a keep moved in
 the world editor, released, published, pulled on a second server, and installed
 by a player's launcher. Every path and number below is from that walk.
 
@@ -34,7 +34,7 @@ the players' HTTP traffic.
 One folder holds the whole content of one shard:
 
 ```text
-forge-project/
+camelot-hills/
 ├── project.json          the shard's identity: its name, its base build, its environments
 ├── machine.json          this machine's own answers
 ├── journal/              the edit history — the source of every release
@@ -56,19 +56,19 @@ by hand if you prefer; `camelot project check` reads it back either way.
 
 ```json
 {
-  "author": "michael",
+  "author": "you",
   "client": "/home/you/daoc/clean-client",
   "environments": {
     "local": {
-      "root": "/home/you/daoc/forge-env-local",
-      "database": "forge_project_local",
+      "root": "/home/you/daoc/env-local",
+      "database": "camelot_hills_local",
       "baseline": "/home/you/daoc/OpenDAoC-Database/opendaoc-db-core",
       "db": { "host": "127.0.0.1", "port": 3307, "user": "root" },
-      "db_config": "/home/you/daoc/forge-env-local/server/config/serverconfig.xml"
+      "db_config": "/home/you/daoc/env-local/server/config/serverconfig.xml"
     },
     "staging": {
-      "root": "/home/you/daoc/forge-env-staging",
-      "database": "forge_project_staging",
+      "root": "/home/you/daoc/env-staging",
+      "database": "camelot_hills_staging",
       "baseline": "/home/you/daoc/OpenDAoC-Database/opendaoc-db-core",
       "db": { "host": "127.0.0.1", "port": 3307, "user": "root" }
     }
@@ -90,11 +90,11 @@ by hand if you prefer; `camelot project check` reads it back either way.
 Write the file with the tool, not by hand:
 
 ```sh
-camelot project machine --dir ~/daoc/forge-project \
+camelot project machine --dir ~/daoc/camelot-hills \
   --client ~/daoc/clean-client \
-  --db-config ~/daoc/forge-env-local/server/config/serverconfig.xml \
+  --db-config ~/daoc/env-local/server/config/serverconfig.xml \
   --release-key ~/daoc/keys/camelot-release
-camelot project check --dir ~/daoc/forge-project
+camelot project check --dir ~/daoc/camelot-hills
 ```
 
 `project machine` derives the environment's folder, database, host and port from
@@ -142,7 +142,7 @@ ours:
 ├── server/               the game server's files (binary, config/, lib/, logs/)
 │   └── camelot/          OURS — the Installer's folder, and the only thing we write
 │       ├── state.json            what each release wrote, and the values it replaced
-│       ├── releases/NNNN/        what Deploy (or the Console's Pull) handed over
+│       ├── releases/NNNN/        what Deploy (or the Console's Install update) handed over
 │       ├── applied/NNNN/applied.json    one line per row: written / skipped / removed
 │       ├── reversed/NNNN/reversed.json  the same, for a reversal
 │       ├── wanted.json           the Console's ask: "apply release N"
@@ -197,7 +197,7 @@ click on the server, one player's launcher updating itself.
 ### 4.1 Edit, on the desk
 
 ```sh
-camelot studio ~/daoc/forge-project --edit
+camelot studio ~/daoc/camelot-hills --edit
 ```
 
 With no path, `studio` opens this folder if it is a project, then the newest
@@ -232,7 +232,7 @@ newest release here would change.
 The CLI equivalent, for a desk without a browser:
 
 ```sh
-camelot project publish --dir ~/daoc/forge-project --remote origin
+camelot project publish --dir ~/daoc/camelot-hills --remote origin
 ```
 
 It commits the payloads, the feed and a `publish.json` marker to
@@ -296,7 +296,7 @@ camelot project new camelot-hills --dir ~/daoc --client "$DAOC_CLIENT" \
 # 3. this machine's answers, derived from that config
 camelot project machine --dir ~/daoc/camelot-hills \
   --client "$DAOC_CLIENT" \
-  --db-config ~/daoc/forge-env-local/server/config/serverconfig.xml
+  --db-config ~/daoc/env-local/server/config/serverconfig.xml
 camelot project check --dir ~/daoc/camelot-hills --no-live
 
 # 4. the environment's database, from OpenDAoC's baseline
@@ -344,8 +344,7 @@ travel to the server.
 
 The one action the server can be told remotely is a **shutdown** (the Console's
 Restart, which needs a supervisor to bring the server back). `/reload`, messages
-and kicks are in-game GM commands; there is no console stdin
-(`notes/console.md` §D5).
+and kicks are in-game GM commands; there is no console stdin.
 
 ### Who signed the release
 
@@ -369,7 +368,7 @@ the signature to the commit beside it.
 On the server, copy the `.pub` and name it:
 
 ```sh
-scp ~/daoc/keys/camelot-release.pub forge:/srv/forge/keys/
+scp ~/daoc/keys/camelot-release.pub server:/srv/forge/keys/
 # Console:   --release-key /keys/camelot-release.pub   (or CAMELOT_CONSOLE_RELEASE_KEY)
 # the job:   CAMELOT_RELEASE_KEY=/keys/camelot-release.pub
 ```
@@ -455,6 +454,11 @@ waits for the process to exit, renames the install to `.old-<version>`, moves
 the staged folder in, starts the new process, and removes the old folder. A
 failed move restores it.
 
+On first open the page updates the **client** by itself when the feed publishes
+a newer version; Play opens when that update is done. The launcher's own
+**Restart and update** is separate: it appears only when the shard publishes a
+new launcher package.
+
 Hand out: the launcher package and the client. The client is the shard's own
 business (the game is not redistributable). Every player has to start from the
 **same base client** the desk fingerprints in `project.json`, because the feed
@@ -510,8 +514,8 @@ Five things to get right:
 - the feed has no `ports` mapping. Coolify's proxy reaches the container on the
   compose network; a host proxy needs an override with a `ports` mapping.
   Publishing `8080` on the host is what produces `port is already allocated`;
-- `core` runs with `restart: unless-stopped`, so the Console's Restart brings the
-  server back and the plugin applies the release;
+- `core` runs with `restart: unless-stopped`, so the Console's **Install update**
+  and **Restart** bring the server back and the plugin applies the release;
 - `camelot-bootstrap` and `camelot-core` are one-shot jobs. Both carry
   `restart: "no"`; without it a job that exited 0 is restarted in a loop.
 
@@ -521,7 +525,7 @@ On the desk, add the VPS to `machine.json` with `"client": false` and no client
 path:
 
 ```json
-"production": { "root": "/srv/forge/env", "client": false, "database": "forge_project_production" }
+"production": { "root": "/srv/forge/env", "client": false, "database": "camelot_hills_production" }
 ```
 
 The dry run then names the release's client half as the feed's and hands over
@@ -557,7 +561,7 @@ already there.
 | `the environment holds bytes this release does not record` | someone edited the server's files by hand; the pull refuses rather than overwrite |
 | `camelot studio` says the machine is not ready | `machine.json` is missing or names something the tool cannot reconcile. `camelot project check` lists each field; `camelot project machine` writes the missing answers. |
 | `an update is waiting — the client is at N, the shard publishes M` | the player's launcher refused Play until the client updates; it starts the update by itself when the page opens |
-| `release 0006 cannot be reversed while release 0007 is applied` | the newer release's values would be written over: reverse the newest first (`S §D17`) |
+| `release 0006 cannot be reversed while release 0007 is applied` | the newer release's values would be written over: reverse the newest first |
 | `release 0007 is not applied to this environment` | there is nothing to put back — the reversal needs the state the apply wrote |
 | `the feed does not say where the game is` | the feed was served without `launcher.json` or without `CAMELOT_GAME_SERVER` |
 | `[Errno 111] Connection refused` on `:5000` | OpenDAoC's API is off (`atlas_api`), failed to bind, or is on another port. The image's .NET default is 8080; the server install pins `ASPNETCORE_URLS=http://127.0.0.1:5000`. |

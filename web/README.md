@@ -10,14 +10,14 @@ Design system: vanilla CSS adapted from Pictiúr's tokens (dark theme,
 
 ## Destinations
 
-| Route | What it is |
-|---|---|
-| `/home` | what the daemon serves, the machine's projects, the ways in |
-| `/world` | the world editor: regions, zones, terrain, fixtures, placements |
-| `/` | Figures: the asset library, the drop zone, the viewer, the inspector |
-| `/builder` | the native fig3 character builder |
-| `/deploy` | the releases the project cut, the dry run against an environment, the feed |
-| `/render` | offscreen renders, for the screenshot harness |
+| Route      | What it is                                                           |
+| ---------- | -------------------------------------------------------------------- |
+| `/home`    | what the daemon serves, the machine's projects, the ways in          |
+| `/world`   | the world editor: regions, zones, terrain, fixtures, placements      |
+| `/`        | Figures: the asset library, the drop zone, the viewer, the inspector |
+| `/builder` | the native fig3 character builder                                    |
+| `/deploy`  | publish the pending edits, test them locally, inspect the feed       |
+| `/render`  | offscreen renders, for the screenshot harness                        |
 
 ## Stack
 
@@ -55,7 +55,8 @@ For front-end work, Vite proxies `/api` to the daemon
 pnpm dev                              # terminal 2 (localhost:5173)
 ```
 
-The daemon reads `build/` per request, so a rebuild needs no restart.
+The daemon serves the `build/` it found at startup: run `pnpm build`, then
+restart the daemon.
 
 ## Using it
 
@@ -93,6 +94,5 @@ src/
 └── routes/                     # home, world, builder, deploy, render, figures
 ```
 
-`AGENTS.md` § Browser verification and § The Playwright MCP cover how a change
-here gets checked: the probes under `scripts/` are the contract, and the MCP
-drives a real browser for what they do not assert.
+`AGENTS.md` § Browser checks and the probes under `scripts/` cover how a change
+here gets checked.

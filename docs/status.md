@@ -21,11 +21,11 @@ contributor or agent reads this, then `AGENTS.md` for the repo rules.
 | `camelot client patch [--max-id N] [--restore]` | raise the client's model-id ceiling in place (unmanaged clients; `.orig` backup, byte-exact restore) |
 | `camelot server export --out F [--config C\|--dsn D]` | export the server's world rows (`mob`/`worldobject`/`door`/`path`) to a snapshot the viewer reads; needs `pymysql` (extra `mysql`) |
 | `camelot server tables` | the server tables this project owns — the map the Installer validates a release against |
-| `camelot project new\|machine\|check\|info\|verify\|import\|populate\|release\|releases\|deploy\|promote\|publish\|envs` | the project: one server's whole content in one folder (release, dry run, deploy to an environment); `machine` writes this machine's `machine.json` from an environment's `serverconfig.xml`, `check` reads it back and probes the database, and both refuse a config that opens another database than the environment names; `publish` commits a release's payloads and its feed to the `camelot-deploy` branch — the transport a server this machine does not reach pulls (D §D2/§D5) — and **signs the release record** with `machine.json`'s `release_key` (D §D7) |
-| `camelot env provision\|status\|verify\|apply\|reverse\|reload [ENV]` | an environment's server half: its own database built from OpenDAoC's baseline, what it holds, the Installer's step, the read-back; an environment declared `"client": false` in `machine.json` is **server-only** — the client half belongs to the feed (D §D3); `reverse` puts back what one release replaced, in one transaction, and withdraws it from the folder and the ask (S §D17) |
+| `camelot project new\|machine\|check\|info\|verify\|import\|populate\|release\|releases\|deploy\|promote\|publish\|envs` | the project: one server's whole content in one folder (release, dry run, deploy to an environment); `machine` writes this machine's `machine.json` from an environment's `serverconfig.xml`, `check` reads it back and probes the database, and both refuse a config that opens another database than the environment names; `publish` commits a release's payloads and its feed to the `camelot-deploy` branch — the transport a server this machine does not reach pulls — and **signs the release record** with `machine.json`'s `release_key` |
+| `camelot env provision\|status\|verify\|apply\|reverse\|reload [ENV]` | an environment's server half: its own database built from OpenDAoC's baseline, what it holds, the Installer's step, the read-back; an environment declared `"client": false` in `machine.json` is **server-only** — the client half belongs to the feed; `reverse` puts back what one release replaced, in one transaction, and withdraws it from the folder and the ask |
 | `camelot serve [--root DIR] [--port N] [--server-rows F] [--db-config F] [--db-write] [--env N] [--edits D] [--no-open]…` | local daemon: indexes the client, serves the viewer + a JSON API (FastAPI/uvicorn); with no root it starts the **front door** (Home, no client: the create modal names one and the daemon adopts it); with `--project`, the client and the environment's `db_config` come from `machine.json` (`--env`, default `local`); `--server-rows` (a snapshot) or `--db-config` (the server's own `serverconfig.xml`, live) adds the server's rows, read-only; `--edits` turns on the **world editor** (6.3: select, move/rotate/scale with snap, catalog add, remove, the undo journal, `build`/`apply`/`revert`/`restore`); `--db-write` lets it also patch the server's **existing** world rows (B2: a keep's own doors move with the keep) |
 | `camelot studio [DIR] [--env N] [--edit] [--port N] [--no-open] [--no-live]` | the desk's one verb: reads `machine.json`, runs the same walk as `project check` (and refuses before starting on a missing file, a config that opens another database, or a database that does not answer), then starts the daemon and opens the browser; `--edit` adds `--db-write` |
-| `camelot console --root DIR […]` | the running server's Console (P7): one **Install update** button (pull, restart, then wait for the Installer's state), the players connected by name, the applied release and rows, the reload recorded in the project's log, the feed's version, the game port and the read API; **Pull** and **Restart** remain as separate actions, and `--allow-restart` enables the shutdown a supervisor turns into a restart; `--deploy` enables the pull — fetch the `camelot-deploy` branch, check who signed the release record, verify its hashes, hand the server half over, write the wanted marker, mirror the feed (D §D4); `--release-key` is the operator's `.pub`, and without one the page says the server does not check signatures (D §D7); **Reverse** writes the ask for the other direction (`reverse.json`, honoured by the Installer's step, S §D17); one audit line per attempt; a password is required beyond loopback |
+| `camelot console --root DIR […]` | the running server's Console: one **Install update** button (pull, restart, then wait for the Installer's state), the players connected by name, the applied release and rows, the reload recorded in the project's log, the feed's version, the game port and the read API; **Pull** and **Restart** remain as separate actions, and `--allow-restart` enables the shutdown a supervisor turns into a restart; `--deploy` enables the pull — fetch the `camelot-deploy` branch, check who signed the release record, verify its hashes, hand the server half over, write the wanted marker, mirror the feed; `--release-key` is the operator's `.pub`, and without one the page says the server does not check signatures; **Reverse** writes the ask for the other direction (`reverse.json`, honoured by the Installer's step); one audit line per attempt; a password is required beyond loopback |
 
 The server side also ships as containers: `deploy/compose.yaml` is one entry
 point that `include`s the three parts, and each part runs alone — `server/`
@@ -49,10 +49,10 @@ folder, compiled at boot, run through `IDatabaseUpdater`.
 It honours the Console's ask, applies what the folder holds oldest first, writes
 the same `state.json`, `applied/` and `reversed/` the desk's CLI writes, and
 never lets a failure reach `UpdateDatabase()` — a thrown exception there is a
-server that will not start (S §D10). Both ways of running it produce one folder
+server that will not start. Both ways of running it produce one folder
 and one state; the Console cannot tell them apart.
 
-A release travels **signed** (`camelot/sign.py`, D §D7): `publish` signs the
+A release travels **signed** (`camelot/sign.py`): `publish` signs the
 release record with `ssh-keygen -Y` (OpenSSH's SSHSIG, Ed25519, namespace
 `camelot-release`) and the signature rides in the branch beside it; `pull` checks
 it against the operator's `.pub` **before** it believes the hashes the record
@@ -162,8 +162,8 @@ meaningless. A target that cannot yet express a figure records it under
 silently.
 
 **Not yet done**: NIF *writing*; the Phase 5 in-client ladder has run
-(P5-A…P5-F pass; see the workspace report
-`notes/test-p5-report.md`), with P5-F's server half still to be
+(P5-A…P5-F pass; the Phase 5 report is with the project's notes), with P5-F's
+server half still to be
 replayed through the loader with an in-band `Model`. A stock client cannot
 load the Studio-authored GLBs (it reads NIF from MPAK), so deploying new
 *assets* still waits on a NIF writer. Deploying new *server data* does not:
@@ -221,9 +221,9 @@ meshes and sheets resolve by stem (`britlog.tga` → `zones/nifs/BRITLOG.dds`),
 and its ground layers are typed too (`texture_patches`, `patch_masks` —
 `formats.md` §11). 6.1 measured that **the client reads `csvNNN.mpk`** for a
 zone's CSV entries and that a tool-rewritten zone archive is accepted and
-byte-exactly reversible. The world editor's design is the private
-workspace's `notes/phase6-world-editor.md`; the formats are in
-`formats.md` §11.
+byte-exactly reversible. The formats are in
+`formats.md` §11; the editor's rules are in `camelot/serve/editor.py` and
+`docs/admin.md`.
 
 **The world API and `/world`** (Phase 6.2, 2026-10-11): the daemon grows a
 world service (`serve/world.py`, `serve/models.py`). `GET /world/index` lists
@@ -281,10 +281,10 @@ composition model pinned). The screenshot harness is
 
 
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the
-1.127 client under Wine: a rewritten container, modified table data and a new
+with the 1.127 client under Wine: a rewritten container, modified table data and a new
 model id all reach the world, and the loader's server half deploys the
-matching row and spawn. Records — including the traps this run paid for — are
-in `workspace/notes/`.
+matching row and spawn. The format notes in `formats.md` record the traps this
+run paid for.
 
 ## Architecture decisions
 
@@ -339,8 +339,8 @@ The tiers are not a hand-kept list: `core/tests/conftest.py` tags every test
 that asks for the `client_dir` fixture `corpus`, and the tier's heavy builds
 (the player manifest, its glTF artifacts, the `camelot contract` run) are
 session fixtures shared across tests — the reproducibility tests build again
-on purpose, since that comparison is what they assert. Measured on the
-workshop machine, 2026-10-12: the full sequential run was 666 s, 72 % of it
+on purpose, since that comparison is what they assert. Measured on a test
+machine, 2026-10-12: the full sequential run was 666 s, 72 % of it
 two files rebuilding the contract pack per test; it now runs in ~2:30 on six
 workers (561 passed / 1 skipped), and the inner loop is ~8 s (385 passed /
 1 skipped / 176 deselected). `pytest-xdist` is the one added dev dependency.
@@ -352,13 +352,12 @@ Dated baselines: the V2 corpus run of 2026-10-07 was 390 passed / 4 failed
 (the failures: a changed `Boar_CATA` animation link, two legacy version
 expectations, one Ettin bbox golden; they await a data/test decision). On the
 test machine's **completed corpus** (a pristine copy of the OpenDAoC 1.127
-client — the recipe and its hashes are in the workspace's
-`notes` §2.3) the suite was **535 passed / 0 failed** with
-Phase 6.0, then **554 passed / 0 failed** with 6.2's world API (2026-10-11),
-with `OPENDAOC_RACE_SQL` pointing at OpenDAoC-Database's `race.sql`; without
-it one test skips. The web suite is 47 passed / 3 skipped, `pnpm check`
-reports zero errors and three existing warnings (measured on the test
-machine, 2026-10-11).
+client — the recipe and its hashes are with the project's notes) the suite was
+**535 passed / 0 failed** with Phase 6.0, then **554 passed / 0 failed** with
+6.2's world API (2026-10-11), with `OPENDAOC_RACE_SQL` pointing at
+OpenDAoC-Database's `race.sql`; without it one test skips. The web suite is
+138 passed / 3 skipped, `pnpm check` reports zero errors and zero warnings (the
+counts move as tests are added; the commands above are the contract).
 
 ## Known limits
 
@@ -469,14 +468,13 @@ male Troll (`tro_m`) resolves `Cat_troll_idle.kfa`, whose absolute
 translations sit 1.8-3.6 units off `tro_m_skeleton.nif` and sheared the face.
 The native path gates such clips (`gltf.FOREIGN_RIG_MEAN_TOL`): the
 translations are dropped and the idle plays rotations-only. Which clip the
-live client plays for the male Troll player is still to confirm
-(the private workshop's `character-rules.md` §8.18).
+live client plays for the male Troll player is still to confirm.
 
 ## Environment gotchas
 
-- **Browser verification**: Playwright is the default tool (headless, via the
-  `web-verifier` subagent). Chrome DevTools MCP is reserved for real logged-in
-  sessions only — routine UI checks must not open a browser on the host.
+- **Browser verification**: Playwright is the default tool (headless). The
+  probes under `web/scripts/` are the contract; routine UI checks do not open a
+  browser on the host.
 - The venv (`camelot-studio/.venv`) is created by `bootstrap.sh`, which
   patches pyffi for Python ≥3.12: `setuptools` (distutils shim) and
   `time.clock() → time.perf_counter()` in pyffi's
@@ -506,7 +504,7 @@ live client plays for the male Troll player is still to confirm
    fig3 parts, items and `.kfa` animations imported and exported from Blender.
 
 The dated record of how each of these was reached — the slices, the UX passes,
-the measurements — is the private workspace's `blog.md`.
+the measurements — is kept with the project's own notes.
 
 ## Command cheat sheet
 

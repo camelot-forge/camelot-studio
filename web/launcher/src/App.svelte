@@ -181,7 +181,7 @@
 </script>
 
 <main>
-	<h1>{state?.shard?.shard || 'Camelot Forge'}</h1>
+	<h1>{state?.shard?.shard || 'Camelot Studio'}</h1>
 	<p class="where">
 		{state?.shard?.server ? state.shard.server : 'no game address yet'} · launcher{state?.launcher
 			?.installed

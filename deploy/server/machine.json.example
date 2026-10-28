@@ -4,7 +4,7 @@
     "production": {
       "root": "/env",
       "client": false,
-      "database": "forge_project_production",
+      "database": "camelot_hills_production",
       "baseline": "/baseline"
     }
   }

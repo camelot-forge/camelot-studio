@@ -1,7 +1,8 @@
 # Camelot Studio
 
 An open-source tool suite for authoring, versioning, releasing and shipping the
-content of an OpenDAoC server and its client.
+content of an OpenDAoC server and its client. The repository is `camelot-studio`;
+the desk application is **Camelot Studio** (`camelot studio`).
 
 One project folder holds a shard's whole content. Every edit lands in a journal;
 a **release** is cut from a range of that journal and travels unchanged through
@@ -16,12 +17,16 @@ boundaries.
 ## Quick start
 
 ```sh
-git clone git@github.com:camelot-forge/camelot-studio.git
+git clone https://github.com/camelot-forge/camelot-studio.git
 cd camelot-studio
 ./bootstrap.sh                             # .venv, pyffi patched, core/ installed
 .venv/bin/camelot --help
 export DAOC_CLIENT="/path/to/DAOC CLIENT V2"
 ```
+
+`bootstrap.sh` needs Python 3.11+ and network access on the first run. The
+browser interface also needs Node 20+ and `pnpm` (`cd web && pnpm install &&
+pnpm build`).
 
 The suite runs on Linux and macOS. `docs/install.md` walks the whole install,
 desk and server; `docs/admin.md` is the runbook once it is done.
@@ -32,11 +37,11 @@ desk and server; `docs/admin.md` is the runbook once it is done.
 camelot-studio/
 ├── core/            # Python 3.11+: the camelot CLI, and every binary format
 ├── web/             # Svelte + three.js: the world editor, the figure viewer
-│   └── launcher/    # the players' page: one feed, Update, Play
+│   └── launcher/    # the players' page: one feed, automatic updates, Play
 ├── deploy/          # the server stack: MariaDB, OpenDAoC, the feed, the Console
 ├── packaging/       # the players' launcher package (PyInstaller)
 ├── server-bridge/   # the Installer: the C# plugin an OpenDAoC server runs
-├── addon/           # (M2) Blender addon: a UI shell around core/
+├── addon/           # planned: a Blender addon around core/
 └── docs/            # format specs, the runbook, the status
 ```
 
@@ -56,7 +61,7 @@ Layer contract: **glTF + JSON**. Binary formats live only in `core/`; `web/`,
 # this machine's answers (client, database, key), then read them back
 .venv/bin/camelot project machine --dir camelot-hills \
   --client "$DAOC_CLIENT" \
-  --db-config ~/daoc/forge-env-local/server/config/serverconfig.xml \
+  --db-config ~/daoc/env-local/server/config/serverconfig.xml \
   --release-key ~/daoc/keys/camelot-release
 .venv/bin/camelot project check --dir camelot-hills
 
@@ -70,8 +75,8 @@ Every patch records the originals it read, so a revert is exact. With no path it
 opens this folder, then the newest recent project, then Home.
 
 The same loop is in the interface: Home creates a project (client, and the
-environment's `serverconfig.xml`), Deploy cuts and ships, the Shard card holds the
-feed URL and the game address.
+environment's `serverconfig.xml`), Deploy publishes the pending edits, and the
+settings fold holds the feed URL and the game address.
 
 ```sh
 .venv/bin/camelot project release --dir camelot-hills      # cut the next release
@@ -165,25 +170,29 @@ release.
 
 - `docs/install.md` — installing the suite: the desk and the server.
 - `docs/coolify.md` — deploying the server on Coolify: the compose application,
-  the GitHub App, the domain and the first Pull.
+  the GitHub App, the domain and the first update.
 - `docs/admin.md` — running a shard: the daily flow, backups, and what each
   refusal means.
 - `docs/formats.md` — DAoC client format reference.
-- `docs/status.md` — project state, limits, and the evidence behind each claim
-  (a path under `workspace/` names the private repository where it was
-  measured).
+- `docs/status.md` — project state, limits, and the evidence behind each claim.
 - `AGENTS.md` — repo rules for contributors and agents.
 
 ## Contributing
 
+The rules are in [AGENTS.md](AGENTS.md); the short version is in
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ```sh
 .venv/bin/python -m pytest core/tests -q     # corpus tests skip without DAOC_CLIENT
-cd web && pnpm install && pnpm test && pnpm check && pnpm lint
+cd web && pnpm install && pnpm test && pnpm check && pnpm lint && pnpm build
 ```
 
-`AGENTS.md` is the rulebook: engine fidelity, a test per feature, the document
-voice, and what may be committed.
+## Security
+
+Report a vulnerability through [SECURITY.md](SECURITY.md). Do not open a public
+issue for a secret, a live server, or a way to write outside a project folder.
 
 ## License
 
-MIT (pyffi is BSD-3; no game assets are distributed).
+MIT (pyffi is BSD-3; no game assets are distributed). Third-party notices,
+including the font licence, are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -1,7 +1,7 @@
 # The Console
 
-What is live on a running server, read from the Installer's own state
-(`notes/console.md` §D3), plus the one action an admin needs: **Install
+What is live on a running server, read from the Installer's own state, plus the
+one action an admin needs: **Install
 update** — pull the published release, restart the game server, and wait for
 the Installer to record it. The page also shows who is connected, by name. The
 underlying Pull, Restart and Reverse actions remain available in the page's

@@ -1,7 +1,7 @@
 # The feed service
 
 Serves a published feed and rewrites its two environment-specific values on the
-way out (`notes/deployment.md` §D3). The feed directory stays
+way out. The feed directory stays
 URL-agnostic: the same files work locally and online.
 
 ## Local

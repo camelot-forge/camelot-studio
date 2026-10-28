@@ -1,4 +1,4 @@
-# Installing Camelot Forge
+# Installing Camelot Studio
 
 Installs the desk and the server. `docs/admin.md` is the runbook once this is
 done, and `deploy/README.md` maps the containers.
@@ -38,6 +38,7 @@ fetch content over HTTP from the feed.
 
 - Linux or macOS.
 - Python 3.11 or later.
+- Node 20 or later and `pnpm`, for the browser interface.
 - `git`, and OpenSSH 8.0 or later. `ssh -V` prints the version; 8.0 is where
   `ssh-keygen -Y` appears, which signs releases.
 - A DAoC client, the full install.
@@ -59,10 +60,12 @@ fetch content over HTTP from the feed.
 ### 2.1 The studio
 
 ```sh
-git clone git@github.com:camelot-forge/camelot-studio.git
+git clone https://github.com/camelot-forge/camelot-studio.git
 cd camelot-studio
-./bootstrap.sh                      # creates .venv, patches pyffi, installs core/ editable
+./bootstrap.sh                      # .venv, pyffi patched, core/ and its extras
 .venv/bin/camelot --help
+
+cd web && pnpm install && pnpm build   # the browser interface
 ```
 
 `bootstrap.sh` needs the network once. Every command below is
@@ -128,11 +131,11 @@ environment.
   "client": "/home/you/daoc/clean-client",
   "environments": {
     "local": {
-      "root": "/home/you/daoc/forge-env-local",
-      "database": "forge_project_local",
+      "root": "/home/you/daoc/env-local",
+      "database": "camelot_hills_local",
       "baseline": "/home/you/daoc/OpenDAoC-Database/opendaoc-db-core",
       "db": { "host": "127.0.0.1", "port": 3307, "user": "root" },
-      "db_config": "/home/you/daoc/forge-env-local/server/config/serverconfig.xml"
+      "db_config": "/home/you/daoc/env-local/server/config/serverconfig.xml"
     },
     "production": {
       "root": "/srv/forge/env",
@@ -150,7 +153,7 @@ Write the file with the tool:
 ```sh
 .venv/bin/camelot project machine --dir ~/daoc/camelot-hills \
   --client "$DAOC_CLIENT" \
-  --db-config ~/daoc/forge-env-local/server/config/serverconfig.xml \
+  --db-config ~/daoc/env-local/server/config/serverconfig.xml \
   --release-key ~/daoc/keys/camelot-release
 .venv/bin/camelot project check --dir ~/daoc/camelot-hills
 ```
@@ -202,8 +205,9 @@ Three things it needs from you:
   pointing at the database `provision` created. That folder *is* the
   environment's server half, so the server's files belong there.
 
-Put the server under a supervisor. The Console's **Restart** sends a shutdown, so
-without something to start it again that action is a stop.
+Put the server under a supervisor. The Console's **Restart** and **Install
+update** send a shutdown, so without something to start it again that action is
+a stop.
 
 ```ini
 # ~/.config/systemd/user/camelot-server.service
@@ -212,8 +216,8 @@ Description=The shard
 After=network-online.target
 
 [Service]
-WorkingDirectory=/home/you/daoc/forge-env-local/server
-ExecStart=/home/you/daoc/forge-env-local/server/CoreServer
+WorkingDirectory=/home/you/daoc/env-local/server
+ExecStart=/home/you/daoc/env-local/server/CoreServer
 Restart=always
 RestartSec=3
 
@@ -267,7 +271,7 @@ A caller that passes everything explicitly — CI, a container, a machine with n
 
 ```sh
 .venv/bin/camelot serve --project ~/daoc/camelot-hills --root "$DAOC_CLIENT" \
-  --db-config ~/daoc/forge-env-local/server/config/serverconfig.xml --db-write
+  --db-config ~/daoc/env-local/server/config/serverconfig.xml --db-write
 ```
 
 `--server-rows <snapshot>` replaces the live database with an export
@@ -313,7 +317,7 @@ without trusting the branch it pulled from.
 bootstrap job. It needs no prepared directory tree.
 
 ```sh
-git clone git@github.com:camelot-forge/camelot-studio.git
+git clone https://github.com/camelot-forge/camelot-studio.git
 cd camelot-studio/deploy/install
 ./install.sh          # writes .env, generates the passwords, and exits
 $EDITOR .env          # the five FILL values
@@ -350,7 +354,7 @@ Installer writes there, the Console asks there, and it is the part to back up.
 The `camelot-core` job is built from `core/`, so the server gets the source:
 
 ```sh
-git clone git@github.com:camelot-forge/camelot-studio.git /srv/forge/studio
+git clone https://github.com/camelot-forge/camelot-studio.git /srv/forge/studio
 cd /srv/forge/studio/deploy
 cp .env.example .env
 $EDITOR .env
@@ -391,7 +395,7 @@ The Console checks signatures with the operator's public key. Copy it to the
 server; it is public, so copying is the whole distribution.
 
 ```sh
-scp ~/daoc/keys/camelot-release.pub forge:/srv/forge/keys/
+scp ~/daoc/keys/camelot-release.pub server:/srv/forge/keys/
 ```
 
 Two values in `.env`: the host directory that holds the keys, and the path the
@@ -407,15 +411,15 @@ The Console is on `http://127.0.0.1:8770/`, authenticated as `operator` with
 Installer's state, the feed's version, the game port and the API, and it writes
 three things: the handover, the audit, and the asks.
 
-With `CAMELOT_RELEASE_KEY` set, **Pull** checks the signature before it believes
-the hashes and refuses a release nobody signed. With it empty, the page says the
-server does not check, every time it loads.
+With `CAMELOT_RELEASE_KEY` set, the Console's **Install update** checks the
+signature before it believes the hashes and refuses a release nobody signed.
+With it empty, the page says the server does not check, every time it loads.
 
 ### 4.5 After a reboot
 
 `core` runs with `restart: unless-stopped`, so the container is its own
-supervisor and the Console's **Restart** works. What has to come back at boot is
-the stack itself:
+supervisor and the Console's **Restart** and **Install update** work. What has
+to come back at boot is the stack itself:
 
 ```sh
 sudo systemctl enable docker     # or podman, whichever runs the stack

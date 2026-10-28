@@ -7,7 +7,7 @@
 # one command; Coolify or another PaaS can deploy this file with the same env.
 #
 # Ownership stays split: OpenDAoC is its pinned image (CAMELOT_CORE_IMAGE), and
-# Camelot Forge is the three images built from this checkout. Each side moves
+# Camelot Studio is the three images built from this checkout. Each side moves
 # on its own version.
 
 name: camelot-install
