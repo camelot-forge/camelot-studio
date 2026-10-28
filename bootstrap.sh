@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 PY="${PYTHON:-python3}"
 
 "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' || {
-    echo "error: Python 3.11 or newer is required" >&2
+    echo "error: Python 3.11 or newer is required (set PYTHON=python3.11 to choose an interpreter)" >&2
     exit 1
 }
 
