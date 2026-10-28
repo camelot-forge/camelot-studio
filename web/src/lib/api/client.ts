@@ -35,10 +35,6 @@ export interface AssetSummary {
 	entry: string | null;
 }
 
-export interface AssetDetail extends AssetSummary {
-	metadata: Record<string, unknown>;
-}
-
 export interface CharacterOptions {
 	race: string;
 	race_id: number;
@@ -100,7 +96,7 @@ export interface AssetQuery {
 	limit?: number;
 }
 
-// --- Home, the front door (P2 slice 2a, `notes/home.md`) --------------
+// --- Home, the front door (P2 slice 2a) ---------------------------------------
 
 export interface HomeDaemon {
 	version: string;
@@ -250,40 +246,12 @@ export interface DeployPlan {
 	refusals: string[];
 }
 
-/** The plan executed: the outcome, the files written, the log line. */
-export interface DeployOutcome {
-	plan: DeployPlan;
-	outcome: string;
-	wrote: string[];
-	fact: DeployLogLine;
-}
-
-/** One environment read back (`pipeline.md` §D11). */
-export interface DeployVerify {
-	env: string;
-	root: string;
-	release: number | null;
-	server: { release: number | null; files: { what: string; ok: boolean }[] };
-	client: { ok: boolean | null; problems: string[]; installs: string[] };
-	problems: string[];
-	ok: boolean;
-}
-
 /** What the page asks the pipeline: which release, which environment. */
 export interface DeployAsk {
 	release: number;
 	env: string;
 	adopt?: boolean;
 	source?: string;
-}
-
-/** A cut, as the page learns it back (`pipeline.md` §2). */
-export interface DeployCut {
-	number: number;
-	cut_at: string;
-	families: Record<string, number>;
-	order: string;
-	needs: { reload?: string[]; restart?: boolean };
 }
 
 export interface DeployPage {
@@ -800,17 +768,13 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 
 export const api = {
-	base: getApiBase,
 	health: (signal?: AbortSignal) => get<Health>('/health', signal),
 	root: (signal?: AbortSignal) => get<RootInfo>('/root', signal),
 	assets: (params: AssetQuery = {}, signal?: AbortSignal) =>
 		get<AssetPage>(`/assets${queryString({ ...params })}`, signal),
-	detail: (id: string, signal?: AbortSignal) =>
-		get<AssetDetail>(`/assets/${encodeURIComponent(id)}`, signal),
 	modelUrl: (id: string, skinned = false) =>
 		`${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/model${skinned ? '?skinned=true' : ''}`,
 	skinUrl: (id: string) => `${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/skin`,
-	animUrl: (id: string) => `${getApiBase()}/api/v1/assets/${encodeURIComponent(id)}/anim`,
 	characterOptions: (raceId: number, female: boolean, signal?: AbortSignal) =>
 		get<CharacterOptions>(`/character/${raceId}/${female ? 'true' : 'false'}/options`, signal),
 	characterTextureUrl: (
@@ -966,9 +930,6 @@ export const api = {
 	// --- the pipeline (P4) -------------------------------------------------
 	deploy: (signal?: AbortSignal) => get<DeployPage>('/deploy', signal),
 	deployPlan: (ask: DeployAsk) => send<DeployPlan>('POST', '/deploy/plan', ask),
-	deployPush: (ask: DeployAsk) => send<DeployOutcome>('POST', '/deploy/deploy', ask),
-	deployCut: () => send<DeployCut>('POST', '/deploy/cut'),
-	deployVerify: (env: string) => send<DeployVerify>('POST', '/deploy/verify', { env }),
 	deployPublish: (remote = 'origin') =>
 		send<{ progress: DeployPublish }>('POST', '/deploy/publish', { remote }),
 	deployPublishProgress: () => get<{ progress: DeployPublish }>('/deploy/publish'),

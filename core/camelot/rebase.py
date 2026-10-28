@@ -12,7 +12,6 @@ Nothing is written without one of them, and neither repairs an op.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from . import gamedata
@@ -25,9 +24,6 @@ __all__ = [
     "analysis",
     "keep_ours",
 ]
-
-#: A resource that belongs to one zone: `zones/zone000/csv000.mpk#fixtures.csv`.
-ZONE_IN_RESOURCE = re.compile(r"zones/zone(\d{3})/")
 
 
 class RebaseError(ValueError):

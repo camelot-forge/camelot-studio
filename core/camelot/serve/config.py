@@ -94,11 +94,5 @@ class ServeConfig:
             self.project = Path(self.project).expanduser()
 
     @property
-    def edits(self) -> Path | None:
-        """The older name of `project` (the 6.3 authoring directory). Read-only
-        on purpose: the field is the project now, and one name writes it."""
-        return self.project
-
-    @property
     def is_loopback(self) -> bool:
         return self.host in ("127.0.0.1", "localhost", "::1")

@@ -1030,32 +1030,6 @@ def _action_form(kind: str, action: dict, *, token: str | None = None) -> str:
     """
 
 
-def _page_actions(
-    document: dict,
-    *,
-    token: str | None = None,
-    action: str | None = None,
-    outcome: str | None = None,
-) -> str:
-    actions = document.get("actions") or {}
-    found = []
-    chosen = OUTCOMES.get(str(action) or "", {})
-    if outcome in chosen:
-        label, text, kind = chosen[outcome]
-        found.append(f'<p>{_chip(label, kind)} {_e(text)}</p>')
-    found.append(_action_form("restart", actions.get("restart") or {}, token=token))
-    found.append(_action_form("pull", actions.get("pull") or {}, token=token))
-    found.append(_action_form("reverse", actions.get("reverse") or {}, token=token))
-    asked = (document.get("reverse") or {}).get("pending") or []
-    if asked:
-        numbers = ", ".join(f"{int(number):04d}" for number in asked)
-        found.append(
-            f'<p>{_chip("asked", "warn")} release {numbers} — the Installer\'s step has not '
-            "run yet.</p>"
-        )
-    return "\n".join(found)
-
-
 def _page_audit(document: dict) -> str:
     audit = document.get("audit")
     if audit is None:

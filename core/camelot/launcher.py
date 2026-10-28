@@ -19,7 +19,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import platform
 import re
 import shlex
 import shutil
@@ -947,7 +946,3 @@ def _default_page() -> str:
         if candidate.is_dir():
             return str(candidate)
     return str(here.parents[3] / "web" / "launcher" / "dist")
-
-
-def _default_platform() -> str:
-    return platform.system().lower()
