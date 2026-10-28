@@ -23,22 +23,29 @@ APP = "camelot-studio"
 
 def config_dir(app: str = APP) -> Path:
     """Per-user configuration: it survives a cache purge, so it is not the
-    cache directory (`home.md` §D1)."""
-    if sys.platform == "darwin":
+    cache directory. An explicit XDG_CONFIG_HOME wins on every platform."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        base = Path(xdg)
+    elif sys.platform == "darwin":
         base = Path.home() / "Library" / "Application Support"
     elif os.name == "nt":
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
     else:
-        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        base = Path.home() / ".config"
     return base / app
 
 
 def cache_dir(app: str = APP) -> Path:
-    """Per-user cache: safe to delete, recomputed on demand."""
-    if sys.platform == "darwin":
+    """Per-user cache: safe to delete, recomputed on demand. An explicit
+    XDG_CACHE_HOME wins on every platform."""
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        base = Path(xdg)
+    elif sys.platform == "darwin":
         base = Path.home() / "Library" / "Caches"
     elif os.name == "nt":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
     else:
-        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        base = Path.home() / ".cache"
     return base / app
