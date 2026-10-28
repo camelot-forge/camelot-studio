@@ -47,7 +47,7 @@ import time
 # The client-format readers (`kfa`, `nifutil` and their `pyffi` backbone) are
 # imported by the commands that read a client, never here: a server runs this
 # module for `env apply` and must not need a NIF parser to write rows
-# (`deploy/server/Dockerfile`, S §D10).
+# (`deploy/server/Dockerfile`).
 # `test_the_server_needs_no_client_reader_and_no_daemon` holds that line.
 
 SHAPE_TYPES = ("NiTriShape", "NiTriStrips")
@@ -326,7 +326,7 @@ def cmd_server(args) -> int:
     from . import serverrows, targets
 
     if getattr(args, "server_cmd", None) == "tables":
-        # The ownership map, as the Installer reads it (`server-install.md` §D4):
+        # The ownership map, as the Installer reads it:
         # content is ours, state is theirs.
         for name, facts in sorted(targets.OWNED_TABLES.items()):
             note = facts.get("client")
@@ -363,7 +363,7 @@ def cmd_server(args) -> int:
 
 def cmd_env(args) -> int:
     """An environment's server half: its own database and the folder the
-    Installer reads (`server-install.md` §D6)."""
+    Installer reads."""
     from pathlib import Path
 
     from . import envs, installer
@@ -487,7 +487,7 @@ def cmd_env(args) -> int:
             print(f"  evidence   {report['evidence']}")
             print(
                 "  note       a repair, not a rollback: the players' clients keep what "
-                "they downloaded — a step back for them is a new release (§D17)"
+                "they downloaded — a step back for them is a new release"
             )
             return 0
         if args.env_cmd == "reload":
@@ -510,7 +510,7 @@ def cmd_env(args) -> int:
 
 def print_applied(entries) -> None:
     """What the Installer's step did, one line per release: the counts the
-    operator reads, and the ritual the release names (`server-install.md` §D2)."""
+    operator reads, and the ritual the release names."""
     for entry in entries:
         told = [f"{entry['written']} row(s) written"]
         if entry["removed"]:
@@ -523,9 +523,8 @@ def print_applied(entries) -> None:
 
 
 def print_plan(table: dict) -> None:
-    """The dry run as the operator reads it (`pipeline.md` §3): the lines that
-    belong to the release, then one row per item — what, verdict, why — then
-    the count."""
+    """The dry run as the operator reads it: the lines that belong to the
+    release, then one row per item — what, verdict, why — then the count."""
     print(f"release {int(table['release']):04d} → {table['env']}  {table['root']}")
     print(f"  {'order':<9} {table['order']}")
     reloads = (table.get("needs") or {}).get("reload") or []
@@ -562,8 +561,8 @@ def _decision(args) -> str:
 
 
 def print_rebase(view: dict, decided: str = "") -> None:
-    """The re-base as the operator reads it (`project.md` §D17): what moved,
-    then the journal against the base as it stands."""
+    """The re-base as the operator reads it: what moved, then the journal
+    against the base as it stands."""
     print(f"{view['name']}  {view['root']}")
     print(f"  {'client':<9} {view['client']}")
     if view["clean"]:
@@ -1162,10 +1161,9 @@ def cmd_serve(args) -> int:
     )
     app = create_app(cfg)
 
-    # The project is one *checkout* and one writer (`project.md` §D13): this
-    # daemon claims it, or learns who holds it and runs read-only. The lock is
-    # the session's (`home.md` §D3): a switch hands it over, and it is dropped
-    # when the daemon stops.
+    # The project is one *checkout* and one writer: this daemon claims it, or
+    # learns who holds it and runs read-only. The lock is the session's: a
+    # switch hands it over, and it is dropped when the daemon stops.
     session = app.state.session
     if cfg.project is not None:
         from . import project as projects
@@ -2171,7 +2169,7 @@ def main(argv=None) -> int:
     rp_.add_argument("--dir", default=".", help="the project's directory (default: .)")
     rv_ = envp.add_parser(
         "reverse",
-        help="put back what one release replaced — a repair, not a rollback (S §D17)",
+        help="put back what one release replaced — a repair, not a rollback",
     )
     rv_.add_argument("env", nargs="?", default="local")
     rv_.add_argument("--dir", default=".", help="the project's directory (default: .)")
@@ -2226,7 +2224,7 @@ def main(argv=None) -> int:
     )
     p.add_argument(
         "--deploy",
-        help="the checkout of the deploy branch (enables the Pull action, D §D4)",
+        help="the checkout of the deploy branch (enables the Pull action)",
     )
     p.add_argument(
         "--deploy-remote",
@@ -2236,7 +2234,7 @@ def main(argv=None) -> int:
         "--release-key",
         dest="release_key",
         help="the operator's public key (.pub): with it, Pull refuses a release whose "
-        "signature does not check out (D §D7). Default: $CAMELOT_CONSOLE_RELEASE_KEY",
+        "signature does not check out. Default: $CAMELOT_CONSOLE_RELEASE_KEY",
     )
     p.add_argument(
         "--feed-out",
@@ -2328,7 +2326,7 @@ def main(argv=None) -> int:
         type=int,
         metavar="N",
         help="rebuild release N from the journal plus the base and compare the "
-        "bytes (pipeline.md §D5: what a CI job runs)",
+        "bytes (what a CI job runs)",
     )
     vp.add_argument("--env", help="read that environment back instead of the base")
     rb = pp.add_parser(
@@ -2374,7 +2372,7 @@ def main(argv=None) -> int:
     )
     ep = pp.add_parser("envs", help="the environments, and what each holds")
     ep.add_argument("--dir", default=".", help="the project's directory (default: .)")
-    fp2 = pp.add_parser("feed", help="what the players' launcher reads (C §D4)")
+    fp2 = pp.add_parser("feed", help="what the players' launcher reads")
     fp2.add_argument("--dir", default=".", help="the project's directory (default: .)")
     fp2.add_argument(
         "--base-url",
@@ -2395,7 +2393,7 @@ def main(argv=None) -> int:
     )
     fp2.add_argument("--read", action="store_true", help="only read the feed back")
     pub = pp.add_parser(
-        "publish", help="commit a release and its feed to the deploy branch (D §D5)"
+        "publish", help="commit a release and its feed to the deploy branch"
     )
     pub.add_argument("number", nargs="?", type=int, help="the release (default: the newest)")
     pub.add_argument("--dir", default=".", help="the project's directory (default: .)")
@@ -2419,9 +2417,7 @@ def main(argv=None) -> int:
         help="the private key that signs the release record (default: machine.json's "
         "release_key; without either, the release is published unsigned)",
     )
-    pl = pp.add_parser(
-        "pull", help="fetch the deploy branch, verify it, hand it over (D §D4)"
-    )
+    pl = pp.add_parser("pull", help="fetch the deploy branch, verify it, hand it over")
     pl.add_argument("--dir", default=".", help="the deploy checkout (default: .)")
     pl.add_argument("--env", help="the environment to hand over to (default: the only one)")
     pl.add_argument("--remote", help="fetch and fast-forward from this remote first")
