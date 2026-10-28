@@ -414,7 +414,8 @@ def test_paths_resolve_case_insensitively(client, tmp_path):
     clientinstall.install_pack(client, pack)
     assert _entry(client, "figures/skins/skin003.mpk", "boar.dds") == b"new-dds"
     assert _read(client, "figures/Boar.NIF") == b"new-boar"
-    assert not os.path.exists(_path(client, "figures/SKINS")), "no duplicate directory"
+    names = os.listdir(os.path.join(client, "figures"))
+    assert sum(name.casefold() == "skins" for name in names) == 1, "no duplicate directory"
 
 
 def test_update_replaces_the_version_and_prunes_the_store(client, tmp_path):
