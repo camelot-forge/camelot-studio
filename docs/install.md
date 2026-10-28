@@ -37,7 +37,7 @@ fetch content over HTTP from the feed.
 | What | Linux | macOS | Windows |
 |---|---|---|---|
 | Studio and CLI | supported | supported | WSL2 |
-| Server stack | supported | bench only | WSL2 or a Linux VM; bench only |
+| Server stack | supported | bench only | WSL2 or a Linux VM |
 | Players' launcher | Wine | not packaged | supported |
 
 CI runs the Python suite on Ubuntu and macOS, and the web suite on Ubuntu.
