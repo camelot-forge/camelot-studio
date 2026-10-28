@@ -1,7 +1,7 @@
 """The client's world: the zone index, the terrain, the placements (Phase 6.0).
 
 Everything here is read-only, and every rule is measured rather than assumed
-(2026-10-11, `notes/` in the private workspace):
+(2026-10-11, on the 1.127 client):
 
 - `zones/zones.mpk` carries `zones.dat`, the client's own index: 474 enabled
   zones across 358 regions, each with its name, region, `type` (0 normal,

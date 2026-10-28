@@ -14,7 +14,7 @@ Two consequences, and they are the reason for the shape:
 Both rules were written when a pack was a mod from a stranger; since
 2026-10-14 the product is one server's content suite (one project, numbered
 releases), so what they buy is smaller — but they are cheaper to keep than to
-prove unnecessary (the design: `workspace/notes/`).
+prove unnecessary.
 
 The **client section** is the payload's list of destinations: what the mod
 replaces on a player's machine (a loose file, an entry of an archive, a row
@@ -116,13 +116,12 @@ def deployment_bytes(doc: dict) -> bytes:
 # An item names one destination and the pack member carrying its bytes. Rows
 # are edited a field at a time rather than replaced whole, so two mods editing
 # different fields of one row compose; nothing here touches a byte the way a
-# table editor would have to (see `camelot.clientinstall` and the design in
-# the workspace, `notes/phase5-client-assets.md`).
+# table editor would have to (see `camelot.clientinstall`).
 
 #: The band a mod-added client id must live in: **1..2499** — every id the
 #: client can still resolve. The ceiling is 2500 because the client's model
 #: table is 2500 entries wide (measured 2026-10-10 by reading the running
-#: client's memory, `notes/client-memwatch.py`): a row at 2500
+#: client's memory): a row at 2500
 #: makes the client **stop parsing the table**, dropping every later row —
 #: which is why ids above the ceiling never rendered. The earlier readings (a
 #: signed 16-bit ceiling, then a 12-bit one) were both wrong.

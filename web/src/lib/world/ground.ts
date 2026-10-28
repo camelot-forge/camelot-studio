@@ -5,8 +5,7 @@
 // transform, a repeat count) and blends them with the masks
 // `patchXXYY-K.dds`, whose R/G/B channels carry layers 3K/3K+1/3K+2's
 // weights. The composition below is *measured* against the client's own bake
-// (`notes/layer-compose.py` diffs candidate models against
-// `texXX-YY.dds`, the client's own composite of those layers): layer 0 first,
+// (`texXX-YY.dds`, the client's composite of those layers): layer 0 first,
 // then every later layer lerped over the accumulated colour in ascending
 // order; a sheet repeats `tiles` times **across the zone** — the layer uv is
 // `((patch + uv) / 8) * tiles`, so `tiles = 256` is a 256-unit tile (a 512²

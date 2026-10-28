@@ -334,7 +334,7 @@ def build_router(config: ServeConfig, index: AssetIndex,
         absolute (rotations and translations), the way the client
         overwrites its node transforms. Partial fixes (dropping "static"
         channels, rebasing single bones) broke the pose chain — see
-        notes/character-rules.md and the skill."""
+        `camelot.playerfig` and `camelot.appearance`."""
         import tempfile
         from pathlib import Path as _Path
 

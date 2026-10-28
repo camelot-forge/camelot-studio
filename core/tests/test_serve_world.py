@@ -559,11 +559,11 @@ def test_a_database_that_is_down_is_named_with_its_address():
     class DriverError(Exception):
         pass
 
-    connection = {"host": "localhost", "port": 3307, "database": "forge_project_local"}
+    connection = {"host": "localhost", "port": 3307, "database": "camelot_hills_local"}
 
     assert _live_problem(DriverError(2003, "Can't connect"), connection) == (
         "no MySQL on localhost:3307 — the environment's database is not running"
     )
     assert "refused the credentials" in _live_problem(DriverError(1045, "denied"), connection)
-    assert "forge_project_local" in _live_problem(DriverError(1049, "unknown"), connection)
+    assert "camelot_hills_local" in _live_problem(DriverError(1049, "unknown"), connection)
     assert _live_problem(DriverError(9999, "odd"), connection).startswith("live database:")

@@ -1,7 +1,7 @@
 """Corpus tests for the appearance-resolution module.
 
-Skipped without ``$DAOC_CLIENT``; the assertions mirror the engine
-semantics documented in ``notes/character-rules.md`` §8.15 and §11.
+Skipped without ``$DAOC_CLIENT``; the assertions mirror the engine semantics
+documented in the client's tables and the module's docstring.
 """
 import pytest
 

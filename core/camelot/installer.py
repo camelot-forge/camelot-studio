@@ -393,7 +393,7 @@ def _recorded(value):
 
     Found against real MariaDB, 2026-10-18: the first release that patched a row
     crashed the apply on `Object of type datetime is not JSON serializable`, and
-    every release of the workshop's project until then had written zero rows.
+    every release of the project until then had written zero rows.
     """
     if value is None:
         return None

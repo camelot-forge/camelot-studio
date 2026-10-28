@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * Home (`notes/home.md`, draft 4): what this daemon serves, the three
+	 * Home: what this daemon serves, the three
 	 * ways in (open, create, import — plus clone), and the machine's projects
 	 * with the answer to *can I work here*.
 	 *
@@ -140,9 +140,7 @@
 				{#if payload.daemon.client}
 					<div class="chip" title="the client this daemon reads">
 						<HardDrive size={15} />
-						<span class="client"
-							>{payload.daemon.client.split('/').filter(Boolean).pop()}</span
-						>
+						<span class="client">{payload.daemon.client.split('/').filter(Boolean).pop()}</span>
 						<span class="zones">{payload.daemon.zones.toLocaleString()} zones</span>
 					</div>
 				{/if}

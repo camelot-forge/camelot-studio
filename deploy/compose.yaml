@@ -1,5 +1,5 @@
 # One entry point for a whole server: the database, OpenDAoC, the Installer's
-# job, the feed service and the Console (`notes/remote.md` §D5, §D10).
+# job, the feed service and the Console.
 #
 #   cp .env.example .env && $EDITOR .env
 #   docker compose up -d db

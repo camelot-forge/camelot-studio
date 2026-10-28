@@ -28,7 +28,7 @@ def _project(tmp_path, client=None):
     return pj.new(tmp_path / "avalon", name="Avalon", client=client)
 
 
-def _config(path, *, database="forge_project_local", port=3307):
+def _config(path, *, database="camelot_hills_local", port=3307):
     """`<root>/server/config/serverconfig.xml`, the shape `--db-config` names."""
     (path / "server" / "config").mkdir(parents=True, exist_ok=True)
     file = path / "server" / "config" / "serverconfig.xml"
@@ -65,7 +65,7 @@ def _ready(project, client, tmp_path):
             "environments": {
                 "local": {
                     "root": str(env_root),
-                    "database": "forge_project_local",
+                    "database": "camelot_hills_local",
                     "db": {"host": "localhost", "port": 3307, "user": "root"},
                     "db_config": str(config),
                 }
@@ -151,7 +151,7 @@ def test_a_config_that_opens_another_database_is_refused(tmp_path, base):
     mismatch = [item for item in findings if item["field"].endswith("#database")]
     assert mismatch and mismatch[0]["state"] == machine.INVALID
     assert "opendaoc" in mismatch[0]["detail"]
-    assert "forge_project_local" in mismatch[0]["detail"]
+    assert "camelot_hills_local" in mismatch[0]["detail"]
 
 
 def test_a_missing_file_is_one_actionable_line(tmp_path):
@@ -208,7 +208,7 @@ def test_write_derives_the_environment_from_the_config(tmp_path, base):
     assert written["client"] == str(base)
     assert written["release_key"] == str(key)
     assert local["root"] == str(env_root)
-    assert local["database"] == "forge_project_local"
+    assert local["database"] == "camelot_hills_local"
     assert local["db"] == {"host": "localhost", "port": 3307, "user": "root"}
     assert local["db_config"] == str(config)
     assert machine.failures(machine.check(project.root, live=False)) == []

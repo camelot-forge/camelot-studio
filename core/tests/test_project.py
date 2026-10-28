@@ -1,8 +1,8 @@
 """The project container: the file, the base, the lock, the scaffolding.
 
-The design is `workspace/notes/project.md`. None of this needs a
-client or the game: the base is a handful of files a fixture writes, which is
-the point of the format — a project is testable without 2.3 GB.
+None of this needs a client or the game: the base is a handful of files a
+fixture writes, which is the point of the format — a project is testable
+without 2.3 GB.
 """
 
 import json

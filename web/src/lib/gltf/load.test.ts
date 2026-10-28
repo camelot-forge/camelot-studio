@@ -52,13 +52,11 @@ describe('parseGlbContainer', () => {
 });
 
 // Corpus-style: reads the exported Boar artifacts if present (game-derived,
-// never committed). Point CAMELOT_GLTF_DIR at the export directory, or it
-// falls back to the exploratory workspace. Skips when the files are absent.
-const DIR =
-	process.env.CAMELOT_GLTF_DIR ??
-	'/Users/you/Documents/Git/camelot-forge/workspace/work';
-const present = existsSync(join(DIR, 'boar.gltf'));
-const textured = existsSync(join(DIR, 'model_Boar_tex.gltf'));
+// never committed). Point CAMELOT_GLTF_DIR at the export directory. Skips when
+// the variable is unset or the files are absent.
+const DIR = process.env.CAMELOT_GLTF_DIR ?? '';
+const present = DIR.length > 0 && existsSync(join(DIR, 'boar.gltf'));
+const textured = DIR.length > 0 && existsSync(join(DIR, 'model_Boar_tex.gltf'));
 
 describe.skipIf(!present)('glTF loading', () => {
 	it('links a node to the mesh (core exports a renderable mesh)', () => {

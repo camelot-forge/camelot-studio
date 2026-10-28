@@ -2,7 +2,7 @@
 
 Everything runs against synthetic client directories built with the MPAK
 writer, so no game file is needed. The in-client ladder validates the real
-thing separately (`notes`, phase 5).
+thing separately.
 """
 import gzip
 import io
@@ -481,12 +481,12 @@ def test_an_unreadable_running_client_still_refuses(client, tmp_path, monkeypatc
 
 
 def test_the_running_client_directory_parses_wine_command_lines():
-    """Measured on this machine: the client's process carries
-    `Z:\\home\\michael\\daoc-client\\game1127.dll` (Wine maps `Z:` to `/`).
+    """Measured on a test machine: the client's process carries
+    `Z:\\home\\player\\daoc-client\\game1127.dll` (Wine maps `Z:` to `/`).
     Anything we cannot map proves nothing, and the caller then refuses."""
     parse = clientinstall._wine_client_dir
-    assert parse("Z:\\home\\michael\\daoc-client\\game1127.dll\x00127.0.0.1\x00",
-                 "game1127.dll") == "/home/you/daoc-client"
+    assert parse("Z:\\home\\player\\daoc-client\\game1127.dll\x00127.0.0.1\x00",
+                 "game1127.dll") == "/home/player/daoc-client"
     assert parse("game1127.dll\x00127.0.0.1\x00", "game1127.dll") is None
     assert parse("C:\\games\\daoc\\game1127.dll\x00", "game1127.dll") is None
     assert parse("camelot.exe\x00", "game1127.dll") is None

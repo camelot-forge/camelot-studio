@@ -1,7 +1,6 @@
 """The journal: one append-only shard per author-session (phase P1).
 
-Design: `workspace/notes/project.md` §D5 and §D15. Four rules,
-and what each one buys:
+Four rules, and what each one buys:
 
 - **one file per author-session** (`journal/<at>-<author>.jsonl`), appended to
   and never rewritten: two people editing at once create two files, and git

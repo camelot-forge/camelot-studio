@@ -764,7 +764,7 @@ def _serverconfig(path):
     file = path / "server" / "config" / "serverconfig.xml"
     file.write_text(
         "<root><DBConnectionString>"
-        "Server=localhost;Port=3307;Database=forge_project_local;UserId=root;Password=x"
+        "Server=localhost;Port=3307;Database=camelot_hills_local;UserId=root;Password=x"
         "</DBConnectionString></root>",
         encoding="utf-8",
     )
@@ -789,7 +789,7 @@ def test_new_can_record_the_server_config(base, machine, tmp_path):  # noqa: F81
 
     local = pj.machine(answer["path"])["environments"]["local"]
     assert local["db_config"] == str(config)
-    assert local["database"] == "forge_project_local"
+    assert local["database"] == "camelot_hills_local"
     assert local["root"] == str(tmp_path / "env-local")
     assert local["db"]["port"] == 3307
 

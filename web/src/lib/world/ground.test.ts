@@ -1,5 +1,5 @@
 // The ground composition, pinned to the model measured against the client's
-// own bake (`notes/layer-compose.py`): layer 0 first, later layers
+// own bake: layer 0 first, later layers
 // lerped in ascending order, the mask channel each *file index* owns, tiled
 // sheets repeated `tiles` times, an untiled row stamped from the zone-wide
 // sheet.

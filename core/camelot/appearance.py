@@ -1,7 +1,7 @@
 """Appearance resolution — the client tables' appearance pickers.
 
 Maps the DAoC character-creation structure (7 `eCharFacePart` bytes per
-the OSS emulators, `notes/character-rules.md` §11) onto the client CSV
+the OSS emulators) onto the client CSV
 tables it resolves through:
 
 | attribute | client table | engine storage |

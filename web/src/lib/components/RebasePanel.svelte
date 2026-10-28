@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * The re-base panel (`notes/project.md` §D17, P8): the client moved
+	 * The re-base panel (P8): the client moved
 	 * under this project, and the panel says what it touched — then the two
 	 * decisions. `keep ours` pins the recorded fingerprints; `adopt theirs`
 	 * moves them to what the client holds now, and the ops that no longer fit

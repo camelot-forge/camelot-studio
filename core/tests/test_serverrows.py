@@ -1,7 +1,7 @@
 """The server's world rows: the snapshot format, its readers, its filters.
 
-The schema these mirror is measured, not assumed (`notes/db-schema.py`
-against the workshop's OpenDAoC, 2026-10-12): `mob` 97,737 rows, `worldobject`
+The schema these mirror is measured, not assumed (against OpenDAoC,
+2026-10-12): `mob` 97,737 rows, `worldobject`
 799, `door` 432, `path` 459, `pathpoints` 19,782. No test here needs MySQL:
 the readers are handed a connection, and the fake below records what it was
 asked for; the snapshot path is a plain file.

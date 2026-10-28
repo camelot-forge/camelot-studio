@@ -1,7 +1,7 @@
 """The client's creature models, resolved through the server's two-level chain.
 
 The server sends `npctemplate.Model`; the client resolves it in two steps
-(measured in-game, workspace note `notes/test-bc-report.md`):
+(measured in game):
 
     monsters.csv[Model]   its `NIF` field is a `monnifs` id
     monnifs.csv[that id]  its `NIF` field is the figure, `Anim` the anim set

@@ -1,8 +1,7 @@
-// P2 — Home, driven like an operator (`notes/home.md`): what this daemon
-// serves, the machine's projects with their health, the path field, the empty
-// state, and the four doors — open (D3's switch), create (D4), import, clone —
-// against the daemon's own client. Throwaway harness; exits non-zero on a
-// failed check.
+// P2 — Home, driven like an operator: what this daemon serves, the machine's
+// projects with their health, the path field, the empty state, and the four
+// doors — open (the project switch), create, import, clone — against the
+// daemon's own client. Throwaway harness; exits non-zero on a failed check.
 //
 //   node scripts/home_probe.mjs http://127.0.0.1:8763 /tmp/camelot-ux /tmp/home-probe-config
 //

@@ -139,7 +139,7 @@ def version_bits(data) -> tuple[int, int]:
 # gatehouse pointed south where the game points it north):
 # - the keep's two door nodes land within **15 units** of the server's two
 #   `door` rows under this rotation (Δy +15.6 and -14.3, `Δx -0.7 and +11.5`),
-#   and **357 units** off under the reflection (`notes/keep-door-nodes.py`);
+#   and **357 units** off under the reflection;
 # - the two `Albion Banner` worldobjects flank the north gate (1315 units
 #   north, facing north) and the road arrives there, so the gatehouse must
 #   land north: it does under this rotation.

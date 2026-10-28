@@ -63,7 +63,7 @@ def _environment(tmp_path, *, needs=("reload",)):
         json.dumps(
             {
                 "format": "camelot.env/1",
-                "database": "forge_project_staging",
+                "database": "camelot_hills_staging",
                 "server": {"host": "127.0.0.1", "port": 3307, "user": "root"},
             }
         ),
@@ -145,7 +145,7 @@ def test_the_console_reads_the_installer_state_and_the_feed(tmp_path):
 
     assert document["format"] == console.FORMAT
     assert document["env"]["project"] == "Forge Project"
-    assert document["env"]["database"] == "forge_project_staging"
+    assert document["env"]["database"] == "camelot_hills_staging"
     assert document["release"]["number"] == 1
     assert document["release"]["written"] == 1
     assert document["release"]["needs"] == ["reload"]

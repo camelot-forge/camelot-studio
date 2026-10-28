@@ -1,8 +1,7 @@
 # Example manifest for `camelot batch`.
 # One line = one path (Windows paths allowed, converted automatically).
-# Paths below are relative to the exploratory workspace root
-# (the folder containing the "DAOC CLIENT" directory), and are rewritten
-# against the $DAOC_CLIENT environment variable when it is set.
+# Paths may be absolute, or relative to the folder that contains the client.
+# A leading "DAOC CLIENT/" is rewritten against $DAOC_CLIENT when it is set.
 # Adapt for your machine / server.
 
 # ---- figures (Gamebryo 10.1.0.0, skinned) ----

@@ -1,9 +1,8 @@
 <script lang="ts">
 	/**
-	 * The three doors' modal (`notes/home.md` §D4, draft 4's
-	 * `Home · new project` board): one folder on this machine, a DAoC client
+	 * The three doors' modal: one folder on this machine, a DAoC client
 	 * checked *before* anything is written, git, staging — and "Open it in the
-	 * World editor", which chains D3's switch.
+	 * World editor", which chains the project switch.
 	 *
 	 * The modal does the writing and reports what happened: `ondone` carries the
 	 * daemon's own answer, warning included, so the page says it in one line
@@ -61,9 +60,7 @@
 	const label = $derived(clientLabel(check));
 	const Icon = $derived(kind === 'clone' ? GitBranch : kind === 'new' ? Plus : Folder);
 	const ready = $derived(
-		dir.trim().length > 0 &&
-			client.trim().length > 0 &&
-			(kind !== 'clone' || url.trim().length > 0)
+		dir.trim().length > 0 && client.trim().length > 0 && (kind !== 'clone' || url.trim().length > 0)
 	);
 
 	/** `~/servers/<slug>` — the draft's own default, refreshed until the
@@ -267,9 +264,11 @@
 					class="input"
 					type="text"
 					bind:value={serverconfig}
-					placeholder="/home/you/daoc/forge-env-local/server/config/serverconfig.xml"
+					placeholder="/home/you/daoc/env-local/server/config/serverconfig.xml"
 				/>
-				<span class="hint">The environment's serverconfig.xml: the viewer reads its mobs from the database it names.</span>
+				<span class="hint"
+					>The environment's serverconfig.xml: the viewer reads its mobs from the database it names.</span
+				>
 			</label>
 		{/if}
 

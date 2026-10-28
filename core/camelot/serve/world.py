@@ -5,7 +5,7 @@ gets JSON and standard images and never opens a zone archive (the rule the
 asset index already follows). Everything expensive is cached on disk keyed by
 the source file's mtime, like the asset exports in `serve/api.py`.
 
-Formats, measured 2026-10-11 (`notes/` in the private workspace):
+Formats, measured 2026-10-11 on the 1.127 client:
 
 - `GET /world/zone/{id}/terrain` is a compact binary: the magic `CAMT`, a
   format version, the grid size, the two factors from `sector.dat`, then the

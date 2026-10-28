@@ -1,6 +1,6 @@
 """Native fig3 player figures — the "character builder" assembly (v2).
 
-Doctrine (notes/character-rules.md §8.15/§9/§11, all evidence-backed):
+Doctrine (all evidence-backed):
 
 - **The rig is the client's runtime skeleton**,
   ``<code>_<gender>_skeleton.nif`` from ``figures/fig3/sfig%03d.mpk``

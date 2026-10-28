@@ -1,8 +1,8 @@
 """The editor: a zone's placements, edited and published (spec §6/§9, 6.3).
 
 D2: the daemon is the only writer, the browser a pure consumer. An editing
-session is *the project's own directory* (`camelot serve --project DIR`, the
-design in `workspace/notes/`): `mod.json` names it, `journal/`
+session is *the project's own directory* (`camelot serve --project DIR`):
+`mod.json` names it, `journal/`
 holds the ops as **one append-only shard per author-session** (the format, the
 total order and the refusals live in `camelot/journal.py`),
 `deploy/log.jsonl` records what was *published*, and `build` assembles the

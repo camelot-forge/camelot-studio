@@ -1,8 +1,7 @@
 """The client half of a mod pack: plan, materialize, verify.
 
 The server loader applies a pack's rows at boot; this module applies its
-client payload to a client directory. The shape is the design in the
-workspace (`notes/phase5-client-assets.md`):
+client payload to a client directory. The shape:
 
 - **replace, from originals.** Every touched file is rebuilt from a pristine
   copy kept under `.camelot/pristine/`, plus the winning payloads, so removing
@@ -15,8 +14,8 @@ workspace (`notes/phase5-client-assets.md`):
   has a single owner — the state is kept because it is what makes a removal
   exact.)
 - **read it back.** The client refuses a bad archive silently (measured: it
-  exits during the loading screen, `notes/test-a-report.md`), so
-  every materialization is verified by reading the result back.
+  exits during the loading screen), so every materialization is verified by
+  reading the result back.
 
 The store lives inside the client directory; the game ignores it.
 """

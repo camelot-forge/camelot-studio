@@ -2,8 +2,8 @@
 
 Fidelity is the point: the client reads latin-1 files with CRLF endings and
 stops reading a table at a blank line (measured — a split/join round-trip
-inserted one and the server had a mob no client could see,
-`notes`). So an edit must leave untouched lines
+inserted one and the server had a mob no client could see). So an edit must
+leave untouched lines
 byte-identical and re-encode only what it touched.
 """
 import pytest

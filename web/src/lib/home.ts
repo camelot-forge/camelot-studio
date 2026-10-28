@@ -1,7 +1,6 @@
-/** Small pure pieces of Home (`notes/home.md` §D2/§D4): the one line a
- * recents row shows for a project's health, how long ago it was opened, what
- * it still owes a publish, and what a switch leaves behind — all copy the
- * operator reads, so all tested. */
+/** Small pure pieces of Home: the one line a recents row shows for a project's
+ * health, how long ago it was opened, what it still owes a publish, and what a
+ * switch leaves behind — all copy the operator reads, so all tested. */
 import type { HomeClient, HomeHealth, HomeLeft } from './api/client';
 
 export interface HealthLabel {

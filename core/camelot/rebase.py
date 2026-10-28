@@ -1,7 +1,5 @@
 """Re-base: what to do when the base moved under a project (phase P8).
 
-The design is `workspace/notes/project.md` §D16-§D18.
-
 One view and two decisions. The view is per resource — **ours** (the fingerprint
 the project recorded), **theirs** (what the client holds now), and **the log**
 (the ops that touch that resource, each with a verdict against the base as it

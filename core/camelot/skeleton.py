@@ -11,7 +11,7 @@ kept as a DFS reference only, not as the animation mapping.
 from __future__ import annotations
 
 # Verified index -> name, DFS pre-order of skeleton.nif excluding "Scene Root".
-# Derived with notes and cross-checked against 2HW_idle.kfa.
+# Cross-checked against 2HW_idle.kfa.
 BONE_INDEX: dict[int, str] = {
     0: "Bip01",
     1: "Bip01 Footsteps",

@@ -1,7 +1,6 @@
 """The project: the whole content of one server, in one folder (phase P1).
 
-The design is `workspace/notes/project.md`. Three rules carry
-it, and everything here follows from them:
+Three rules carry it, and everything here follows from them:
 
 - **what is ours lives inside** — the journal (one shard per author-session),
   the overlays, the assets, the releases, this file;
@@ -13,7 +12,7 @@ it, and everything here follows from them:
 It is a **git repository**: a team clones it, so nothing this module *tracks*
 is machine-specific. The paths live in `machine.json` — untracked, written
 once per machine — and the payloads are never committed: they are reproducible
-from the journal plus the base (`project.md` §D9).
+from the journal plus the base.
 
 This module is the container and its read-only verbs. The journal's writers,
 the releases and the deploy are the phases that follow (P1c, P3, P4); what is

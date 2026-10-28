@@ -1,7 +1,6 @@
-"""A release: the record, its range, its payloads, and the rebuild
-(`notes/pipeline.md`, P3).
+"""A release: the record, its range, its payloads, and the rebuild.
 
-The property everything else rests on is §D5 — two cuts of one range over one
+The property everything else rests on is that two cuts of one range over one
 base produce the same bytes, which is why the payloads are not committed — and
 the exit criterion is a *second clone* rebuilding release 1 exactly. Both are
 tested here, on the synthetic client, with no daemon.

@@ -1,6 +1,6 @@
-// P8 — the re-base, driven like an operator (`notes/project.md`
-// §D16-§D18): a client that moved under a project, the row that says so, the
-// panel that names what it touches, and the two decisions.
+// P8 — the re-base, driven like an operator: a client that moved under a
+// project, the row that says so, the panel that names what it touches, and the
+// two decisions.
 //
 //   node scripts/rebase_probe.mjs http://127.0.0.1:8763 /tmp/camelot-ux
 //
@@ -53,14 +53,6 @@ const shot = (name) => page.screenshot({ path: `${outDir}/${name}.png` });
 const text = (sel) =>
 	page.evaluate(
 		(s) => document.querySelector(s)?.textContent?.replace(/\s+/g, ' ').trim() ?? null,
-		sel
-	);
-const texts = (sel) =>
-	page.evaluate(
-		(s) =>
-			Array.from(document.querySelectorAll(s)).map(
-				(n) => n.textContent?.replace(/\s+/g, ' ').trim() ?? ''
-			),
 		sel
 	);
 async function until(probe, ms = 60000) {

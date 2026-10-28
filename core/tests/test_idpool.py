@@ -1,7 +1,7 @@
 """The no-patch id pool: what a mod may add, and what it may take over.
 
 The client's model table is 2500 entries wide and a row at 2500 truncates the
-parse (measured in the workspace, 2026-10-10). Inside that ceiling, two kinds
+parse (measured on the 1.127 client, 2026-10-10). Inside that ceiling, two kinds
 of ids are usable: ids with no row at all (add), and shipped rows nothing
 references (take over). The first is a client fact, the second a server one —
 `camelot.modelusage` carries the measured server list.

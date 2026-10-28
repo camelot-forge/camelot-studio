@@ -45,9 +45,8 @@ the declared ``s1``/``s2`` bytes, and when the directory cannot be parsed
 from that short read it retries the whole archive and then exits during
 the loading screen, with no message. Rewriting an archive therefore
 requires recomputing the four carriers; a version of this module that
-*preserved* them shipped archives the client refused (measured, test A of
-`notes`; the corpus fit and the client trace are in the
-workspace note `notes/test-a-report.md`). The 16-bit
+*preserved* them shipped archives the client refused (measured: the corpus fit
+and the client trace were recorded). The 16-bit
 directory-length carrier and the 8-bit name-length carrier hold every
 retail archive (max measured: 21 551 and 49 bytes).
 """

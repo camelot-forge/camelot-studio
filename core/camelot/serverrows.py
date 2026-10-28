@@ -6,8 +6,8 @@ connection is a convenience, never a requirement. This module is both halves:
 `Snapshot` (the JSON that carries rows between machines, no credentials in
 it) and the live readers (`read_rows`, `read_rows_in_rect`).
 
-The columns are the server's own, measured 2026-10-12 against the workshop's
-OpenDAoC (`notes/db-schema.py`): `mob` 97,737 rows, `worldobject` 799,
+The columns are the server's own, measured 2026-10-12 against OpenDAoC:
+`mob` 97,737 rows, `worldobject` 799,
 `door` 432, `path` 459, `pathpoints` 19,782. They are *selected* to what the
 viewer draws and the inspector shows — no column is renamed, none is
 invented, and everything else stays in the database where it lives.

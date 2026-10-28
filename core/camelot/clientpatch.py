@@ -5,8 +5,7 @@ The 1.127 client keeps its monster table in a static array (base `0xb77b98`,
 `monsters.csv` loader and the getter. The array cannot grow where it sits (the
 next global begins at its end), so lifting the ceiling **moves** it: a new,
 zero-filled PE section holds the wider array, and six immediates in
-`game1127.dll` are repointed at it (measured 2026-10-10; the report is in the
-private workspace, `notes/test-client-patch-report.md`).
+`game1127.dll` are repointed at it (measured 2026-10-10).
 
 The patch travels as a **recipe**, never as a redistributed DLL: a map of
 expected bytes (the pristine client), a map of bytes to write, and the section

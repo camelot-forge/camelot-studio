@@ -1,8 +1,7 @@
 <script lang="ts">
 	/**
-	 * The project chip and its menu — the selector (`notes/home.md` §D5,
-	 * draft 4's `chip menu` board): the project being served, then the machine's
-	 * own list with the work waiting, then the three doors.
+	 * The project chip and its menu — the selector: the project being served,
+	 * then the machine's own list with the work waiting, then the three doors.
 	 *
 	 * The page may hand the chip its *live* state (the world editor passes the
 	 * session's own pending, so the count moves as you edit); without props the

@@ -111,7 +111,7 @@ export function zoneToScene(x: number, y: number, z: number): [number, number, n
  * faces south" came from reading `A` as the *server's* 12-bit compass, which
  * is 180° off; the bridge probe could not see it — every bridge mesh in the
  * corpus has its long axis at 0.0° in the NIF, where a mirror and a rotation
- * agree — `notes/heading-convention.py`.)
+ * agree.)
  *
  * The scene's `(x, y)` plane becomes `(X, Z)` unchanged, which turns that
  * counter-clockwise sense into a *negative* yaw about +Y: `-A` sends the

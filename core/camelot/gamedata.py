@@ -339,8 +339,8 @@ def _resolve_from_nif_names(client_dir: str, nif_path: str) -> list[SlotTexture]
 # shipping a whole file, so two mods editing different fields of one row (or
 # adding different rows) compose. Fidelity is the whole game: the client reads
 # latin-1 files with CRLF endings and stops reading a table at a blank line
-# (measured -- a split/join round-trip inserted one, and the server then had a
-# mob no client could see, `notes`). Every edit therefore
+# (measured: a split/join round-trip inserted one, and the server then had a
+# mob no client could see). Every edit therefore
 # keeps the untouched lines byte-identical and re-encodes only what it touched.
 
 #: The archive that carries the tables; a payload's row ops land in it.
@@ -403,7 +403,7 @@ class Table:
 
         An added row must be exactly this wide: the client stops reading a
         table at a line shorter than its neighbours, the same way it stops at
-        a blank one (measured, `notes` Part 4 P5-F).
+        a blank one (measured in the client ladder).
         """
         return max([0] + [len(row) for row in self.rows])
 

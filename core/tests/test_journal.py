@@ -1,9 +1,8 @@
 """The journal's shards: the team's concurrency model, and the refusals.
 
-Design: `workspace/notes/project.md` §D5 and §D15. These tests
-are the *semantic* half of the team test (two authors, two shards, a merge that
-either goes through without a word or is refused by name); the git half — two
-clones, a pull — is a harness, not a unit test.
+These tests are the *semantic* half of the team test (two authors, two shards,
+a merge that either goes through without a word or is refused by name); the git
+half — two clones, a pull — is a harness, not a unit test.
 """
 
 import json
