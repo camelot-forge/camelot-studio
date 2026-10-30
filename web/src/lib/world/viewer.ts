@@ -341,6 +341,9 @@ export class WorldViewer {
 	private labelsVisible = true;
 	private labelLayer: HTMLDivElement;
 	private labelButtons = new Map<string, HTMLButtonElement>();
+	/** The row behind each label, so its screen position can follow the camera
+	 * on every frame without rebuilding the set. */
+	private labelRows = new Map<string, { table: SpawnTable; row: SpawnRow }>();
 	private lastPreview = 0;
 	private lastLabels = 0;
 	private hitMaterial = new THREE.MeshBasicMaterial({
@@ -2044,6 +2047,9 @@ export class WorldViewer {
 				this.lastLabels = now;
 				this.updateLabels();
 			}
+			// The label *set* changes at 10 Hz; their positions follow the camera
+			// every frame, or they visibly lag the scene while it moves.
+			this.positionLabels();
 			this.renderer.render(this.scene, this.camera);
 		};
 		loop();
@@ -2349,6 +2355,7 @@ export class WorldViewer {
 		if (button) {
 			button.remove();
 			this.labelButtons.delete(key);
+			this.labelRows.delete(key);
 		}
 	}
 
@@ -2418,6 +2425,9 @@ export class WorldViewer {
 				button.className = 'world-label';
 				Object.assign(button.style, {
 					position: 'absolute',
+					left: '0',
+					top: '0',
+					willChange: 'transform',
 					transform: 'translate(-50%, -100%)',
 					pointerEvents: 'auto',
 					padding: '1px 5px',
@@ -2440,25 +2450,58 @@ export class WorldViewer {
 				});
 				this.labelLayer.appendChild(button);
 				this.labelButtons.set(key, button);
+				this.labelRows.set(key, { table, row });
 			}
 			button.textContent = row.name || `${table} ${row.id.slice(0, 8)}`;
-			button.style.left = `${at.x - layerRect.left}px`;
-			button.style.top = `${at.y - layerRect.top}px`;
+			this.placeLabel(button, at, layerRect);
 			button.style.borderColor = selected ? '#67e8f9' : 'rgba(232, 238, 242, 0.22)';
 			button.style.color = selected ? '#67e8f9' : '#e8eef2';
-			button.style.display = 'block';
 			shown.add(key);
 		}
 		for (const [key, button] of this.labelButtons) {
 			if (shown.has(key)) continue;
 			button.remove();
 			this.labelButtons.delete(key);
+			this.labelRows.delete(key);
 		}
+	}
+
+	/** Move the existing labels on every frame. `translate3d` keeps the work on
+	 * the compositor; `left`/`top` would relayout the page at 60 Hz. */
+	private positionLabels(): void {
+		if (!this.labelsVisible || !this.labelButtons.size) return;
+		this.camera.updateMatrixWorld();
+		const rect = this.canvas.getBoundingClientRect();
+		const layerRect = this.labelLayer.getBoundingClientRect();
+		for (const [key, button] of this.labelButtons) {
+			const entry = this.labelRows.get(key);
+			if (!entry) continue;
+			const at = this.screenOf(rect, [
+				entry.row.x,
+				entry.row.z + this.labelHeight(entry.row, entry.table),
+				entry.row.y
+			]);
+			if (!at) {
+				button.style.display = 'none';
+				continue;
+			}
+			this.placeLabel(button, at, layerRect);
+		}
+	}
+
+	private placeLabel(
+		button: HTMLButtonElement,
+		at: { x: number; y: number },
+		layerRect: DOMRect
+	): void {
+		button.style.display = 'block';
+		button.style.transform = `translate3d(${at.x - layerRect.left}px, ${at.y - layerRect.top}px, 0) translate(-50%, -100%)`;
 	}
 
 	private hideLabels(): void {
 		for (const button of this.labelButtons.values()) button.remove();
 		this.labelButtons.clear();
+		this.labelRows.clear();
 	}
 
 	/** A zone point projected for the label layer, or null when it is behind
