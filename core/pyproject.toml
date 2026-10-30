@@ -24,7 +24,7 @@ server = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "watchfiles>=1.0"]
 #: `camelot server export` and `camelot serve --db-config` read the server's
 #: own MySQL; without it, the viewer works from an exported snapshot (spec §5).
 mysql = ["pymysql>=1.1"]
-dev = ["pytest>=8", "pytest-xdist>=3", "ruff==0.17.1", "httpx>=0.27"]
+dev = ["pytest>=8", "pytest-xdist>=3", "ruff==0.17.3", "httpx>=0.27"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
