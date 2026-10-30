@@ -71,6 +71,8 @@ export interface WorldToggles {
 	bounds: boolean;
 	water: boolean;
 	jumps: boolean;
+	models: boolean;
+	labels: boolean;
 }
 
 interface LoadedMesh {
@@ -148,6 +150,27 @@ interface RowCloud {
 	rows: SpawnRow[];
 	cloud: THREE.Points;
 	size: number;
+}
+
+/** How far the detailed previews reach, and how many stand at once. A zone
+ * holds thousands of rows; the nearest ones get their model, the rest keep
+ * their point (the same rule the world editor's reference used). */
+const PREVIEW_MIN_RADIUS = 3000;
+const PREVIEW_MAX_RADIUS = 16000;
+const PREVIEW_LIMIT = 80;
+const LABEL_LIMIT = 50;
+
+/** One row drawn as a model or a volume, with the label height its own box
+ * reports. The group is a child of the layer's group, so the toggle hides it. */
+interface PreviewEntry {
+	pick: RowPick;
+	table: SpawnTable;
+	group: THREE.Group;
+	hit: THREE.Mesh;
+	top: number;
+	model?: number;
+	size?: number;
+	scale?: number;
 }
 
 /** One item a gesture holds, with the fields it started from. Every pointer
@@ -310,6 +333,21 @@ export class WorldViewer {
 	private composedPatches = 0;
 	private picks: PickGroup[] = [];
 	private rowClouds: RowCloud[] = [];
+	/** The nearby rows drawn as client figures or volumes, and the labels. */
+	private previews = new Map<string, PreviewEntry>();
+	private previewLoading = new Set<string>();
+	private creatureCache = new Map<number, Promise<LoadedMesh | undefined>>();
+	private previewsVisible = true;
+	private labelsVisible = true;
+	private labelLayer: HTMLDivElement;
+	private labelButtons = new Map<string, HTMLButtonElement>();
+	private lastPreview = 0;
+	private lastLabels = 0;
+	private hitMaterial = new THREE.MeshBasicMaterial({
+		transparent: true,
+		opacity: 0,
+		depthWrite: false
+	});
 
 	// -- selection and gestures -------------------------------------------------
 
@@ -405,6 +443,15 @@ export class WorldViewer {
 			display: 'none',
 			zIndex: '5'
 		} satisfies Partial<CSSStyleDeclaration>);
+		this.labelLayer = document.createElement('div');
+		Object.assign(this.labelLayer.style, {
+			position: 'absolute',
+			inset: '0',
+			overflow: 'hidden',
+			pointerEvents: 'none',
+			zIndex: '4'
+		} satisfies Partial<CSSStyleDeclaration>);
+		canvas.parentElement?.appendChild(this.labelLayer);
 		this.attachInput();
 		this.resize();
 	}
@@ -1655,6 +1702,8 @@ export class WorldViewer {
 		const attribute = entry.cloud.geometry.getAttribute('position') as THREE.BufferAttribute;
 		attribute.setXYZ(index, row.x, row.z, row.y);
 		attribute.needsUpdate = true;
+		const preview = this.previews.get(`${pick.table}:${pick.id}`);
+		if (preview) this.updatePreviewTransform(preview, row);
 		const selected = this.selection.rows.some(
 			(entry) => entry.table === pick.table && entry.id === pick.id
 		);
@@ -1791,6 +1840,10 @@ export class WorldViewer {
 		this.groups.bounds.visible = toggles.bounds;
 		this.groups.water.visible = toggles.water;
 		this.groups.jumps.visible = toggles.jumps;
+		this.previewsVisible = toggles.models;
+		this.labelsVisible = toggles.labels;
+		for (const entry of this.previews.values()) entry.group.visible = toggles.models;
+		if (!toggles.labels) this.hideLabels();
 	}
 
 	/** What the scene currently holds — the diagnostic hook the screenshots read. */
@@ -1802,6 +1855,8 @@ export class WorldViewer {
 		return {
 			ground: this.groups.ground.children.length,
 			fixtureGroups: this.groups.fixtures.children.length,
+			previews: this.previews.size,
+			labels: this.labelButtons.size,
 			fixtureInstances: instances,
 			mobs: this.spawnCounts.mobs,
 			statics: this.spawnCounts.statics,
@@ -1832,12 +1887,18 @@ export class WorldViewer {
 		return null;
 	}
 
-	/** The server row under a click. A point cloud has no surface, so the
-	 * raycaster matches within a radius — each cloud is probed with its own dot
-	 * size, a door being easier to hit than a mob exactly as it is drawn. */
+	/** The server row under a click. A nearby preview's own volume is the
+	 * first target; a point cloud has no surface, so the raycaster matches
+	 * within a radius — each cloud is probed with its own dot size, a door
+	 * being easier to hit than a mob exactly as it is drawn. */
 	pickRow(ndcX: number, ndcY: number): RowPick | null {
 		const ray = new THREE.Raycaster();
 		ray.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+		const previews = [...this.previews.values()]
+			.filter((entry) => entry.group.visible && entry.group.parent?.visible !== false)
+			.map((entry) => entry.hit);
+		const previewHit = ray.intersectObjects(previews, false)[0];
+		if (previewHit) return previewHit.object.userData.pick as RowPick;
 		let best: { distance: number; pick: RowPick } | null = null;
 		for (const entry of this.rowClouds) {
 			if (!entry.cloud.visible || !entry.group.visible) continue;
@@ -1974,6 +2035,15 @@ export class WorldViewer {
 				const distance = this.camera.position.distanceTo(this.gizmo.position);
 				this.gizmo.scale.setScalar(Math.max(distance * 0.2, 1));
 			}
+			const now = performance.now();
+			if (now - this.lastPreview > 250) {
+				this.lastPreview = now;
+				this.refreshPreviews();
+			}
+			if (now - this.lastLabels > 100) {
+				this.lastLabels = now;
+				this.updateLabels();
+			}
 			this.renderer.render(this.scene, this.camera);
 		};
 		loop();
@@ -1983,7 +2053,10 @@ export class WorldViewer {
 		cancelAnimationFrame(this.frame);
 		this.abort.abort();
 		this.marquee.remove();
+		this.labelLayer.remove();
 		this.clear();
+		this.disposeCreatureCache();
+		this.hitMaterial.dispose();
 		this.ringGeometry.dispose();
 		this.ringMaterial.dispose();
 		this.rowRingMaterial.dispose();
@@ -1991,7 +2064,26 @@ export class WorldViewer {
 		this.renderer.dispose();
 	}
 
+	/** The GLB scenes are shared by every clone of a model; dispose them once,
+	 * after the clones are gone. */
+	private disposeCreatureCache(): void {
+		for (const promise of this.creatureCache.values()) {
+			void promise.then((loaded) => {
+				loaded?.model.scene.traverse((object) => {
+					const mesh = object as THREE.Mesh;
+					if (!mesh.isMesh) return;
+					mesh.geometry?.dispose();
+					const material = mesh.material as THREE.Material | THREE.Material[] | undefined;
+					if (Array.isArray(material)) material.forEach((item) => item.dispose());
+					else material?.dispose();
+				});
+			});
+		}
+		this.creatureCache.clear();
+	}
+
 	private clear(): void {
+		this.clearPreviews();
 		this.picks = [];
 		this.rowClouds = [];
 		this.selection = { fixtures: [], rows: [] };
@@ -2047,9 +2139,10 @@ export class WorldViewer {
 		this.spawnCounts.mobs = spawns.mobs.length;
 		this.spawnCounts.statics = spawns.objects.length;
 		this.spawnCounts.doors = spawns.doors.length;
-		this.addRows('mob', 'spawns', spawns.mobs, 0xe0b23e, 90);
-		this.addRows('worldobject', 'statics', spawns.objects, 0x64b5f6, 150);
-		this.addRows('door', 'doors', spawns.doors, 0xef5350, 220);
+		this.addRows('mob', 'spawns', spawns.mobs, 0xe0b23e, 45);
+		this.addRows('worldobject', 'statics', spawns.objects, 0x64b5f6, 70);
+		this.addRows('door', 'doors', spawns.doors, 0xef5350, 80);
+		this.refreshPreviews();
 		for (const path of spawns.paths) {
 			if (path.points.length < 2) continue;
 			const line = new THREE.Line(
@@ -2079,9 +2172,361 @@ export class WorldViewer {
 		this.rowClouds.push({ table, group: this.groups[group], rows, cloud, size });
 	}
 
+	// -- nearby entities: client figures, volumes and labels --------------------
+
+	private keyOf(pick: RowPick): string {
+		return `${pick.table}:${pick.id}`;
+	}
+
+	private groupFor(table: SpawnTable): THREE.Group {
+		return table === 'mob'
+			? this.groups.spawns
+			: table === 'worldobject'
+				? this.groups.statics
+				: this.groups.doors;
+	}
+
+	/** Yaw of a server heading (0..4095, clockwise from north), the same
+	 * conversion the fixtures' `A` uses. */
+	private rowYaw(heading?: number): number {
+		return -((((heading ?? 0) % HEADING_UNITS) / HEADING_UNITS) * Math.PI * 2);
+	}
+
+	/** Keep the nearest rows drawn as their own model or a volume. Runs on a
+	 * timer: a camera move is cheap, and loading is what must stay lazy. */
+	private refreshPreviews(): void {
+		if (!this.terrain) return;
+		const radius = THREE.MathUtils.clamp(
+			this.orbit.distance * 0.22,
+			PREVIEW_MIN_RADIUS,
+			PREVIEW_MAX_RADIUS
+		);
+		const origin = this.camera.position;
+		const near: Array<{ cloud: RowCloud; row: SpawnRow; distance: number }> = [];
+		for (const cloud of this.rowClouds) {
+			if (!cloud.group.visible) continue;
+			for (const row of cloud.rows) {
+				if (cloud.table === 'mob' && (!row.model || row.model <= 0)) continue;
+				const distance = Math.hypot(row.x - origin.x, row.y - origin.z);
+				if (distance <= radius) near.push({ cloud, row, distance });
+			}
+		}
+		near.sort((a, b) => a.distance - b.distance);
+		const keep = new Set<string>();
+		let shown = 0;
+		for (const { cloud, row } of near) {
+			if (shown >= PREVIEW_LIMIT) break;
+			const pick: RowPick = { table: cloud.table, id: row.id };
+			const key = this.keyOf(pick);
+			keep.add(key);
+			const existing = this.previews.get(key);
+			if (existing) {
+				if (existing.table === 'mob' && existing.model !== row.model) {
+					this.removePreview(key);
+					continue;
+				}
+				this.updatePreviewTransform(existing, row);
+				existing.group.visible = this.previewsVisible;
+				shown++;
+				continue;
+			}
+			if (this.previewLoading.has(key)) continue;
+			if (cloud.table === 'mob') this.loadCreaturePreview(pick, row, this.token);
+			else this.addVolumePreview(pick, row);
+			shown++;
+		}
+		for (const key of [...this.previews.keys()]) {
+			if (!keep.has(key)) this.removePreview(key);
+		}
+	}
+
+	private loadCreaturePreview(pick: RowPick, row: SpawnRow, token: number): void {
+		const key = this.keyOf(pick);
+		const model = row.model;
+		if (!model) return;
+		this.previewLoading.add(key);
+		void this.creatureModel(model).then((loaded) => {
+			this.previewLoading.delete(key);
+			if (!loaded || token !== this.token || !this.rowStillThere(pick)) return;
+			const group = new THREE.Group();
+			group.userData.preview = true;
+			group.userData.shared = true;
+			group.position.set(row.x, row.z, row.y);
+			group.rotation.y = this.rowYaw(row.heading);
+			group.scale.setScalar(Math.max(row.size ?? 50, 1) / 50);
+			const scene = loaded.model.scene.clone(true);
+			group.add(scene);
+			const box = new THREE.Box3().setFromObject(scene);
+			const height = Number.isFinite(box.max.y) ? Math.max(box.max.y, 80) : 160;
+			const hit = new THREE.Mesh(new THREE.BoxGeometry(70, height, 70), this.hitMaterial);
+			hit.position.y = height / 2;
+			hit.userData.pick = pick;
+			hit.name = `preview-${key}`;
+			group.add(hit);
+			this.groupFor(pick.table).add(group);
+			this.previews.set(key, {
+				pick,
+				table: pick.table,
+				group,
+				hit,
+				top: height,
+				model,
+				size: row.size,
+				scale: Math.max(row.size ?? 50, 1) / 50
+			});
+			group.visible = this.previewsVisible;
+		});
+	}
+
+	private addVolumePreview(pick: RowPick, row: SpawnRow): void {
+		const door = pick.table === 'door';
+		const width = door ? 110 : 100;
+		const height = door ? 160 : 120;
+		const depth = door ? 25 : 100;
+		const color = door ? 0xef5350 : 0x64b5f6;
+		const key = this.keyOf(pick);
+		const group = new THREE.Group();
+		group.userData.preview = true;
+		group.position.set(row.x, row.z, row.y);
+		group.rotation.y = this.rowYaw(row.heading);
+		const geometry = new THREE.BoxGeometry(width, height, depth);
+		const mesh = new THREE.Mesh(
+			geometry,
+			new THREE.MeshBasicMaterial({
+				color,
+				transparent: true,
+				opacity: 0.12,
+				depthWrite: false
+			})
+		);
+		mesh.position.y = height / 2;
+		mesh.userData.pick = pick;
+		mesh.name = `preview-${key}`;
+		group.add(mesh);
+		const edges = new THREE.LineSegments(
+			new THREE.EdgesGeometry(geometry),
+			new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 })
+		);
+		edges.position.copy(mesh.position);
+		group.add(edges);
+		this.groupFor(pick.table).add(group);
+		this.previews.set(key, {
+			pick,
+			table: pick.table,
+			group,
+			hit: mesh,
+			top: height
+		});
+		group.visible = this.previewsVisible;
+	}
+
+	private updatePreviewTransform(entry: PreviewEntry, row: SpawnRow): void {
+		entry.group.position.set(row.x, row.z, row.y);
+		entry.group.rotation.y = this.rowYaw(row.heading);
+		if (entry.table === 'mob') {
+			entry.scale = Math.max(row.size ?? 50, 1) / 50;
+			entry.size = row.size;
+			entry.group.scale.setScalar(entry.scale);
+		}
+	}
+
+	private removePreview(key: string): void {
+		const entry = this.previews.get(key);
+		if (!entry) return;
+		entry.group.parent?.remove(entry.group);
+		if (!entry.group.userData.shared) {
+			entry.group.traverse((object) => {
+				const drawable = object as THREE.Mesh;
+				if (!drawable.geometry && !drawable.material) return;
+				drawable.geometry?.dispose();
+				const material = drawable.material as THREE.Material | THREE.Material[] | undefined;
+				if (Array.isArray(material)) material.forEach((item) => item.dispose());
+				else material?.dispose();
+			});
+		}
+		this.previews.delete(key);
+		const button = this.labelButtons.get(key);
+		if (button) {
+			button.remove();
+			this.labelButtons.delete(key);
+		}
+	}
+
+	private clearPreviews(): void {
+		for (const key of [...this.previews.keys()]) this.removePreview(key);
+		this.previewLoading.clear();
+		this.hideLabels();
+	}
+
+	private rowStillThere(pick: RowPick): boolean {
+		const cloud = this.rowClouds.find((entry) => entry.table === pick.table);
+		return cloud?.rows.some((row) => row.id === pick.id) ?? false;
+	}
+
+	private labelHeight(row: SpawnRow, table: SpawnTable): number {
+		const entry = this.previews.get(`${table}:${row.id}`);
+		return (entry ? entry.top * (entry.scale ?? 1) : table === 'door' ? 230 : 160) + 30;
+	}
+
+	/** Nearby names, projected on every tick and capped: labels are a reading
+	 * aid, not a second scene graph. */
+	private updateLabels(): void {
+		if (!this.labelsVisible) {
+			this.hideLabels();
+			return;
+		}
+		this.camera.updateMatrixWorld();
+		const rect = this.canvas.getBoundingClientRect();
+		const layerRect = this.labelLayer.getBoundingClientRect();
+		const radius = THREE.MathUtils.clamp(this.orbit.distance * 0.5, 3500, 22000);
+		const candidates: Array<{
+			table: SpawnTable;
+			row: SpawnRow;
+			selected: boolean;
+			distance: number;
+		}> = [];
+		for (const cloud of this.rowClouds) {
+			if (!cloud.group.visible) continue;
+			for (const row of cloud.rows) {
+				const selected = this.selection.rows.some(
+					(pick) => pick.table === cloud.table && pick.id === row.id
+				);
+				const distance = Math.hypot(row.x - this.camera.position.x, row.y - this.camera.position.z);
+				if (!selected && distance > radius) continue;
+				candidates.push({ table: cloud.table, row, selected, distance });
+			}
+		}
+		candidates.sort((a, b) => Number(b.selected) - Number(a.selected) || a.distance - b.distance);
+		const shown = new Set<string>();
+		const placed: Array<{ x: number; y: number }> = [];
+		for (const { table, row, selected } of candidates.slice(0, LABEL_LIMIT)) {
+			const key = `${table}:${row.id}`;
+			const at = this.screenOf(rect, [row.x, row.z + this.labelHeight(row, table), row.y]);
+			if (!at) continue;
+			let button = this.labelButtons.get(key);
+			if (
+				!button &&
+				!selected &&
+				placed.some((point) => Math.abs(point.x - at.x) < 60 && Math.abs(point.y - at.y) < 14)
+			) {
+				continue;
+			}
+			placed.push(at);
+			if (!button) {
+				button = document.createElement('button');
+				button.type = 'button';
+				button.className = 'world-label';
+				Object.assign(button.style, {
+					position: 'absolute',
+					transform: 'translate(-50%, -100%)',
+					pointerEvents: 'auto',
+					padding: '1px 5px',
+					borderRadius: '4px',
+					border: '1px solid rgba(232, 238, 242, 0.22)',
+					background: 'rgba(15, 20, 24, 0.82)',
+					color: '#e8eef2',
+					font: '11px/1.5 system-ui, sans-serif',
+					whiteSpace: 'nowrap',
+					cursor: 'pointer'
+				} satisfies Partial<CSSStyleDeclaration>);
+				button.addEventListener('click', (event) => {
+					event.stopPropagation();
+					this.selectRow({ table, id: row.id });
+				});
+				button.addEventListener('dblclick', (event) => {
+					event.stopPropagation();
+					this.selectRow({ table, id: row.id });
+					this.focusRow({ table, id: row.id });
+				});
+				this.labelLayer.appendChild(button);
+				this.labelButtons.set(key, button);
+			}
+			button.textContent = row.name || `${table} ${row.id.slice(0, 8)}`;
+			button.style.left = `${at.x - layerRect.left}px`;
+			button.style.top = `${at.y - layerRect.top}px`;
+			button.style.borderColor = selected ? '#67e8f9' : 'rgba(232, 238, 242, 0.22)';
+			button.style.color = selected ? '#67e8f9' : '#e8eef2';
+			button.style.display = 'block';
+			shown.add(key);
+		}
+		for (const [key, button] of this.labelButtons) {
+			if (shown.has(key)) continue;
+			button.remove();
+			this.labelButtons.delete(key);
+		}
+	}
+
+	private hideLabels(): void {
+		for (const button of this.labelButtons.values()) button.remove();
+		this.labelButtons.clear();
+	}
+
+	/** A zone point projected for the label layer, or null when it is behind
+	 * the camera or outside the viewport. */
+	private screenOf(
+		rect: DOMRect,
+		position: [number, number, number]
+	): { x: number; y: number } | null {
+		const point = new THREE.Vector3(...position);
+		const view = point.clone().applyMatrix4(this.camera.matrixWorldInverse);
+		if (view.z > -1) return null;
+		const projected = point.project(this.camera);
+		if (projected.x < -1.2 || projected.x > 1.2 || projected.y < -1.2 || projected.y > 1.2) {
+			return null;
+		}
+		return {
+			x: rect.left + ((projected.x + 1) / 2) * rect.width,
+			y: rect.top + ((1 - projected.y) / 2) * rect.height
+		};
+	}
+
+	/** The creature GLBs carry their sheets in the exporter's own extension,
+	 * not in `gltf.materials`; bind them once, before any clone is made. */
+	private textureCreature(model: LoadedMesh['model']): void {
+		model.scene.traverse((object) => {
+			const mesh = object as THREE.Mesh;
+			if (mesh.isMesh) mesh.material = this.materialFor(mesh, model);
+		});
+	}
+
+	private creatureModel(model: number): Promise<LoadedMesh | undefined> {
+		const cached = this.creatureCache.get(model);
+		if (cached) return cached;
+		const promise = fetch(api.worldCreatureUrl(model))
+			.then((response) => (response.ok ? response.arrayBuffer() : undefined))
+			.then((buffer) => (buffer ? loadFromGlb(buffer, `creature-${model}`) : undefined))
+			.then((loaded) => {
+				if (!loaded) return undefined;
+				this.textureCreature(loaded);
+				return { model: loaded };
+			})
+			.catch((error) => {
+				console.warn(`world: creature ${model} preview failed`, error);
+				return undefined;
+			});
+		this.creatureCache.set(model, promise);
+		return promise;
+	}
+
+	/** Drop the loaded figures and read them again: a client import or a
+	 * changed `Model` can leave the browser holding the old bytes. */
+	reloadPreviews(): void {
+		this.clearPreviews();
+		this.creatureCache.clear();
+		this.refreshPreviews();
+	}
+
+	/** Frame one server row (the entity list's double click). */
+	focusRow(pick: RowPick, distance = 1600): void {
+		const row = this.rowAt(pick);
+		if (!row || !this.terrain) return;
+		this.lookAtPoint([row.x, row.z, row.y], distance);
+	}
+
 	private clearSpawns(): void {
 		// the rows are about to be replaced: a gesture holding them would move
 		// objects nothing shows any more (a commit landing mid-drag is enough)
+		this.clearPreviews();
 		this.gesture = null;
 		this.rowClouds = [];
 		this.carried.clear();

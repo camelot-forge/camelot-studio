@@ -608,6 +608,11 @@ export interface SpawnRow {
 	z: number;
 	name?: string;
 	heading?: number;
+	model?: number;
+	size?: number;
+	guild?: string;
+	level?: number;
+	class_type?: string;
 }
 
 export type SpawnTable = 'mob' | 'worldobject' | 'door';
@@ -914,6 +919,7 @@ export const api = {
 	worldTerrainUrl: (zoneId: number) => `${getApiBase()}/api/v1/world/zone/${zoneId}/terrain`,
 	worldMeshUrl: (zoneId: number, name: string) =>
 		`${getApiBase()}/api/v1/world/zone/${zoneId}/mesh/${encodeURIComponent(name)}`,
+	worldCreatureUrl: (model: number) => `${getApiBase()}/api/v1/world/creature/${model}`,
 	worldTextureUrl: (zoneId: number, logical: string, entry: string) =>
 		`${getApiBase()}/api/v1/world/zone/${zoneId}/texture/${encodeURIComponent(logical)}/${encodeURIComponent(entry)}`,
 	worldTerrainTexUrl: (name: string) =>
