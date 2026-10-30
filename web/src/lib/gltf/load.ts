@@ -210,7 +210,8 @@ export function embedBuffers(
 	name: string,
 	bins: Map<string, ArrayBuffer>
 ): void {
-	const base = name.slice(0, name.lastIndexOf('.')).toLowerCase();
+	const dot = name.lastIndexOf('.');
+	const base = (dot >= 0 ? name.slice(0, dot) : name).toLowerCase();
 	for (const buf of json.buffers ?? []) {
 		if (buf.uri?.startsWith('data:')) continue;
 		const rel = (buf.uri?.split('/').pop() ?? `${base}.bin`).toLowerCase();

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
 	embedBuffers,
+	asDataUri,
 	extractMeshTextures,
 	parseGlbContainer,
 	setCharacterVariant,
@@ -48,6 +49,26 @@ describe('parseGlbContainer', () => {
 
 	it('rejects a non-GLB buffer', () => {
 		expect(() => parseGlbContainer(new Uint8Array([0, 0, 0, 0]).buffer)).toThrow();
+	});
+});
+
+describe('embedBuffers', () => {
+	it('finds the bin when the model name has no extension', () => {
+		const json: { buffers: Array<{ byteLength: number; uri?: string }> } = {
+			buffers: [{ byteLength: 3 }]
+		};
+		const bin = new Uint8Array([1, 2, 3]).buffer;
+		embedBuffers(json, 'creature-8', new Map([['creature-8.bin', bin]]));
+		expect(json.buffers[0].uri).toBe(asDataUri(bin));
+	});
+
+	it('still matches the name with an extension', () => {
+		const json: { buffers: Array<{ byteLength: number; uri?: string }> } = {
+			buffers: [{ byteLength: 3 }]
+		};
+		const bin = new Uint8Array([1, 2, 3]).buffer;
+		embedBuffers(json, 'creature-8.glb', new Map([['creature-8.bin', bin]]));
+		expect(json.buffers[0].uri).toBe(asDataUri(bin));
 	});
 });
 
