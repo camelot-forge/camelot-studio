@@ -124,6 +124,14 @@ def test_a_root_that_is_not_a_client_answers_503(tmp_path):
     assert "zones.mpk" in response.json()["detail"]
 
 
+def test_a_creature_model_the_client_lacks_answers_404(world):  # noqa: F811
+    """The preview is an optional layer: a client without the tables still
+    serves the world, and a missing model is a named 404."""
+    response = client_for(world).get("/api/v1/world/creature/99")
+    assert response.status_code == 404
+    assert "creature" in response.json()["detail"]
+
+
 # --- one zone -----------------------------------------------------------------
 
 def test_the_zone_payload_carries_what_the_editor_needs(world):  # noqa: F811
@@ -470,6 +478,19 @@ def test_the_corpus_terrain_and_a_mesh_and_a_texture():
     sheet = client.get("/api/v1/world/terraintex/LightGrass2.dds")
     assert sheet.status_code == 200
     assert sheet.content.startswith(b"\x89PNG")
+
+
+@corpus
+def test_the_corpus_creature_model_exports_a_server_model():
+    """The editor's NPC previews are the client's own figures: the server's
+    `Mob.Model` resolves through `monsters.csv` -> `monnifs.csv`, and the
+    daemon serves the figure as one glb."""
+    client = client_for(CORPUS)
+    model = client.get("/api/v1/world/creature/99")  # Boar
+    assert model.status_code == 200
+    assert model.headers["content-type"] == "model/gltf-binary"
+    assert model.content[:4] == b"glTF"
+    assert client.get("/api/v1/world/creature/999999").status_code == 404
 
 
 @corpus

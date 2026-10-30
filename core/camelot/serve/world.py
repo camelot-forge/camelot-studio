@@ -37,7 +37,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from .. import clientfs, nifutil, serverrows
+from .. import clientfs, creatures, nifutil, serverrows
 from ..dxt import dds_rgba
 from ..gamedata import SlotTexture
 from ..glb import pack_glb
@@ -79,6 +79,10 @@ from .models import (
 #: glbs are rebuilt).
 _WORLD_EXPORT_VERSION = "8"
 
+#: Bump when the creature export changes shape. Creature figures share the
+#: world cache directory, so they carry their own exporter marker.
+_CREATURE_EXPORT_VERSION = "1"
+
 #: `/world/zone/{id}/terrain`'s payload: magic, version, grid, factors, planes.
 TERRAIN_MAGIC = b"CAMT"
 TERRAIN_VERSION = 1
@@ -105,6 +109,8 @@ class World:
         #: The server's own rows (snapshot or live MySQL): the viewer's read
         #: path, and one of the caches a switch drops (`home.md` §D3.4).
         self.server_rows = ServerRows(config)
+        #: model id -> client figure, read once per client.
+        self._creature_models: dict[int, creatures.Creature] | None = None
 
     def repoint(self) -> None:
         """The daemon switched projects or clients (`home.md` §D3.4): drop
@@ -114,6 +120,7 @@ class World:
         still the right bytes for whatever client we now read."""
         self._index = None
         self._available = None
+        self._creature_models = None
         self.server_rows.repoint()
 
     def index(self) -> WorldIndex:
@@ -132,6 +139,18 @@ class World:
         if not zone.available:
             raise WorldError(f"zone {zone_id} ({zone.name}) is not shipped by this client")
         return zone
+
+    def creature(self, model_id: int) -> creatures.Creature | None:
+        """The client figure a server model id resolves to, or None."""
+        if self._creature_models is None:
+            try:
+                self._creature_models = {
+                    creature.model_id: creature
+                    for creature in creatures.read_creatures(str(self.config.root))
+                }
+            except (MpakError, OSError, ValueError, AttributeError, KeyError, IndexError) as error:
+                raise WorldError(f"cannot read the creature tables: {error}") from error
+        return self._creature_models.get(model_id)
 
     def available_ids(self) -> set[int]:
         """The zone ids whose folder exists, by listing each root once."""
@@ -589,7 +608,8 @@ def terrain_binary(zone: Zone) -> bytes:
 # --- caching ------------------------------------------------------------------
 
 def _cached(config: ServeConfig, kind: str, source: str, mtime: float,
-            builder: Callable[[], bytes], suffix: str) -> bytes:
+            builder: Callable[[], bytes], suffix: str,
+            exporter: str = _WORLD_EXPORT_VERSION) -> bytes:
     digest = hashlib.sha1(f"{kind}|{source}".encode()).hexdigest()[:24]
     out_dir = config.cache_dir / "world"
     out = out_dir / f"{digest}{suffix}"
@@ -597,7 +617,7 @@ def _cached(config: ServeConfig, kind: str, source: str, mtime: float,
     entry = read_json(meta)
     if (
         isinstance(entry, dict)
-        and entry.get("exporter") == _WORLD_EXPORT_VERSION
+        and entry.get("exporter") == exporter
         and entry.get("mtime") == mtime
         and out.exists()
     ):
@@ -606,7 +626,7 @@ def _cached(config: ServeConfig, kind: str, source: str, mtime: float,
     out_dir.mkdir(parents=True, exist_ok=True)
     out.write_bytes(data)
     write_json(meta, {"source": source, "mtime": mtime,
-                      "exporter": _WORLD_EXPORT_VERSION})
+                      "exporter": exporter})
     return data
 
 
@@ -618,6 +638,41 @@ def _mtime(path: str) -> float:
 
 
 # --- the meshes ---------------------------------------------------------------
+
+def creature_glb(world: World, model_id: int) -> bytes:
+    """The glb of one server model id, resolved through the client's own
+    `monsters.csv` -> `monnifs.csv` chain and cached on disk."""
+    creature = world.creature(model_id)
+    if creature is None:
+        raise WorldError(f"no creature model {model_id} in this client")
+    path = clientfs.resolve(str(world.config.root), f"figures/{creature.nif}.nif")
+    if path is None:
+        raise WorldError(
+            f"model {model_id}: figures/{creature.nif}.nif is not in this client"
+        )
+    return _cached(
+        world.config, "creature", path, _mtime(path),
+        lambda: _export_creature(str(world.config.root), path), ".glb",
+        exporter=_CREATURE_EXPORT_VERSION,
+    )
+
+
+def _export_creature(client_dir: str, path: str) -> bytes:
+    """One figure, bind pose, as the asset viewer exports it. Textures are
+    embedded by `export_figure`; the skin sidecar is not needed here."""
+    from ..figure import export_figure
+
+    with tempfile.TemporaryDirectory(prefix="camelot-world-") as tmpdir:
+        prefix = str(Path(tmpdir) / "creature")
+        try:
+            export_figure(client_dir, path, prefix, verbose=False)
+            gltf = json.loads(Path(prefix + ".gltf").read_text(encoding="utf-8"))
+            bin_bytes = Path(prefix + ".bin").read_bytes()
+        except (MpakError, OSError, ValueError, AttributeError, KeyError,
+                IndexError, NotImplementedError) as error:
+            raise WorldError(f"{os.path.basename(path)}: export failed: {error}") from error
+    return pack_glb(gltf, bin_bytes)
+
 
 def zone_mesh(world: World, zone: Zone, name: str) -> bytes:
     """The glb of the zone object named by a catalog `Filename` (cached)."""
@@ -817,6 +872,18 @@ def build_world_router(config: ServeConfig, world: World | None = None) -> APIRo
         except ZoneError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
         return Response(content=payload, media_type="application/octet-stream")
+
+    @router.get("/world/creature/{model_id}")
+    def world_creature(model_id: int) -> Response:
+        """One server model id as a bind-pose glb, for the editor's nearby
+        creature previews. The model is client-wide, not zone-wide."""
+        try:
+            glb = creature_glb(world, model_id)
+        except WorldUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except WorldError as error:
+            raise _http(error) from error
+        return Response(content=glb, media_type="model/gltf-binary")
 
     @router.get("/world/zone/{zone_id}/mesh/{name}")
     def world_mesh(zone_id: int, name: str) -> Response:
