@@ -55,7 +55,8 @@ only: its host networking does not carry the Console's loopback API
 ### The desk
 
 - Linux or macOS, or WSL2 on Windows.
-- Python 3.11 or later.
+- Python 3.11 or later, with `venv` and `pip`. On Debian and Ubuntu, the system
+  Python ships without them: `sudo apt install python3-venv`.
 - Node 20 or later and `pnpm`, for the browser interface.
 - `git`, and OpenSSH 8.0 or later. `ssh -V` prints the version; 8.0 is where
   `ssh-keygen -Y` appears, which signs releases.
