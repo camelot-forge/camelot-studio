@@ -273,11 +273,22 @@ since 2026-10-12: `csv` first per entry, `dat` as the fallback
 (`Zone.data_entry`). Taking `dat` first served an installed pack's pristine
 bytes and left its rows invisible; an archive the client ships empty
 (`ZONE009/csv009.mpk` is 0 bytes) reads as absent rather than as an error.
-Verification: `core/tests/test_serve_world.py` (12 unit tests + 6 corpus
-tests) and `web/src/lib/world/{terrain,ground}.test.ts` (sampling vectors
-generated from the Python; heading, placement, triangulation and the
-composition model pinned). The screenshot harness is
-`web/scripts/world_shot.mjs` (Playwright).
+The editor's **entity layer** (2026-10-30) reuses the same reader: `GET
+/world/creature/{model}` resolves a server `Mob.Model` through `monsters.csv` →
+`monnifs.csv` and serves the figure as one cached glb; `/world` draws the
+nearest NPCs as those client figures, with labels, while statics and doors are
+wireframe volumes (the client's object-model route is still open). The
+Navigator lists the zone's NPCs, statics and doors by name, guild, id and
+model, with a town-NPC filter and a distance sort; the Add panel searches the
+zone catalog and arms an entry before the ground click. Models and labels are
+toggles, and a model the client cannot resolve keeps its point.
+
+Verification: `core/tests/test_serve_world.py` (unit and corpus tiers) and
+`web/src/lib/world/{terrain,ground,entities}.test.ts` (sampling vectors
+generated from the Python; heading, placement, triangulation, the composition
+model and the entity filters pinned). The browser harnesses are
+`web/scripts/world_shot.mjs` and `web/scripts/world_entities_probe.mjs`
+(Playwright).
 
 
 The client-side run happened (2026-10-07), on a Linux x86-64 host with the

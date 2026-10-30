@@ -214,6 +214,12 @@ locally** (in the World bar, or on Deploy) cuts the edits into a release and
 installs it on this machine's `local` environment; **Publish** then sends that
 same release to the server.
 
+The Navigator lists the zone's NPCs, statics and doors by name, guild, id and
+model; click one to select it, double-click to frame it. Nearby NPCs are drawn
+with their client figures and names; statics and doors are wireframe volumes.
+The **Models** and **Labels** toggles turn that layer off, and **reload models**
+re-reads the figures after a client import.
+
 ### 4.2 Publish
 
 Deploy → **Publish**. One click does what used to be three verbs:
