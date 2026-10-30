@@ -14,6 +14,11 @@ same tables, order and values, and documents every approximation it still makes.
 `docs/formats.md` is the format reference and `docs/status.md` the evidence
 boundaries.
 
+![The world editor: Camelot Hills with nearby NPCs drawn as client figures, their names, and the server's volumes](docs/images/world-editor.png)
+
+_Camelot Hills in the world editor: nearby NPCs as client figures, their names,
+and the server's volumes._
+
 ## Quick start
 
 ```sh
@@ -93,6 +98,10 @@ settings fold holds the feed URL and the game address.
 built with git's plumbing, so the working branch and its index stay as they are.
 
 ## The players' launcher
+
+![The launcher page: the shard, the client's version, the account, and Play](docs/images/launcher.png)
+
+_The launcher: the feed's version, the client, the account, and Play._
 
 The launcher's page runs on `127.0.0.1`; the process around it updates the
 client and starts the game. A distributed launcher carries `shard.json` beside
