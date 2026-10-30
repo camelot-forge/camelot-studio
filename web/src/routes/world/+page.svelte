@@ -12,6 +12,7 @@
 		type EditorEdit,
 		type EditorState,
 		type SpawnTable,
+		type WorldCatalogEntry,
 		type WorldFixture,
 		type WorldIndex,
 		type WorldSearch,
@@ -34,6 +35,8 @@
 		type RowProposal
 	} from '$lib/world/viewer';
 	import ProjectChip from '$lib/components/ProjectChip.svelte';
+	import { filterCatalog } from '$lib/world/catalog';
+	import { entitiesFromSpawns, filterEntities, type WorldEntity } from '$lib/world/entities';
 	import {
 		Compass,
 		Crosshair,
@@ -69,7 +72,9 @@
 		patrols: true,
 		bounds: false,
 		water: true,
-		jumps: false
+		jumps: false,
+		models: true,
+		labels: true
 	});
 	let query = $state('');
 	let fixtureQuery = $state('');
@@ -137,6 +142,14 @@
 	let findings = $state<LintFinding[] | null>(null);
 	let addPoint = $state<{ x: number; y: number; z: number } | null>(null);
 	let addQuery = $state('');
+	let addFilter = $state<'all' | 'ground' | 'mesh'>('all');
+	/** The catalog entry picked first: the next ground click places it. */
+	let addEntry = $state<WorldCatalogEntry | null>(null);
+	/** The zone's entities as one searchable list (the Navigator). */
+	let entityQuery = $state('');
+	let entityTable = $state<'all' | SpawnTable>('all');
+	let entitySort = $state<'name' | 'level' | 'distance'>('name');
+	let townOnly = $state(false);
 	let edit = $state<EditorState | null>(null);
 	/** View/Edit (the drafts' chip): Edit needs the daemon's own --edits session. */
 	let sessionMode = $state<'view' | 'edit'>('edit');
@@ -198,18 +211,26 @@
 			.map(([table, count]) => `${count} ${names[table] ?? table}`)
 			.join(' · ');
 	});
-	const catalogRows = $derived.by(() => {
-		if (!zone) return [];
-		const needle = addQuery.trim().toLowerCase();
-		return zone.catalog
-			.filter(
-				(entry) =>
-					!needle ||
-					entry.filename.toLowerCase().includes(needle) ||
-					entry.name.toLowerCase().includes(needle)
-			)
-			.slice(0, 200);
+	const catalogRows = $derived(zone ? filterCatalog(zone.catalog, addQuery, addFilter) : []);
+	const entities = $derived(entitiesFromSpawns(spawns));
+	const entityOrigin = $derived.by(() => {
+		if (selected) return { x: selected.x, y: selected.y };
+		if (selectedRow && spawns) {
+			const row = rowOf(spawns, selectedRow);
+			if (row) return { x: row.x, y: row.y };
+		}
+		return null;
 	});
+	const visibleEntities = $derived(
+		filterEntities(entities, {
+			query: entityQuery,
+			table: entityTable,
+			townOnly,
+			sort: entitySort,
+			origin: entityOrigin,
+			limit: 200
+		})
+	);
 
 	// Zones of the picked region, filtered by the search box; a zone the
 	// client does not ship is listed but cannot be opened.
@@ -252,6 +273,13 @@
 		viewer.onRowEdit = (kind, rows) => void commitRows(kind, rows);
 		viewer.onSelect = (selection) => selectFrom(selection);
 		viewer.onPick = (point) => {
+			if (addEntry) {
+				const entry = addEntry;
+				addEntry = null;
+				addPoint = null;
+				void addCatalogAt(entry, point);
+				return;
+			}
 			addPoint = point;
 		};
 		viewer.onHover = (point) => {
@@ -272,6 +300,8 @@
 			const tool = TOOL_KEYS[event.key.toLowerCase()];
 			if (tool && (editing || tool === 'select' || tool === 'measure')) editMode = tool;
 			if (event.key === 'Escape') {
+				addEntry = null;
+				addPoint = null;
 				selectFrom({ fixtures: [], rows: [] });
 				viewer?.clearMeasure();
 			}
@@ -313,6 +343,7 @@
 
 	$effect(() => {
 		viewer?.setEditMode(editMode, snap);
+		if (editMode !== 'add') addEntry = null;
 	});
 
 	/** The "go to" fields follow the selection: the usual next stop is where the
@@ -387,6 +418,8 @@
 		selectionCount = 0;
 		proposals = [];
 		spawns = null;
+		addEntry = null;
+		addPoint = null;
 		try {
 			const [loaded, rows] = await Promise.all([
 				api.worldZone(zoneRow.id),
@@ -511,6 +544,16 @@
 
 	function selectRow(pick: RowPick | null) {
 		viewer?.selectRow(pick);
+	}
+
+	function selectEntity(entity: WorldEntity) {
+		viewer?.selectRow({ table: entity.table, id: entity.id });
+	}
+
+	function focusEntity(entity: WorldEntity) {
+		const pick = { table: entity.table, id: entity.id };
+		viewer?.selectRow(pick);
+		viewer?.focusRow(pick);
 	}
 
 	function rowOf(rows: WorldSpawns, pick: RowPick): SpawnRowOf | null {
@@ -766,15 +809,24 @@
 		}
 	}
 
-	async function addCatalog(entry: { id: number; name: string; filename: string }) {
-		if (!addPoint) return;
-		await applyEdit({
-			kind: 'add',
-			nif_id: entry.id,
-			x: addPoint.x,
-			y: addPoint.y,
-			name: entry.name
-		});
+	async function addCatalogAt(
+		entry: WorldCatalogEntry,
+		point: { x: number; y: number; z: number }
+	) {
+		await applyEdit({ kind: 'add', nif_id: entry.id, x: point.x, y: point.y, name: entry.name });
+	}
+
+	async function addCatalog(entry: WorldCatalogEntry) {
+		if (addPoint) {
+			const point = addPoint;
+			addPoint = null;
+			await addCatalogAt(entry, point);
+			return;
+		}
+		addEntry = entry;
+		editMode = 'add';
+		viewer?.setEditMode('add', snap);
+		editStatus = `click the ground to place ${entry.name || entry.filename}`;
 	}
 
 	async function testLocally() {
@@ -1073,6 +1125,73 @@
 						{/if}
 					</section>
 
+					<section class="section entities">
+						<h4>Entities</h4>
+						<div class="row tools">
+							<button
+								type="button"
+								onclick={() => viewer?.reloadPreviews()}
+								title="re-read the client figures, after a client import or a Model change"
+							>
+								reload models
+							</button>
+						</div>
+						<label class="field">
+							<span>Search</span>
+							<input
+								type="search"
+								bind:value={entityQuery}
+								placeholder="name, guild, id or model"
+							/>
+						</label>
+						<div class="row tools">
+							<select bind:value={entityTable} aria-label="entity layer">
+								<option value="all">all layers</option>
+								<option value="mob">NPCs</option>
+								<option value="worldobject">objects</option>
+								<option value="door">doors</option>
+							</select>
+							<select bind:value={entitySort} aria-label="entity sort">
+								<option value="name">name</option>
+								<option value="level">level</option>
+								<option value="distance">distance</option>
+							</select>
+						</div>
+						<label class="check"
+							><input type="checkbox" bind:checked={townOnly} /> town NPCs only</label
+						>
+						<p class="hint">{visibleEntities.length} of {entities.length}</p>
+						<ul class="hits">
+							{#each visibleEntities as entity (`${entity.table}:${entity.id}`)}
+								<li>
+									<button
+										type="button"
+										class:active={selectedRow?.table === entity.table &&
+											selectedRow?.id === entity.id}
+										onclick={() => selectEntity(entity)}
+										ondblclick={() => focusEntity(entity)}
+										title="click to select, double-click to focus"
+									>
+										<span class="zname">{entity.name || '(unnamed)'}</span>
+										<span class="zmeta">
+											{entity.table === 'mob'
+												? `NPC · level ${entity.level ?? 0}`
+												: entity.table === 'worldobject'
+													? 'object'
+													: 'door'}{entity.guild ? ` · ${entity.guild}` : ''}{entity.distance !==
+											undefined
+												? ` · ${Math.round(entity.distance)}`
+												: ''}
+										</span>
+									</button>
+								</li>
+							{/each}
+						</ul>
+						{#if visibleEntities.length === 0}
+							<p class="hint">No entity matches.</p>
+						{/if}
+					</section>
+
 					<section class="layers">
 						<label><input type="checkbox" bind:checked={toggles.ground} /> ground</label>
 						<label><input type="checkbox" bind:checked={toggles.fixtures} /> fixtures</label>
@@ -1083,6 +1202,12 @@
 						<label><input type="checkbox" bind:checked={toggles.bounds} /> bounds</label>
 						<label><input type="checkbox" bind:checked={toggles.water} /> water</label>
 						<label><input type="checkbox" bind:checked={toggles.jumps} /> jumps</label>
+						<label title="nearby NPCs as client figures; statics and doors as volumes"
+							><input type="checkbox" bind:checked={toggles.models} /> models</label
+						>
+						<label title="names for the nearby rows"
+							><input type="checkbox" bind:checked={toggles.labels} /> labels</label
+						>
 					</section>
 
 					<section class="fixtures">
@@ -1392,21 +1517,34 @@
 						<section class="context">
 							<h3>Add</h3>
 							<p class="hint">
-								{addPoint
-									? `add at ${addPoint.x.toFixed(0)}, ${addPoint.y.toFixed(0)}`
-									: 'click the ground to aim'}
+								{addEntry
+									? `click the ground to place ${addEntry.name || addEntry.filename}`
+									: addPoint
+										? `add at ${addPoint.x.toFixed(0)}, ${addPoint.y.toFixed(0)}`
+										: 'pick an entry, then click the ground'}
 							</p>
-							<input type="search" bind:value={addQuery} placeholder="catalog: file or name" />
+							<input type="search" bind:value={addQuery} placeholder="catalog: file, name or id" />
+							<select bind:value={addFilter} aria-label="catalog filter">
+								<option value="all">all entries</option>
+								<option value="mesh">with meshes</option>
+								<option value="ground">ground only</option>
+							</select>
+							<p class="hint">{catalogRows.length} of {zone?.catalog.length ?? 0}</p>
 							<ul class="addlist">
 								{#each catalogRows as entry (entry.id)}
 									<li>
 										<button
 											type="button"
-											disabled={!addPoint || busyEdit}
+											class:active={addEntry?.id === entry.id}
+											disabled={busyEdit}
 											onclick={() => addCatalog(entry)}
 										>
-											<span class="zname">{entry.filename}</span>
-											<span class="zmeta">{entry.name}</span>
+											<span class="zname">{entry.name || entry.filename}</span>
+											<span class="zmeta">
+												{entry.filename}{entry.ground ? ' · ground' : ''}{entry.mesh
+													? ''
+													: ' · no mesh'}
+											</span>
 										</button>
 									</li>
 								{/each}

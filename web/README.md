@@ -13,7 +13,7 @@ Design system: vanilla CSS adapted from Pictiúr's tokens (dark theme,
 | Route      | What it is                                                           |
 | ---------- | -------------------------------------------------------------------- |
 | `/home`    | what the daemon serves, the machine's projects, the ways in          |
-| `/world`   | the world editor: regions, zones, terrain, fixtures, placements      |
+| `/world`   | the world editor: terrain, fixtures, NPC/object previews, placements |
 | `/`        | Figures: the asset library, the drop zone, the viewer, the inspector |
 | `/builder` | the native fig3 character builder                                    |
 | `/deploy`  | publish the pending edits, test them locally, inspect the feed       |
@@ -88,7 +88,7 @@ src/
 │   ├── nav.ts home.ts          # the destinations, and Home's own facts
 │   ├── anim.ts appearance.ts races.ts character.ts   # figure data
 │   ├── inspect.ts transport.ts # the inspector's cards, the transport bar
-│   ├── world/                  # terrain, ground, gizmo, carried, journal, viewer
+│   ├── world/                  # terrain, ground, gizmo, carried, journal, entities, catalog, viewer
 │   ├── gltf/load.ts            # glTF/GLB -> THREE.Scene
 │   └── components/             # AppBar, Dock, Inspector, Library, Viewer, …
 └── routes/                     # home, world, builder, deploy, render, figures
