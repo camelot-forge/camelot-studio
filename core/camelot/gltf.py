@@ -748,6 +748,7 @@ WORLD_SKIP_PREFIXES = (
     "collidee",
     "collision",
     "climb",
+    "footprint",
     "shadowcaster",
     "!lod_cullme",
     "!visible_damaged",

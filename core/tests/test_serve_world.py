@@ -591,6 +591,11 @@ def test_the_corpus_mesh_drops_the_far_lod_and_collision_subtrees():
     assert tavern and not any("far" in m.lower() for m in tavern)
     assert not any("collision" in m.lower() or "collidee" in m.lower() for m in tavern)
     assert any(m.lower().startswith("btavern2intnear") for m in tavern)
+    # A city block's visible branch also carries a flat `ext00 (footprint)`
+    # plane (the map/water helper); drawing it paints a white sheet over the
+    # streets.
+    city = glb_meshes(26, "cam01.nif")
+    assert city and not any("footprint" in m.lower() for m in city)
 
 
 @corpus

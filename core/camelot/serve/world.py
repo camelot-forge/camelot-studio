@@ -79,7 +79,7 @@ from .models import (
 #: zone meshes went back to the figures' axis rotation (the reflection the
 #: previous bump introduced turned every building 180 deg round — the cached
 #: glbs are rebuilt).
-_WORLD_EXPORT_VERSION = "8"
+_WORLD_EXPORT_VERSION = "9"
 
 #: Bump when the creature export changes shape. Creature figures share the
 #: world cache directory, so they carry their own exporter marker.
