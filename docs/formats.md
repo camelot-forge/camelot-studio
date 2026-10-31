@@ -746,7 +746,10 @@ Measured 2026-10-11 on the OpenDAoC 1.127 client. The reader is
   visible branch is a `NiLODNode` with a `(near, far)` range per child *in
   file order* (the tavern lists the far child first, the guard tower the
   near one) and its collision hulls (`collisionswitch`'s children:
-  `collision …`, `collidee …`, `climb …`) beside it. The client's own string
+  `collision …`, `collidee …`, `climb …`) beside it. A city block also ships
+  a flat `ext00 (footprint)` plane under a `footprints` node: it is the map /
+  water helper, not a visible surface, and it is dropped by the same name
+  rule. The client's own string
   table carries those names (`collidee`, `collisionswitch`,
   `!collidee_PlugTier%d`), so the name is the engine's rule: draw the level
   whose range starts at 0, drop the rest. Drawing them all paints a second,
