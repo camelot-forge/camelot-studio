@@ -398,6 +398,63 @@ def _fixture(row) -> WorldFixture:
     return WorldFixture.from_row(row)
 
 
+def _dungeon_architecture(
+        zone: Zone) -> tuple[list[WorldCatalogEntry], list[WorldFixture]]:
+    """The chunks `dungeon.place` places, as a non-editable render set.
+
+    `dungeon.place` carries the client's own local layout. The viewer mirrors
+    and centres it on the server rows (measured on the shipped dungeons); the
+    editable list stays `fixtures.csv`, which a dungeon does not have.
+    """
+    chunks = zone.dungeon_chunks()
+    catalog: list[WorldCatalogEntry] = []
+    for index, name in enumerate(chunks):
+        stem = os.path.splitext(os.path.basename(name))[0]
+        catalog.append(WorldCatalogEntry(
+            id=index, name=stem, filename=name, ground=False, radius=0,
+            min_scale=100, max_scale=100, min_angle=0, max_angle=0,
+            mesh=zone.object_mesh(name) is not None,
+        ))
+    fixtures: list[WorldFixture] = []
+    for index, block in enumerate(zone.dungeon_blocks()):
+        stem = os.path.splitext(os.path.basename(block.name))[0]
+        fixtures.append(WorldFixture(
+            id=1_000_000 + index, nif_id=block.index, name=stem,
+            x=block.x, y=block.y, z=block.z, angle=block.angle, scale=100,
+            radius=0, collide=0, animate=False, ground=False, flip=False,
+            cave=False, unique_id=index,
+        ))
+    return catalog, fixtures
+
+
+def _city_architecture(
+        zone: Zone) -> tuple[list[WorldCatalogEntry], list[WorldFixture]]:
+    """The blocks `city.csv` names, with the `.nhd` box as the anchor.
+
+    A city has no `fixtures.csv`: `city.csv` names the block meshes and each
+    `camNN.nhd` carries the box the client walks on. The payload exposes that
+    box's minimum corner; the viewer anchors the mesh's own minimum there
+    (`architecture_anchor == "min"`), because the NIF geometry is centred on
+    its origin while the block is not.
+    """
+    catalog: list[WorldCatalogEntry] = []
+    fixtures: list[WorldFixture] = []
+    for index, block in enumerate(zone.city_blocks()):
+        stem = os.path.splitext(os.path.basename(block.name))[0]
+        catalog.append(WorldCatalogEntry(
+            id=index, name=stem, filename=block.name, ground=False, radius=0,
+            min_scale=100, max_scale=100, min_angle=0, max_angle=0,
+            mesh=zone.object_mesh(block.name) is not None,
+        ))
+        fixtures.append(WorldFixture(
+            id=1_000_000 + index, nif_id=index, name=stem,
+            x=block.x, y=block.y, z=0, angle=0, scale=100,
+            radius=0, collide=0, animate=False, ground=False, flip=False,
+            cave=False, unique_id=index,
+        ))
+    return catalog, fixtures
+
+
 def _catalog(zone: Zone) -> list[WorldCatalogEntry]:
     out: list[WorldCatalogEntry] = []
     for row in zone.catalog():
@@ -478,6 +535,9 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
         warnings.extend(notes)
         return [_fixture(row) for row in rows]
 
+    architecture: list[WorldFixture] = []
+    architecture_catalog: list[WorldCatalogEntry] = []
+    architecture_anchor = "origin"
     if zone.kind in ("city", "dungeon"):
         # Their client geometry lives in a layout the archive does not carry
         # (city blocks, dungeon chunks). The server rows are still the zone's
@@ -488,6 +548,11 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
         water: list[WorldWater] = []
         jumps: list[WorldJump] = []
         patches = None
+        if zone.kind == "dungeon":
+            architecture_catalog, architecture = _dungeon_architecture(zone)
+        else:
+            architecture_catalog, architecture = _city_architecture(zone)
+            architecture_anchor = "min"
     else:
         fixtures = part("fixtures", placements, [])
         catalog = part("catalog", lambda: _catalog(zone), [])
@@ -524,6 +589,9 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
         terrain=terrain,
         fixtures=fixtures,
         catalog=catalog,
+        architecture=architecture,
+        architecture_catalog=architecture_catalog,
+        architecture_anchor=architecture_anchor,
         bounds=bounds,
         water=water,
         jumps=jumps,
@@ -681,7 +749,13 @@ def _flat_height(zone: Zone) -> float:
 
 
 def _flat_zone_warning(zone: Zone) -> str:
-    what = {"city": "city blocks", "dungeon": "dungeon chunks"}.get(
+    if zone.kind == "dungeon":
+        return (f"{zone.name}: the dungeon chunks are aligned to the server "
+                "rows; the ground is a flat fallback")
+    if zone.kind == "city":
+        return (f"{zone.name}: the city blocks are placed from city.csv and "
+                "their .nhd headers; the ground is a flat fallback")
+    what = {"skycity": "geometry"}.get(
         zone.kind, "geometry")
     return (f"{zone.name}: the client places its {what} outside the zone "
             "archive; the server rows are shown on a flat ground")

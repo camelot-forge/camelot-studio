@@ -157,6 +157,7 @@ def world(tmp_path):
     (root / "zones" / "zone001").mkdir()
     (root / "zones" / "zone002").mkdir()
     (root / "zones" / "zone003").mkdir()
+    (root / "zones" / "zone003" / "nifs").mkdir()
     write_mpak(str(root / "zones" / "zones.mpk"), "zones.mpk",
                [("zones.dat", INDEX)])
     write_mpak(str(root / "zones" / "zone000" / "dat000.mpk"), "dat000.mpk", [
@@ -176,14 +177,24 @@ def world(tmp_path):
         ("fixtures.csv", FIXTURES),
     ])
     write_mpak(str(root / "zones" / "zone002" / "dat002.mpk"), "dat002.mpk", [
-        ("dungeon.chunk", b"chunks"),
-        ("dungeon.place", b"places"),
+        ("dungeon.chunk", b"Room1.NIF\r\nHall1.NIF\r\n"),
+        ("dungeon.place",
+         (b"0, 0, 0, 0, 0, 1, 0, 0\r\n"
+          b"1, 1536, 256, 192, 1.570796, 0, 0, 1\r\n"
+          b"1, -384, 0, 0, 1.570796, 0, 0, -1\r\n"
+          b"2, 512, 0, 0, 0, 1, 0, 0\r\n"
+          b"1, x, 0, 0, 0, 1, 0, 0\r\n")),
         ("sector.dat", SECTOR),
     ])
     write_mpak(str(root / "zones" / "zone003" / "dat003.mpk"), "dat003.mpk", [
-        ("city.csv", b"city"),
+        ("city.csv", b"1,cam01.nif\r\n"),
         ("adjacency.csv", b"adjacency"),
     ])
+    # the block header: `NHD`, a version, the name, the cell size, the cell box
+    (root / "zones" / "zone003" / "nifs" / "cam01.nhd").write_bytes(
+        b"NHD" + struct.pack("<HH", 1, 9) + b"cam01.npk"
+        + struct.pack("<H", 64) + struct.pack("<4i", -21, 28, -21, 14)
+        + b"\0" * 8)
     return str(root)
 
 
@@ -315,6 +326,29 @@ def test_zonejump_rows_are_read(world):
     rows = zones.WorldIndex(world).open(0).zonejumps()
     assert rows == [["1", "CamCity", "3200", "28712", "3053", "28712",
                      "2912", "3072", "6", "", ""]]
+
+
+def test_dungeon_chunks_and_placements_are_read(world):
+    zone = zones.WorldIndex(world).open(2)
+    assert zone.dungeon_chunks() == ["Room1.NIF", "Hall1.NIF"]
+    blocks = zone.dungeon_blocks()
+    # row 3 names a chunk the list does not have, row 5 is not a number:
+    # both are skipped rather than shifting the placements that do parse
+    assert [(b.index, b.name) for b in blocks] == [
+        (0, "Room1.NIF"), (1, "Hall1.NIF"), (1, "Hall1.NIF")]
+    assert [(b.x, b.y, b.z) for b in blocks] == [
+        (0.0, 0.0, 0.0), (1536.0, 256.0, 192.0), (-384.0, 0.0, 0.0)]
+    # the axis settles the sign: +z at 90° is a quarter turn, -z the other way
+    assert [b.angle for b in blocks] == pytest.approx([0.0, 90.0, 270.0])
+
+
+def test_city_blocks_take_their_box_from_the_nhd_header(world):
+    blocks = zones.WorldIndex(world).open(3).city_blocks()
+    assert [(b.index, b.name) for b in blocks] == [(1, "cam01.nif")]
+    block = blocks[0]
+    # cells × grid: (-21..28, -21..14) × 64
+    assert (block.x, block.y) == (-1344.0, -1344.0)
+    assert (block.width, block.height) == (3136.0, 2240.0)
 
 
 # --- the height model ---------------------------------------------------------

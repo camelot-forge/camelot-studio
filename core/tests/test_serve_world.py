@@ -175,22 +175,28 @@ def test_the_zone_payload_exposes_the_ground_layer_model(textured):
 
 def test_a_dungeon_zone_loads_on_a_flat_ground(world):  # noqa: F811
     """zone002 is a dungeon: no terrain/fixtures — the payload warns once and
-    keeps the zone usable for the server rows."""
+    keeps the zone usable for the server rows, with `dungeon.place` as a
+    non-editable architecture set."""
     response = client_for(world).get("/api/v1/world/zone/2")
     assert response.status_code == 200
     zone = response.json()
     assert zone["info"]["kind"] == "dungeon"
     assert zone["fixtures"] == []
     assert zone["catalog"] == []
+    assert [block["nif_id"] for block in zone["architecture"]] == [0, 1, 1]
+    assert [entry["filename"] for entry in zone["architecture_catalog"]] == [
+        "Room1.NIF", "Hall1.NIF"]
+    assert zone["architecture_catalog"][0]["mesh"] is False
     assert zone["terrain"] is not None
     assert zone["terrain"]["width"] == 8
     assert zone["terrain"]["flat"] is True
-    assert any("flat ground" in warning for warning in zone["warnings"])
+    assert any("flat fallback" in warning for warning in zone["warnings"])
     assert not any(warning.startswith("terrain:") for warning in zone["warnings"])
 
 
 def test_a_city_zone_loads_on_a_flat_ground(world):  # noqa: F811
-    """zone003 is a city: same flat ground, and its terrain route answers."""
+    """zone003 is a city: the blocks come from `city.csv` + `.nhd`, anchored
+    on their minimum corner and centred on the rows by the viewer."""
     client = client_for(world)
     response = client.get("/api/v1/world/zone/3")
     assert response.status_code == 200
@@ -198,9 +204,14 @@ def test_a_city_zone_loads_on_a_flat_ground(world):  # noqa: F811
     assert zone["info"]["kind"] == "city"
     assert zone["fixtures"] == []
     assert zone["catalog"] == []
+    assert zone["architecture_anchor"] == "min"
+    assert [(block["name"], block["x"], block["y"])
+            for block in zone["architecture"]] == [("cam01", -1344.0, -1344.0)]
+    assert [entry["filename"] for entry in zone["architecture_catalog"]] == [
+        "cam01.nif"]
     assert zone["terrain"]["width"] == 8
     assert zone["terrain"]["flat"] is True
-    assert any("flat ground" in warning for warning in zone["warnings"])
+    assert any("flat fallback" in warning for warning in zone["warnings"])
 
     terrain = client.get("/api/v1/world/zone/3/terrain")
     assert terrain.status_code == 200

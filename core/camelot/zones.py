@@ -48,7 +48,9 @@ Nothing here writes. An edit goes through the pack pipeline
 """
 from __future__ import annotations
 
+import math
 import os
+import struct
 from dataclasses import dataclass, field
 
 from . import clientfs, gamedata, pcx
@@ -61,6 +63,8 @@ __all__ = [
     "ZONE_SIZE",
     "ZONE_UNIT",
     "Bound",
+    "CityBlock",
+    "DungeonBlock",
     "Fixture",
     "Jump",
     "River",
@@ -415,6 +419,42 @@ class River:
     right: list[tuple[int, int]]
 
 
+@dataclass
+class DungeonBlock:
+    """One placed dungeon chunk from `dungeon.place`.
+
+    `name` is the NIF listed at `dungeon.chunk[index]`; `x`/`y`/`z` are the
+    local placement the client's dungeon layout uses, and `angle` is its yaw
+    in degrees (the file stores an axis-angle, and every measured row turns
+    about the up axis).
+    """
+
+    index: int
+    name: str
+    x: float
+    y: float
+    z: float
+    angle: float
+
+
+@dataclass
+class CityBlock:
+    """One city block: a `city.csv` NIF and its `.nhd` box.
+
+    A city assembly is not in `fixtures.csv`: `city.csv` names the block
+    meshes, and each `camNN.nhd` next to them carries a cell box (the cell
+    size is the header's `grid` value). The box is the block's walkable
+    anchor in zone units, while the NIF itself is centred near its origin.
+    """
+
+    index: int
+    name: str
+    x: float
+    y: float
+    width: float
+    height: float
+
+
 class Zone:
     """One zone's data, read from the client's own archives (read-only)."""
 
@@ -719,6 +759,106 @@ class Zone:
             ))
         return out
 
+    # -- dungeon chunks --------------------------------------------------------
+
+    def dungeon_chunks(self) -> list[str]:
+        """The NIF names `dungeon.chunk` lists, in placement order."""
+        raw = self.data_entry("dungeon.chunk")
+        return [line.strip() for line in raw.decode("latin-1").splitlines()
+                if line.strip()]
+
+    def dungeon_blocks(self) -> list[DungeonBlock]:
+        """The placements `dungeon.place` holds, as yaw-only blocks.
+
+        Each row is `chunk, x, y, z, angle, axis x, axis y, axis z`; the
+        corpus uses the up axis (`0, 0, ±1`) or the identity (`1, 0, 0` at
+        angle 0), so the viewer's yaw is enough. Rows naming a chunk the list
+        does not have, or carrying a value that is not a number, are skipped.
+        """
+        chunks = self.dungeon_chunks()
+        raw = self.data_entry("dungeon.place")
+        out: list[DungeonBlock] = []
+        for line in raw.decode("latin-1").splitlines():
+            fields = [field_.strip() for field_ in line.split(",")]
+            if len(fields) < 8:
+                continue
+            try:
+                index = int(float(fields[0]))
+                x, y, z = (float(fields[position]) for position in (1, 2, 3))
+                radians = float(fields[4])
+                _axis_x, _axis_y, axis_z = (
+                    float(fields[position]) for position in (5, 6, 7))
+            except ValueError:
+                continue
+            if not 0 <= index < len(chunks):
+                continue
+            if abs(axis_z) >= 0.9:
+                angle = math.degrees(radians) * (1 if axis_z > 0 else -1)
+            elif abs(radians) <= 1e-6:
+                angle = 0.0
+            else:
+                # A rotation the yaw-only viewer cannot express; keep the
+                # angle rather than drop a block the client draws.
+                angle = math.degrees(radians)
+            out.append(DungeonBlock(
+                index=index, name=chunks[index], x=x, y=y, z=z,
+                angle=angle % 360.0,
+            ))
+        return out
+
+    # -- city blocks -----------------------------------------------------------
+
+    def city_blocks(self) -> list[CityBlock]:
+        """The blocks `city.csv` names, with the box their `.nhd` header holds.
+
+        Rows are `index, filename`. The `.nhd` is a loose companion of the
+        block's `.npk` (not an archive entry): `NHD`, a version, the file name,
+        a cell size (`grid`), a box in cells, then the cell data. The world box
+        is `cell * grid`. A row without a readable header is skipped: the
+        client cannot place it either.
+        """
+        raw = self.data_entry("city.csv")
+        headers = self._object_files()["nhd"]
+        out: list[CityBlock] = []
+        for line in raw.decode("latin-1").splitlines():
+            fields = [field_.strip() for field_ in line.split(",")]
+            if len(fields) < 2 or not fields[1]:
+                continue
+            try:
+                index = int(float(fields[0]))
+            except ValueError:
+                continue
+            stem = self._object_stem(fields[1])
+            path = headers.get(stem) if stem else None
+            if path is None:
+                continue
+            try:
+                with open(path, "rb") as handle:
+                    header = handle.read()
+            except OSError:
+                continue
+            box = self._nhd_box(header)
+            if box is None:
+                continue
+            min_x, max_x, min_y, max_y = box
+            out.append(CityBlock(index=index, name=fields[1], x=min_x,
+                                 y=min_y, width=max_x - min_x,
+                                 height=max_y - min_y))
+        return out
+
+    @staticmethod
+    def _nhd_box(raw: bytes) -> tuple[float, float, float, float] | None:
+        """The world box in an `.nhd` header, or None when it is too short."""
+        if len(raw) < 18 or raw[:3] != b"NHD":
+            return None
+        name_length = struct.unpack_from("<H", raw, 5)[0]
+        offset = 7 + name_length
+        if offset + 18 > len(raw):
+            return None
+        grid = struct.unpack_from("<H", raw, offset)[0]
+        min_x, max_x, min_y, max_y = struct.unpack_from("<4i", raw, offset + 2)
+        return (min_x * grid, max_x * grid, min_y * grid, max_y * grid)
+
     def zonejumps(self) -> list[list[str]]:
         """`zonejump.csv`'s rows (from/to points and the zone they lead to)."""
         raw = self.data_entry("zonejump.csv")
@@ -851,17 +991,19 @@ class Zone:
         return stem.casefold()
 
     def _object_files(self) -> dict[str, dict[str, str]]:
-        r"""The zone's object files by stem: `{"npk": {stem: path}, "tex": …}`.
+        r"""The zone's object files by stem: `{"npk": {stem: path}, …}`.
 
-        One listing per search directory (`_object_dirs`, the client's own
-        order), cached: a zone's catalog has dozens of entries and the mesh
-        directories carry thousands of files.
+        `nhd` holds the loose city-block headers; `tex` holds the winning
+        sheet per stem. One listing per search directory (`_object_dirs`, the
+        client's own order), cached: a zone's catalog has dozens of entries
+        and the mesh directories carry thousands of files.
         """
         cached = self._cache.get("object-files")
         if cached is not None:
             return cached  # type: ignore[return-value]
         meshes: dict[str, str] = {}
         textures: dict[str, list[tuple[int, int, str]]] = {}
+        headers: dict[str, str] = {}
         directories = self._object_dirs() + ["zones/textures", "textures",
                                              "frontiers/textures"]
         for rank, directory in enumerate(directories):
@@ -879,12 +1021,15 @@ class Zone:
                 extension = extension.lower()
                 if extension == ".npk":
                     meshes.setdefault(stem.casefold(), os.path.join(resolved, name))
+                elif extension == ".nhd":
+                    headers.setdefault(stem.casefold(), os.path.join(resolved, name))
                 elif extension in (".dds", ".tga", ".bmp"):
                     order = (".dds", ".tga", ".bmp").index(extension)
                     textures.setdefault(stem.casefold(), []).append(
                         (order, rank, os.path.join(resolved, name)))
         self._cache["object-files"] = {
             "npk": meshes,
+            "nhd": headers,
             "tex": {stem: min(items)[2] for stem, items in textures.items()},
         }
         return self._cache["object-files"]  # type: ignore[return-value]

@@ -617,6 +617,22 @@ Measured 2026-10-11 on the OpenDAoC 1.127 client. The reader is
   W-3 probe rows). An archive the client ships **empty**
   (`ZONE009/csv009.mpk` is 0 bytes) reads as absent, not as an error — the
   client cannot be reading it either.
+- **`dungeon.place`**: one row per placed chunk — `chunk #, x, y, z, angle, axis
+  x, axis y, axis z` (the angle is an axis-angle, and the corpus turns about
+  the up axis or uses the identity at 0). Positions are the client's own
+  dungeon layout around its origin, and `dungeon.chunk` lists the NIFs by
+  index. The layout's x axis is **mirrored** against the server's zone frame:
+  on the shipped dungeons, centring the mirrored layout on the server rows puts
+  most mobs inside a chunk, while the unmirrored layout leaves them outside.
+  The studio renders the chunks, non-editable, with that mirror and the rows
+  as the anchor; `fixtures.csv` (absent in a dungeon) stays the editable list.
+- **`city.csv` + `.nhd`**: `city.csv` rows are `index, filename`; each block's
+  `.nhd` sits loose beside its `.npk` and holds `NHD`, a version, the file
+  name, a cell size, a box in cells, then the cell data. The box × cell size is
+  the block's walkable anchor in zone units, while the NIF geometry is centred
+  on its own origin; the studio anchors the mesh's minimum corner there. The
+  city layout carries the same x mirror as `dungeon.place`, and its rows are
+  likewise the placement anchor.
 - **`terrain.pcx` / `offset.pcx`**: 8-bit, one-plane, RLE PCX, 256×256 for a
   65536-unit zone. The ground height is
   `terrain[y][x] × scalefactor + offset[y][x] × offsetfactor` — factors per
