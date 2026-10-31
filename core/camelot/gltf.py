@@ -855,6 +855,10 @@ def _base_texture_name(prop, blocks: list) -> str | None:
         block = source  # pyffi resolves the reference to the block itself
     file_name = getattr(block, "file_name", None) if block is not None else None
     if not file_name:
+        # 4.x city blocks embed their sheets (`NiPixelData`): the daemon's
+        # texture pass gives those source blocks a synthetic name.
+        file_name = getattr(block, "embedded_name", None) if block is not None else None
+    if not file_name:
         return None
     if isinstance(file_name, bytes):
         file_name = file_name.decode("latin1")

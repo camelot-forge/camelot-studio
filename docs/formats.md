@@ -621,19 +621,26 @@ Measured 2026-10-11 on the OpenDAoC 1.127 client. The reader is
   x, axis y, axis z` (the angle is an axis-angle, and the corpus turns about
   the up axis or uses the identity at 0). Positions are the client's own
   dungeon layout around its origin, and `dungeon.chunk` lists the NIFs by
-  index. The layout's x axis is **mirrored** against the server's zone frame:
-  on the shipped dungeons, centring the mirrored layout on the server rows puts
-  most mobs inside a chunk, while the unmirrored layout leaves them outside.
-  The studio renders the chunks, non-editable, with that mirror and the rows
-  as the anchor; the client's own floors carry the ground, and `fixtures.csv`
-  (absent in a dungeon) stays the editable list.
+  index. Measured in `game1127.dll` (`FUN_0054c039`): every placement is a
+  child of one fixed root at world `(32000, 32000, -16000)` with a 180° yaw
+  about up (the same `FUN_00675ca0` π matrix as a city). The client does not
+  centre the layout on the server rows. In the viewer's Y-up frame that root
+  is +16000 up and the yaw flips both plane axes; a placement's Y is the NIF
+  depth axis, so it maps to scene `-Z`. The studio renders the chunks,
+  non-editable, with that fixed root; the client's own floors carry the
+  ground, and `fixtures.csv` (absent in a dungeon) stays the editable list.
 - **`city.csv` + `.nhd`**: `city.csv` rows are `index, filename`; each block's
   `.nhd` sits loose beside its `.npk` and holds `NHD`, a version, the file
   name, a cell size, a box in cells, then the cell data. The box × cell size is
-  the block's walkable anchor in zone units, while the NIF geometry is centred
-  on its own origin; the studio anchors the mesh's plane centre there. The
-  city layout carries the same x mirror as `dungeon.place`, and its rows are
-  likewise the placement anchor.
+  the block's walkable extent in the NIF plane frame, **not a placement**: the
+  NIF vertices already carry the block's position. Measured in
+  `game1127.dll` (`FUN_00549436`): the client sets every tile to the fixed
+  world origin `8192 * 4 - 768` (32000) on both plane axes and -8000 up, then
+  copies a matrix built by `FUN_00675ca0` with the global `0x009675e8` = π,
+  i.e. a 180° yaw about up. In the viewer's Y-up frame that is +8000 up and a
+  yaw that flips both plane axes; the viewer subtracts the zone rect and
+  applies that frame once, instead of fitting the rows. The city layout is not
+  a second x-only mirror: `scale=(-1, 1, -1)` is the client's yaw.
 - **`terrain.pcx` / `offset.pcx`**: 8-bit, one-plane, RLE PCX, 256×256 for a
   65536-unit zone. The ground height is
   `terrain[y][x] × scalefactor + offset[y][x] × offsetfactor` — factors per
@@ -663,8 +670,12 @@ Measured 2026-10-11 on the OpenDAoC 1.127 client. The reader is
   zone-local), `[holes]`, `[forest]`, `[mongens]`.
 - **Object meshes**: `zones/Nifs/<name>.npk` is an **MPAK containing one
   NetImmerse 4.2.2.0 NIF** (the studio exports it to glTF today); `.nhd` is a
-  companion (header `NHD\1` plus the `.nif` name) whose role — collision or
-  ground — is unmeasured. `Dnifs/` holds the dungeon set, and a zone's own
+  companion (header `NHD\1` plus the `.nif` name, a cell size, a cell box and
+  int16 cell heights) holding a block's walkable height grid. It is collision
+  or ground data, never a placement: a city NIF's own vertices place it.
+  Some 4.x city blocks (`cam35`) also embed their sheets as `NiPixelData`,
+  palettised through a `NiPalette` block; the studio decodes those to DDS.
+  `Dnifs/` holds the dungeon set, and a zone's own
   `Nifs/` overrides it.
 - **Mesh and sheet lookup is by stem, not by name**: a catalog row's
   `bkeep.nif` names `zones/nifs/bkeep.npk`, and a NIF's `britlog.tga` loads

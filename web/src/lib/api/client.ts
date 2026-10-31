@@ -516,7 +516,7 @@ export interface WorldZone {
 	catalog: WorldCatalogEntry[];
 	architecture: WorldFixture[];
 	architecture_catalog: WorldCatalogEntry[];
-	architecture_anchor: 'origin' | 'center';
+	architecture_anchor: 'origin' | 'city' | 'dungeon';
 	bounds: WorldBound[];
 	water: WorldWater[];
 	jumps: WorldJump[];

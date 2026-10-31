@@ -444,7 +444,8 @@ class CityBlock:
     A city assembly is not in `fixtures.csv`: `city.csv` names the block
     meshes, and each `camNN.nhd` next to them carries a cell box (the cell
     size is the header's `grid` value). The box is the block's walkable
-    anchor in zone units, while the NIF itself is centred near its origin.
+    extent in the NIF plane frame; it is not a placement, since the NIF
+    vertices already carry the block's position in the city frame.
     """
 
     index: int
@@ -848,7 +849,7 @@ class Zone:
 
     @staticmethod
     def _nhd_box(raw: bytes) -> tuple[float, float, float, float] | None:
-        """The world box in an `.nhd` header, or None when it is too short."""
+        """The cell box in an `.nhd` header, or None when it is too short."""
         if len(raw) < 18 or raw[:3] != b"NHD":
             return None
         name_length = struct.unpack_from("<H", raw, 5)[0]

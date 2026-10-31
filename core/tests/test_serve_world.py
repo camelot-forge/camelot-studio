@@ -7,6 +7,7 @@ real client when `DAOC_CLIENT` is set, and are skipped otherwise.
 import json
 import os
 import struct
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,7 @@ from test_zones import (  # the synthetic client, one definition
 )
 
 from camelot.dxt import encode_a8r8g8b8
+from camelot.legacy import _block_class
 from camelot.serve.app import create_app
 from camelot.serve.config import ServeConfig
 from camelot.serve.world import (
@@ -26,6 +28,7 @@ from camelot.serve.world import (
     TERRAIN_MAGIC,
     TERRAIN_VERSION,
     World,
+    _internal_texture_dds,
     _live_problem,
     terrain_binary,
     terraintex_path,
@@ -183,7 +186,11 @@ def test_a_dungeon_zone_places_its_chunks(world):  # noqa: F811
     assert zone["info"]["kind"] == "dungeon"
     assert zone["fixtures"] == []
     assert zone["catalog"] == []
+    assert zone["architecture_anchor"] == "dungeon"
     assert [block["nif_id"] for block in zone["architecture"]] == [0, 1, 1]
+    assert [(block["x"], block["y"], block["z"])
+            for block in zone["architecture"]] == [
+                (0.0, 0.0, 0.0), (1536.0, 256.0, 192.0), (-384.0, 0.0, 0.0)]
     assert [entry["filename"] for entry in zone["architecture_catalog"]] == [
         "Room1.NIF", "Hall1.NIF"]
     assert zone["architecture_catalog"][0]["mesh"] is False
@@ -194,9 +201,40 @@ def test_a_dungeon_zone_places_its_chunks(world):  # noqa: F811
     assert not any(warning.startswith("terrain:") for warning in zone["warnings"])
 
 
+def test_an_embedded_palette_sheet_decodes_to_dds():
+    """4.x city blocks keep wall sheets inside the NIF: 8-bit indices plus a
+    `NiPalette`. The exporter must hand the viewer real RGBA DDS bytes."""
+    palette = bytes([255, 0, 0, 255, 0, 255, 0, 255]) + bytes(1024 - 8)
+    blocks = [
+        None,
+        _block_class("NiPixelData")(
+            pixel_format=2, bytes_per_pixel=1, mipmaps=[(2, 1, 0)],
+            pixels=b"\x00\x01", palette=2,
+        ),
+        SimpleNamespace(palette=palette),
+    ]
+    dds = _internal_texture_dds(blocks, SimpleNamespace(internal_texture=1))
+    assert dds is not None
+    assert struct.unpack_from("<II", dds, 12) == (1, 2)  # height, width
+    assert dds[128:] == bytes.fromhex("0000ffff 00ff00ff")  # BGRA, as DDS stores it
+
+
+def test_an_embedded_rgb_sheet_decodes_to_opaque_dds():
+    blocks = [
+        None,
+        _block_class("NiPixelData")(
+            pixel_format=0, bytes_per_pixel=3, mipmaps=[(1, 1, 0)],
+            pixels=b"\x10\x20\x30", palette=0xFFFFFFFF,
+        ),
+    ]
+    dds = _internal_texture_dds(blocks, SimpleNamespace(internal_texture=1))
+    assert dds is not None
+    assert dds[128:] == bytes.fromhex("302010ff")
+
+
 def test_a_city_zone_places_its_blocks(world):  # noqa: F811
-    """zone003 is a city: the blocks come from `city.csv` + `.nhd`, anchored
-    on their plane centre and centred on the rows by the viewer."""
+    """zone003 is a city: `city.csv` names the blocks, their NIF carries the
+    position, and the viewer applies the client's fixed city frame."""
     client = client_for(world)
     response = client.get("/api/v1/world/zone/3")
     assert response.status_code == 200
@@ -204,9 +242,9 @@ def test_a_city_zone_places_its_blocks(world):  # noqa: F811
     assert zone["info"]["kind"] == "city"
     assert zone["fixtures"] == []
     assert zone["catalog"] == []
-    assert zone["architecture_anchor"] == "center"
+    assert zone["architecture_anchor"] == "city"
     assert [(block["name"], block["x"], block["y"])
-            for block in zone["architecture"]] == [("cam01", 224.0, -224.0)]
+            for block in zone["architecture"]] == [("cam01", 0.0, 0.0)]
     assert [entry["filename"] for entry in zone["architecture_catalog"]] == [
         "cam01.nif"]
     assert zone["terrain"]["width"] == 8
