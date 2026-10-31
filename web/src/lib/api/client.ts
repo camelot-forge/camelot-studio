@@ -514,6 +514,9 @@ export interface WorldZone {
 	terrain: WorldTerrain | null;
 	fixtures: WorldFixture[];
 	catalog: WorldCatalogEntry[];
+	architecture: WorldFixture[];
+	architecture_catalog: WorldCatalogEntry[];
+	architecture_anchor: 'origin' | 'min';
 	bounds: WorldBound[];
 	water: WorldWater[];
 	jumps: WorldJump[];

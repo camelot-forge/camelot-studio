@@ -1,7 +1,7 @@
 """Pydantic schemas for the serve API (source of the generated TS types)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -247,6 +247,15 @@ class WorldZoneInfo(BaseModel):
     terrain: WorldTerrain | None = None
     fixtures: list[WorldFixture] = []
     catalog: list[WorldCatalogEntry] = []
+    #: A dungeon's client chunks (`dungeon.place`) or a city's blocks
+    #: (`city.csv` + `.nhd`). Rendered but not editable: they are architecture,
+    #: not `fixtures.csv` rows.
+    architecture: list[WorldFixture] = []
+    architecture_catalog: list[WorldCatalogEntry] = []
+    #: `origin` keeps the mesh's own origin (dungeon chunks); `min` puts its
+    #: local minimum corner on the placement (city blocks are separate meshes
+    #: whose geometry sits near its own origin).
+    architecture_anchor: Literal["origin", "min"] = "origin"
     bounds: list[WorldBound] = []
     water: list[WorldWater] = []
     jumps: list[WorldJump] = []

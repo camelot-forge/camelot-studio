@@ -316,6 +316,7 @@ export class WorldViewer {
 	private groups = {
 		ground: new THREE.Group(),
 		fixtures: new THREE.Group(),
+		architecture: new THREE.Group(),
 		spawns: new THREE.Group(),
 		statics: new THREE.Group(),
 		doors: new THREE.Group(),
@@ -331,6 +332,15 @@ export class WorldViewer {
 	private terrain: TerrainData | null = null;
 	private flatGround = false;
 	private framedRows = false;
+	private architectureAligned = false;
+	private architectureBounds: {
+		minX: number;
+		minY: number;
+		minZ: number;
+		maxX: number;
+		maxY: number;
+		maxZ: number;
+	} | null = null;
 	private texturedPatches = 0;
 	private composedPatches = 0;
 	private picks: PickGroup[] = [];
@@ -1857,9 +1867,15 @@ export class WorldViewer {
 			(sum, child) => sum + ((child as THREE.InstancedMesh).count ?? 0),
 			0
 		);
+		const architecture = this.groups.architecture.children.reduce(
+			(sum, child) => sum + ((child as THREE.InstancedMesh).count ?? 0),
+			0
+		);
 		return {
 			ground: this.groups.ground.children.length,
 			fixtureGroups: this.groups.fixtures.children.length,
+			architectureGroups: this.groups.architecture.children.length,
+			architectureInstances: architecture,
 			previews: this.previews.size,
 			labels: this.labelButtons.size,
 			fixtureInstances: instances,
@@ -2131,8 +2147,19 @@ export class WorldViewer {
 		this.terrain = data;
 		this.flatGround = Boolean(zone.terrain?.flat);
 		this.framedRows = false;
+		this.architectureAligned = false;
+		// `dungeon.place` and `city.csv` keep the client's layout around its
+		// origin, with an x axis mirrored against the server's zone frame.
+		// Measured on the shipped zones: mirrored, most rows fall inside the
+		// architecture; as-is, they sit beside it. The group carries that
+		// mirror once.
+		this.groups.architecture.scale.x = -1;
+		this.groups.architecture.position.set(0, 0, 0);
+		this.architectureBounds = this.fixtureBounds(zone.architecture ?? []);
 		this.buildGround(zoneId, zone, data, token);
 		await this.buildFixtures(zoneId, zone, data, token);
+		if (token !== this.token) return;
+		await this.buildArchitecture(zoneId, zone, data, token);
 		if (token !== this.token) return;
 		this.buildOverlays(zone, data);
 		this.frameZone(data);
@@ -2173,6 +2200,9 @@ export class WorldViewer {
 			this.frameRows(spawns);
 			this.framedRows = true;
 			this.refreshPreviews();
+		}
+		if (this.architectureBounds && !this.architectureAligned) {
+			this.architectureAligned = this.alignArchitecture(spawns);
 		}
 	}
 
@@ -2803,6 +2833,63 @@ export class WorldViewer {
 		}
 	}
 
+	/** A dungeon's chunks or a city's blocks, from the client's own layout.
+	 * They are the zone's architecture: drawn, but never picked or edited,
+	 * since the editable list is `fixtures.csv` and neither zone ships one. */
+	private async buildArchitecture(
+		zoneId: number,
+		zone: WorldZone,
+		data: TerrainData,
+		token: number
+	): Promise<void> {
+		const blocks = zone.architecture ?? [];
+		if (!blocks.length) return;
+		const byCatalog = new Map<number, WorldFixture[]>();
+		for (const block of blocks) {
+			const list = byCatalog.get(block.nif_id);
+			if (list) list.push(block);
+			else byCatalog.set(block.nif_id, [block]);
+		}
+		// One dungeon ships a few dozen chunks and the daemon exports them on
+		// demand; a small pool keeps the first load from serialising every
+		// NIF read while still leaving the daemon room to breathe.
+		const queue = (zone.architecture_catalog ?? []).filter((entry) =>
+			entry.mesh && byCatalog.get(entry.id)?.length
+		);
+		const worker = async () => {
+			for (;;) {
+				const entry = queue.shift();
+				if (!entry || token !== this.token) return;
+				const fixtures = byCatalog.get(entry.id);
+				if (!fixtures?.length) continue;
+				let loaded: LoadedMesh | undefined;
+				try {
+					loaded = await this.loadMesh(zoneId, entry.filename);
+				} catch (error) {
+					console.warn(`world: architecture mesh ${entry.filename} failed`, error);
+					continue;
+				}
+				if (token !== this.token) return;
+				if (!loaded) continue;
+				loaded.model.scene.updateMatrixWorld(true);
+				const box = new THREE.Box3().setFromObject(loaded.model.scene);
+				this.instance(
+					loaded.model,
+					fixtures,
+					data,
+					this.groups.architecture,
+					false,
+					zone.architecture_anchor ?? 'origin',
+					box
+				);
+				this.expandArchitectureBounds(box, fixtures, zone.architecture_anchor ?? 'origin');
+			}
+		};
+		await Promise.all(
+			Array.from({ length: Math.min(4, queue.length) }, () => worker())
+		);
+	}
+
 	private async loadMesh(zoneId: number, filename: string): Promise<LoadedMesh | undefined> {
 		const url = api.worldMeshUrl(zoneId, filename);
 		const cached = this.meshCache.get(url);
@@ -2815,8 +2902,21 @@ export class WorldViewer {
 		return loaded;
 	}
 
-	private instance(model: LoadedMesh['model'], fixtures: WorldFixture[], data: TerrainData): void {
+	private instance(
+		model: LoadedMesh['model'],
+		fixtures: WorldFixture[],
+		data: TerrainData,
+		group: THREE.Group = this.groups.fixtures,
+		pickable = true,
+		anchor: 'origin' | 'min' = 'origin',
+		box?: THREE.Box3
+	): void {
 		model.scene.updateMatrixWorld(true);
+		// A city block's geometry is centred on its own origin; `city.csv` gives
+		// the block's walkable box, so its minimum corner is the anchor.
+		const shift = anchor === 'min'
+			? (box ?? new THREE.Box3().setFromObject(model.scene)).min
+			: null;
 		const inner: THREE.Mesh[] = [];
 		model.scene.traverse((object) => {
 			if ((object as THREE.Mesh).isMesh) inner.push(object as THREE.Mesh);
@@ -2828,8 +2928,15 @@ export class WorldViewer {
 			const local = mesh.matrixWorld.clone();
 			for (let i = 0; i < fixtures.length; i++) {
 				const placement = fixturePlacement(data, fixtures[i]);
+				const position = shift
+					? [
+							placement.position[0] - shift.x,
+							placement.position[1] - shift.y,
+							placement.position[2] - shift.z
+						]
+					: placement.position;
 				matrix.compose(
-					new THREE.Vector3(...placement.position),
+					new THREE.Vector3(...position),
 					new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), placement.yaw),
 					new THREE.Vector3(placement.scale, placement.scale, placement.scale)
 				);
@@ -2839,9 +2946,120 @@ export class WorldViewer {
 			instanced.instanceMatrix.needsUpdate = true;
 			instanced.frustumCulled = false; // the instances span the zone
 			instanced.name = `fixtures-${mesh.name || 'mesh'}`;
-			this.groups.fixtures.add(instanced);
-			this.picks.push({ mesh: instanced, fixtures, local });
+			group.add(instanced);
+			if (pickable) this.picks.push({ mesh: instanced, fixtures, local });
 		}
+	}
+
+	/** The client-frame bounds of a set of placements (x/y on the plane, z up). */
+	private fixtureBounds(fixtures: WorldFixture[]): {
+		minX: number;
+		minY: number;
+		minZ: number;
+		maxX: number;
+		maxY: number;
+		maxZ: number;
+	} | null {
+		if (!fixtures.length) return null;
+		let minX = Infinity;
+		let minY = Infinity;
+		let minZ = Infinity;
+		let maxX = -Infinity;
+		let maxY = -Infinity;
+		let maxZ = -Infinity;
+		for (const fixture of fixtures) {
+			minX = Math.min(minX, fixture.x);
+			minY = Math.min(minY, fixture.y);
+			minZ = Math.min(minZ, fixture.z);
+			maxX = Math.max(maxX, fixture.x);
+			maxY = Math.max(maxY, fixture.y);
+			maxZ = Math.max(maxZ, fixture.z);
+		}
+		return { minX, minY, minZ, maxX, maxY, maxZ };
+	}
+
+	/** Grow the architecture's plane bounds with one mesh's placed extent.
+	 *
+	 * The box is the loaded model's own scene box; a fixture's yaw and scale
+	 * turn and scale it, then the placement moves it. Only x/y are grown: the
+	 * z anchor stays the placement's own z, which is the client's authored
+	 * floor height (`dungeon.place`, `city.csv`), not a roof or a pit. */
+	private expandArchitectureBounds(
+		box: THREE.Box3,
+		fixtures: WorldFixture[],
+		anchor: 'origin' | 'min'
+	): void {
+		if (box.isEmpty() || !this.terrain || !fixtures.length) return;
+		const shift = anchor === 'min' ? box.min : null;
+		const bounds = this.architectureBounds ?? {
+			minX: Infinity,
+			minY: Infinity,
+			minZ: Infinity,
+			maxX: -Infinity,
+			maxY: -Infinity,
+			maxZ: -Infinity
+		};
+		const corners: [number, number][] = [];
+		for (const x of [box.min.x, box.max.x]) {
+			for (const z of [box.min.z, box.max.z]) {
+				corners.push([
+					x - (shift?.x ?? 0),
+					z - (shift?.z ?? 0)
+				]);
+			}
+		}
+		for (const fixture of fixtures) {
+			const placement = fixturePlacement(this.terrain, fixture);
+			const cos = Math.cos(placement.yaw);
+			const sin = Math.sin(placement.yaw);
+			for (const [x, z] of corners) {
+				const px = x * placement.scale;
+				const pz = z * placement.scale;
+				const sceneX = placement.position[0] + px * cos + pz * sin;
+				const sceneZ = placement.position[2] - px * sin + pz * cos;
+				bounds.minX = Math.min(bounds.minX, sceneX);
+				bounds.maxX = Math.max(bounds.maxX, sceneX);
+				bounds.minY = Math.min(bounds.minY, sceneZ);
+				bounds.maxY = Math.max(bounds.maxY, sceneZ);
+			}
+		}
+		this.architectureBounds = bounds;
+	}
+
+	/** Put the dungeon's or city's local layout on the server rows.
+	 *
+	 * Both layouts are the client's own arrangement around its origin; the
+	 * rows are the server's positions in zone space. The layout is centred on
+	 * the rows rather than corner-aligned, so a room or a row at the edge does
+	 * not decide where the whole thing stands. The group's x mirror (set in
+	 * `show`) means the local minimum becomes the mirrored maximum: the two
+	 * centres coincide when the offset is `row centre + local centre`.
+	 */
+	private alignArchitecture(spawns: WorldSpawns): boolean {
+		const bounds = this.architectureBounds;
+		if (!bounds) return false;
+		const points = [...spawns.mobs, ...spawns.objects, ...spawns.doors];
+		if (!points.length) return false;
+		let minX = Infinity;
+		let minY = Infinity;
+		let minZ = Infinity;
+		let maxX = -Infinity;
+		let maxY = -Infinity;
+		let maxZ = -Infinity;
+		for (const point of points) {
+			minX = Math.min(minX, point.x);
+			minY = Math.min(minY, point.y);
+			minZ = Math.min(minZ, point.z);
+			maxX = Math.max(maxX, point.x);
+			maxY = Math.max(maxY, point.y);
+			maxZ = Math.max(maxZ, point.z);
+		}
+		this.groups.architecture.position.set(
+			(minX + maxX + bounds.minX + bounds.maxX) / 2,
+			(minZ + maxZ - bounds.minZ - bounds.maxZ) / 2,
+			(minY + maxY - bounds.minY - bounds.maxY) / 2
+		);
+		return true;
 	}
 
 	private materialFor(mesh: THREE.Mesh, model: LoadedMesh['model']): THREE.Material {
