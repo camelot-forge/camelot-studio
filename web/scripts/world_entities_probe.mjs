@@ -23,6 +23,12 @@ await page.goto(`${base}/world`, { waitUntil: 'load' });
 await page.waitForSelector('.zones button', { timeout: 120000 });
 await page.locator('.zones button', { hasText: 'Camelot Hills' }).first().click();
 await page.waitForFunction('window.__world && window.__world.name', { timeout: 300000 });
+// The list sits in the dock's flex column; the zone's sections must not
+// squeeze it to zero once they appear.
+const zonesHeight = await page.evaluate(
+	`document.querySelector('.zones')?.getBoundingClientRect().height ?? 0`
+);
+if (zonesHeight < 1) throw new Error('the zone list collapsed after opening a zone');
 
 const spawns = await page.evaluate(
 	`fetch('/api/v1/world/zone/0/spawns').then((response) => response.json())`
@@ -48,6 +54,7 @@ const found = list.some((text) => text.toLowerCase().includes(needle.toLowerCase
 
 const report = {
 	zone: 'Camelot Hills',
+	zonesHeight,
 	mob: { name: mob.name, model: mob.model },
 	stats,
 	search: { needle, found, first: list.slice(0, 4) }
@@ -57,6 +64,6 @@ await page.screenshot({ path: `${outDir}/world-entities.png`, timeout: 120000 })
 console.log('console errors:', errors.length ? errors : 'none');
 await browser.close();
 
-if (stats.previews < 1 || stats.labels < 1 || !found || errors.length) {
+if (zonesHeight < 1 || stats.previews < 1 || stats.labels < 1 || !found || errors.length) {
 	process.exitCode = 1;
 }

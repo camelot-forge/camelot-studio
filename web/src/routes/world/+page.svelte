@@ -1774,6 +1774,10 @@
 		gap: 2px;
 	}
 	.zones {
+		/* The list is a flex item of the scrolled dock body. Its `overflow` makes
+		   its automatic minimum size zero, so without this it collapses as soon
+		   as the zone's own sections appear below it. */
+		flex: 0 0 auto;
 		max-height: 24dvh;
 		overflow-y: auto;
 	}
