@@ -424,6 +424,8 @@ export interface WorldTerrain {
 	terrain_factor: number;
 	offset_factor: number;
 	url: string;
+	/** A city or dungeon: the daemon served a flat ground, so frame the rows. */
+	flat: boolean;
 }
 
 export interface WorldFixture {

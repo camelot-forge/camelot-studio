@@ -141,6 +141,7 @@ def test_the_zone_payload_carries_what_the_editor_needs(world):  # noqa: F811
     assert zone["info"]["name"] == "Cotswold"
     assert zone["terrain"]["width"] == 4
     assert zone["terrain"]["terrain_factor"] == 1
+    assert zone["terrain"]["flat"] is False
     assert zone["terrain"]["url"].endswith("/world/zone/0/terrain")
     assert [fixture["name"] for fixture in zone["fixtures"]] == ["Farm House", "Pine"]
     assert zone["fixtures"][1]["ground"] is True
@@ -172,14 +173,42 @@ def test_the_zone_payload_exposes_the_ground_layer_model(textured):
     assert len(patches["layers"]) == 3
 
 
-def test_a_dungeon_zone_without_a_csv_part_still_answers(world):  # noqa: F811
-    """zone002 is a dungeon: no fixtures/bounds — the payload warns, no 500."""
+def test_a_dungeon_zone_loads_on_a_flat_ground(world):  # noqa: F811
+    """zone002 is a dungeon: no terrain/fixtures — the payload warns once and
+    keeps the zone usable for the server rows."""
     response = client_for(world).get("/api/v1/world/zone/2")
     assert response.status_code == 200
     zone = response.json()
     assert zone["info"]["kind"] == "dungeon"
     assert zone["fixtures"] == []
-    assert any(warning.startswith("fixtures:") for warning in zone["warnings"])
+    assert zone["catalog"] == []
+    assert zone["terrain"] is not None
+    assert zone["terrain"]["width"] == 8
+    assert zone["terrain"]["flat"] is True
+    assert any("flat ground" in warning for warning in zone["warnings"])
+    assert not any(warning.startswith("terrain:") for warning in zone["warnings"])
+
+
+def test_a_city_zone_loads_on_a_flat_ground(world):  # noqa: F811
+    """zone003 is a city: same flat ground, and its terrain route answers."""
+    client = client_for(world)
+    response = client.get("/api/v1/world/zone/3")
+    assert response.status_code == 200
+    zone = response.json()
+    assert zone["info"]["kind"] == "city"
+    assert zone["fixtures"] == []
+    assert zone["catalog"] == []
+    assert zone["terrain"]["width"] == 8
+    assert zone["terrain"]["flat"] is True
+    assert any("flat ground" in warning for warning in zone["warnings"])
+
+    terrain = client.get("/api/v1/world/zone/3/terrain")
+    assert terrain.status_code == 200
+    magic, version, width, height, _terrain_factor, _offset_factor = (
+        TERRAIN_HEADER.unpack_from(terrain.content)
+    )
+    assert (magic, version, width, height) == (TERRAIN_MAGIC, TERRAIN_VERSION, 8, 8)
+    assert terrain.content[TERRAIN_HEADER.size:] == bytes(8 * 8 * 2)
 
 
 def test_an_unshipped_zone_is_a_404(world):  # noqa: F811

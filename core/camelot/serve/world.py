@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import struct
 import tempfile
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +89,10 @@ _CREATURE_EXPORT_VERSION = "1"
 TERRAIN_MAGIC = b"CAMT"
 TERRAIN_VERSION = 1
 TERRAIN_HEADER = struct.Struct("<4sHHHff")
+
+#: A flat grid for a zone whose archive carries no `terrain.pcx` (a city or a
+#: dungeon): the viewer still gets a ground, and the server rows sit on it.
+FLAT_TERRAIN_SIZE = 8
 
 
 class WorldError(LookupError):
@@ -448,12 +454,15 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
 
     terrain: WorldTerrain | None = None
     try:
-        width, height, _ = zone.terrain_map()
-        terrain_factor, offset_factor = zone.factors()
+        planes = terrain_planes(zone)
         terrain = WorldTerrain(
-            width=width, height=height, terrain_factor=terrain_factor,
-            offset_factor=offset_factor, url=f"{base}/terrain",
+            width=planes.width, height=planes.height,
+            terrain_factor=planes.terrain_factor,
+            offset_factor=planes.offset_factor, url=f"{base}/terrain",
+            flat=planes.flat,
         )
+        if planes.flat:
+            warnings.append(_flat_zone_warning(zone))
     except ZoneError as error:
         warnings.append(f"terrain: {error}")
 
@@ -469,16 +478,28 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
         warnings.extend(notes)
         return [_fixture(row) for row in rows]
 
-    fixtures = part("fixtures", placements, [])
-    catalog = part("catalog", lambda: _catalog(zone), [])
-    bounds = part("bounds", lambda: [WorldBound(id=b.id, points=b.points)
-                                     for b in zone.bounds()], [])
-    water = part("water", lambda: [
-        WorldWater(name=r.name, kind=r.kind, texture=r.texture, height=r.height,
-                   flow=r.flow, left=r.left, right=r.right)
-        for r in zone.rivers()], [])
-    jumps = part("jumps", lambda: [WorldJump(name=j.name, x=j.x, y=j.y, z=j.z, angle=j.angle)
-                                   for j in zone.jumps()], [])
+    if zone.kind in ("city", "dungeon"):
+        # Their client geometry lives in a layout the archive does not carry
+        # (city blocks, dungeon chunks). The server rows are still the zone's
+        # content: show them on the flat ground, not four archive errors.
+        fixtures: list[WorldFixture] = []
+        catalog: list[WorldCatalogEntry] = []
+        bounds: list[WorldBound] = []
+        water: list[WorldWater] = []
+        jumps: list[WorldJump] = []
+        patches = None
+    else:
+        fixtures = part("fixtures", placements, [])
+        catalog = part("catalog", lambda: _catalog(zone), [])
+        bounds = part("bounds", lambda: [WorldBound(id=b.id, points=b.points)
+                                         for b in zone.bounds()], [])
+        water = part("water", lambda: [
+            WorldWater(name=r.name, kind=r.kind, texture=r.texture, height=r.height,
+                       flow=r.flow, left=r.left, right=r.right)
+            for r in zone.rivers()], [])
+        jumps = part("jumps", lambda: [WorldJump(name=j.name, x=j.x, y=j.y, z=j.z, angle=j.angle)
+                                       for j in zone.jumps()], [])
+        patches = _patches(world, zone)
     zonejumps = part("zonejumps", zone.zonejumps, [])
 
     archives: dict[str, WorldArchive] = {}
@@ -507,7 +528,7 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
         water=water,
         jumps=jumps,
         zonejumps=zonejumps,
-        patches=_patches(world, zone),
+        patches=patches,
         archives=archives,
         warnings=warnings,
     )
@@ -587,21 +608,94 @@ def spawns_payload(server_rows: ServerRows, world: World, zone_id: int) -> World
 
 # --- the binary terrain -------------------------------------------------------
 
-def terrain_binary(zone: Zone) -> bytes:
-    """`CAMT` + version + grid + factors + the two byte planes, row-major."""
-    width, height, terrain = zone.terrain_map()
-    other_width, other_height, offset = zone.offset_map()
+@dataclass
+class TerrainPlanes:
+    """The two byte planes and the factors that turn them into heights."""
+
+    width: int
+    height: int
+    terrain: bytes
+    offset: bytes
+    terrain_factor: int
+    offset_factor: int
+    flat: bool = False
+
+
+def terrain_planes(zone: Zone) -> TerrainPlanes:
+    """A zone's height planes, or a flat one for a city/dungeon.
+
+    Those two kinds carry their architecture in a client layout, not in
+    `terrain.pcx`/`offset.pcx`. A flat ground keeps the viewer usable for the
+    server rows; the missing architecture is reported by the caller.
+    """
+    try:
+        width, height, terrain = zone.terrain_map()
+        other_width, other_height, offset = zone.offset_map()
+    except ZoneError:
+        if zone.kind not in ("city", "dungeon", "skycity"):
+            raise
+        size = FLAT_TERRAIN_SIZE
+        height = _flat_height(zone)
+        # The flat plane is synthetic: one byte per sample, so pick a factor
+        # that reaches the zone's floor (a dungeon can sit above 10 200).
+        terrain_factor = max(1, math.ceil(height / 255))
+        height_byte = min(255, max(0, round(height / terrain_factor)))
+        planes = bytes([height_byte]) * (size * size)
+        return TerrainPlanes(size, size, planes, bytes(size * size),
+                             terrain_factor, 0, True)
     if (width, height) != (other_width, other_height):
         raise WorldError(f"{zone.name}: terrain.pcx is {width}x{height} but "
                          f"offset.pcx is {other_width}x{other_height}")
     if width > 0xFFFF or height > 0xFFFF:
         raise WorldError(f"{zone.name}: {width}x{height} does not fit the header")
     terrain_factor, offset_factor = zone.factors()
+    return TerrainPlanes(width, height, terrain, offset, terrain_factor,
+                         offset_factor)
+
+
+def _flat_height(zone: Zone) -> float:
+    """The floor of a city/dungeon, from its own `lights.csv`.
+
+    Lights and server rows share the zone's coordinates (measured: Camelot's
+    lights sit at z 8 109..9 346, its rows at z 8 000; the Barrows' lights at
+    13 543..16 646, its rows at 13 206..16 224). The median keeps the flat
+    ground at the level the rows were authored on.
+    """
+    try:
+        raw = zone.data_entry("lights.csv").decode("latin-1")
+    except ZoneError:
+        return 0.0
+    values: list[float] = []
+    for line in raw.splitlines():
+        fields = line.split(",")
+        if len(fields) < 3:
+            continue
+        try:
+            values.append(float(fields[2]))
+        except ValueError:
+            continue
+    if not values:
+        return 0.0
+    values.sort()
+    return values[len(values) // 2]
+
+
+def _flat_zone_warning(zone: Zone) -> str:
+    what = {"city": "city blocks", "dungeon": "dungeon chunks"}.get(
+        zone.kind, "geometry")
+    return (f"{zone.name}: the client places its {what} outside the zone "
+            "archive; the server rows are shown on a flat ground")
+
+
+def terrain_binary(zone: Zone) -> bytes:
+    """`CAMT` + version + grid + factors + the two byte planes, row-major."""
+    planes = terrain_planes(zone)
     return (
-        TERRAIN_HEADER.pack(TERRAIN_MAGIC, TERRAIN_VERSION, width, height,
-                            float(terrain_factor), float(offset_factor))
-        + terrain
-        + offset
+        TERRAIN_HEADER.pack(TERRAIN_MAGIC, TERRAIN_VERSION, planes.width,
+                            planes.height, float(planes.terrain_factor),
+                            float(planes.offset_factor))
+        + planes.terrain
+        + planes.offset
     )
 
 
