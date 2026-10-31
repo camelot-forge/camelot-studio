@@ -329,6 +329,8 @@ export class WorldViewer {
 	private meshCache = new Map<string, LoadedMesh>();
 	private groundTextures = new Map<string, THREE.Texture>();
 	private terrain: TerrainData | null = null;
+	private flatGround = false;
+	private framedRows = false;
 	private texturedPatches = 0;
 	private composedPatches = 0;
 	private picks: PickGroup[] = [];
@@ -2127,6 +2129,8 @@ export class WorldViewer {
 		const data = parseTerrain(await response.arrayBuffer());
 		if (token !== this.token) return;
 		this.terrain = data;
+		this.flatGround = Boolean(zone.terrain?.flat);
+		this.framedRows = false;
 		this.buildGround(zoneId, zone, data, token);
 		await this.buildFixtures(zoneId, zone, data, token);
 		if (token !== this.token) return;
@@ -2162,6 +2166,13 @@ export class WorldViewer {
 			this.groups.patrols.add(line);
 			this.spawnCounts.patrols += 1;
 			this.spawnCounts.patrolPoints += path.points.length;
+		}
+		// A city or dungeon has no client ground to frame: its rows are the
+		// content, so put the camera on them once (not after every edit).
+		if (this.flatGround && !this.framedRows) {
+			this.frameRows(spawns);
+			this.framedRows = true;
+			this.refreshPreviews();
 		}
 	}
 
@@ -2924,6 +2935,31 @@ export class WorldViewer {
 		this.orbit.distance = distance;
 		this.orbit.azimuth = (azimuthDeg * Math.PI) / 180;
 		this.orbit.elevation = 0.38;
+		this.applyOrbit();
+	}
+
+	private frameRows(spawns: WorldSpawns): void {
+		const points = [...spawns.mobs, ...spawns.objects, ...spawns.doors];
+		if (!points.length) return;
+		let minX = Infinity;
+		let minY = Infinity;
+		let minZ = Infinity;
+		let maxX = -Infinity;
+		let maxY = -Infinity;
+		let maxZ = -Infinity;
+		for (const point of points) {
+			minX = Math.min(minX, point.x);
+			minY = Math.min(minY, point.y);
+			minZ = Math.min(minZ, point.z);
+			maxX = Math.max(maxX, point.x);
+			maxY = Math.max(maxY, point.y);
+			maxZ = Math.max(maxZ, point.z);
+		}
+		const span = Math.max(maxX - minX, maxY - minY, 2000);
+		this.target.set((minX + maxX) / 2, (minZ + maxZ) / 2, (minY + maxY) / 2);
+		this.orbit.azimuth = 0.6;
+		this.orbit.elevation = 0.45;
+		this.orbit.distance = Math.max(span * 1.1, 3000);
 		this.applyOrbit();
 	}
 

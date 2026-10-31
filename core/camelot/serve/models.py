@@ -144,6 +144,9 @@ class WorldTerrain(BaseModel):
     terrain_factor: int
     offset_factor: int
     url: str
+    #: True when the zone ships no `terrain.pcx` and the daemon served a flat
+    #: fallback (a city or a dungeon). The viewer frames the server rows then.
+    flat: bool = False
 
 
 class WorldFixture(BaseModel):
