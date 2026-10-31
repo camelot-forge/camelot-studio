@@ -510,6 +510,7 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
     base = f"/api/v1/world/zone/{zone_id}"
 
     terrain: WorldTerrain | None = None
+    flat = False
     try:
         planes = terrain_planes(zone)
         terrain = WorldTerrain(
@@ -518,8 +519,7 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
             offset_factor=planes.offset_factor, url=f"{base}/terrain",
             flat=planes.flat,
         )
-        if planes.flat:
-            warnings.append(_flat_zone_warning(zone))
+        flat = planes.flat
     except ZoneError as error:
         warnings.append(f"terrain: {error}")
 
@@ -553,6 +553,8 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
         else:
             architecture_catalog, architecture = _city_architecture(zone)
             architecture_anchor = "min"
+        if flat:
+            warnings.append(_flat_zone_warning(zone, bool(architecture)))
     else:
         fixtures = part("fixtures", placements, [])
         catalog = part("catalog", lambda: _catalog(zone), [])
@@ -748,13 +750,19 @@ def _flat_height(zone: Zone) -> float:
     return values[len(values) // 2]
 
 
-def _flat_zone_warning(zone: Zone) -> str:
+def _flat_zone_warning(zone: Zone, has_architecture: bool = False) -> str:
     if zone.kind == "dungeon":
-        return (f"{zone.name}: the dungeon chunks are aligned to the server "
-                "rows; the ground is a flat fallback")
+        if has_architecture:
+            return (f"{zone.name}: the dungeon chunks are aligned to the server "
+                    "rows; the client's own floors carry the ground")
+        return (f"{zone.name}: the dungeon chunks could not be placed; the "
+                "ground is a flat fallback")
     if zone.kind == "city":
-        return (f"{zone.name}: the city blocks are placed from city.csv and "
-                "their .nhd headers; the ground is a flat fallback")
+        if has_architecture:
+            return (f"{zone.name}: the city blocks are placed from city.csv and "
+                    "their .nhd headers; the client's own floors carry the ground")
+        return (f"{zone.name}: the city blocks could not be placed; the ground "
+                "is a flat fallback")
     what = {"skycity": "geometry"}.get(
         zone.kind, "geometry")
     return (f"{zone.name}: the client places its {what} outside the zone "

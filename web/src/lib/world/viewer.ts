@@ -2156,7 +2156,10 @@ export class WorldViewer {
 		this.groups.architecture.scale.x = -1;
 		this.groups.architecture.position.set(0, 0, 0);
 		this.architectureBounds = this.fixtureBounds(zone.architecture ?? []);
-		this.buildGround(zoneId, zone, data, token);
+		// A city or a dungeon ships its own floors; the synthetic flat ground
+		// would cut through them (Camelot's streets sat under it by 86 units).
+		// The ground stays the fallback for zones whose client layout is absent.
+		if (!zone.architecture?.length) this.buildGround(zoneId, zone, data, token);
 		await this.buildFixtures(zoneId, zone, data, token);
 		if (token !== this.token) return;
 		await this.buildArchitecture(zoneId, zone, data, token);
@@ -2910,8 +2913,10 @@ export class WorldViewer {
 		box?: THREE.Box3
 	): void {
 		model.scene.updateMatrixWorld(true);
-		// A city block's geometry is centred on its own origin; `city.csv` gives
-		// the block's walkable box, so its minimum corner is the anchor.
+		// A city block's geometry is centred on its own origin in the plane;
+		// `city.csv` gives the block's walkable box, so its minimum corner is
+		// the plane anchor. Its z is the city's own elevation (Camelot is built
+		// in terraces) and must be kept, not flattened onto the ground.
 		const shift =
 			anchor === 'min' ? (box ?? new THREE.Box3().setFromObject(model.scene)).min : null;
 		const inner: THREE.Mesh[] = [];
@@ -2928,7 +2933,7 @@ export class WorldViewer {
 				const position = shift
 					? [
 							placement.position[0] - shift.x,
-							placement.position[1] - shift.y,
+							placement.position[1],
 							placement.position[2] - shift.z
 						]
 					: placement.position;

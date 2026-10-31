@@ -173,7 +173,7 @@ def test_the_zone_payload_exposes_the_ground_layer_model(textured):
     assert len(patches["layers"]) == 3
 
 
-def test_a_dungeon_zone_loads_on_a_flat_ground(world):  # noqa: F811
+def test_a_dungeon_zone_places_its_chunks(world):  # noqa: F811
     """zone002 is a dungeon: no terrain/fixtures — the payload warns once and
     keeps the zone usable for the server rows, with `dungeon.place` as a
     non-editable architecture set."""
@@ -190,11 +190,11 @@ def test_a_dungeon_zone_loads_on_a_flat_ground(world):  # noqa: F811
     assert zone["terrain"] is not None
     assert zone["terrain"]["width"] == 8
     assert zone["terrain"]["flat"] is True
-    assert any("flat fallback" in warning for warning in zone["warnings"])
+    assert any("client's own floors" in warning for warning in zone["warnings"])
     assert not any(warning.startswith("terrain:") for warning in zone["warnings"])
 
 
-def test_a_city_zone_loads_on_a_flat_ground(world):  # noqa: F811
+def test_a_city_zone_places_its_blocks(world):  # noqa: F811
     """zone003 is a city: the blocks come from `city.csv` + `.nhd`, anchored
     on their minimum corner and centred on the rows by the viewer."""
     client = client_for(world)
@@ -211,7 +211,7 @@ def test_a_city_zone_loads_on_a_flat_ground(world):  # noqa: F811
         "cam01.nif"]
     assert zone["terrain"]["width"] == 8
     assert zone["terrain"]["flat"] is True
-    assert any("flat fallback" in warning for warning in zone["warnings"])
+    assert any("client's own floors" in warning for warning in zone["warnings"])
 
     terrain = client.get("/api/v1/world/zone/3/terrain")
     assert terrain.status_code == 200
