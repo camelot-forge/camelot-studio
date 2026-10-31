@@ -631,7 +631,7 @@ Measured 2026-10-11 on the OpenDAoC 1.127 client. The reader is
   `.nhd` sits loose beside its `.npk` and holds `NHD`, a version, the file
   name, a cell size, a box in cells, then the cell data. The box × cell size is
   the block's walkable anchor in zone units, while the NIF geometry is centred
-  on its own origin; the studio anchors the mesh's minimum corner there. The
+  on its own origin; the studio anchors the mesh's plane centre there. The
   city layout carries the same x mirror as `dungeon.place`, and its rows are
   likewise the placement anchor.
 - **`terrain.pcx` / `offset.pcx`**: 8-bit, one-plane, RLE PCX, 256×256 for a

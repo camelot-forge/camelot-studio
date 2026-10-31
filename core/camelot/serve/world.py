@@ -433,9 +433,9 @@ def _city_architecture(
 
     A city has no `fixtures.csv`: `city.csv` names the block meshes and each
     `camNN.nhd` carries the box the client walks on. The payload exposes that
-    box's minimum corner; the viewer anchors the mesh's own minimum there
-    (`architecture_anchor == "min"`), because the NIF geometry is centred on
-    its origin while the block is not.
+    box's centre; the viewer anchors the mesh's own plane centre there
+    (`architecture_anchor == "center"`), because the NIF geometry is centred on
+    its own origin while the block is not.
     """
     catalog: list[WorldCatalogEntry] = []
     fixtures: list[WorldFixture] = []
@@ -448,9 +448,9 @@ def _city_architecture(
         ))
         fixtures.append(WorldFixture(
             id=1_000_000 + index, nif_id=index, name=stem,
-            x=block.x, y=block.y, z=0, angle=0, scale=100,
-            radius=0, collide=0, animate=False, ground=False, flip=False,
-            cave=False, unique_id=index,
+            x=block.x + block.width / 2, y=block.y + block.height / 2, z=0,
+            angle=0, scale=100, radius=0, collide=0, animate=False,
+            ground=False, flip=False, cave=False, unique_id=index,
         ))
     return catalog, fixtures
 
@@ -552,7 +552,7 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
             architecture_catalog, architecture = _dungeon_architecture(zone)
         else:
             architecture_catalog, architecture = _city_architecture(zone)
-            architecture_anchor = "min"
+            architecture_anchor = "center"
         if flat:
             warnings.append(_flat_zone_warning(zone, bool(architecture)))
     else:

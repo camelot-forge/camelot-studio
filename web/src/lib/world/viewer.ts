@@ -333,6 +333,7 @@ export class WorldViewer {
 	private flatGround = false;
 	private framedRows = false;
 	private architectureAligned = false;
+	private architectureAnchor: 'origin' | 'center' = 'origin';
 	private architectureBounds: {
 		minX: number;
 		minY: number;
@@ -2148,6 +2149,7 @@ export class WorldViewer {
 		this.flatGround = Boolean(zone.terrain?.flat);
 		this.framedRows = false;
 		this.architectureAligned = false;
+		this.architectureAnchor = zone.architecture_anchor ?? 'origin';
 		// `dungeon.place` and `city.csv` keep the client's layout around its
 		// origin, with an x axis mirrored against the server's zone frame.
 		// Measured on the shipped zones: mirrored, most rows fall inside the
@@ -2909,16 +2911,18 @@ export class WorldViewer {
 		data: TerrainData,
 		group: THREE.Group = this.groups.fixtures,
 		pickable = true,
-		anchor: 'origin' | 'min' = 'origin',
+		anchor: 'origin' | 'center' = 'origin',
 		box?: THREE.Box3
 	): void {
 		model.scene.updateMatrixWorld(true);
-		// A city block's geometry is centred on its own origin in the plane;
-		// `city.csv` gives the block's walkable box, so its minimum corner is
-		// the plane anchor. Its z is the city's own elevation (Camelot is built
-		// in terraces) and must be kept, not flattened onto the ground.
+		// A city block's geometry sits around its own origin in the plane;
+		// `city.csv` gives the block's walkable box, so the mesh's plane centre
+		// goes on the box centre. Its z is the city's own elevation (Camelot is
+		// built in terraces) and must be kept, not flattened onto the ground.
 		const shift =
-			anchor === 'min' ? (box ?? new THREE.Box3().setFromObject(model.scene)).min : null;
+			anchor === 'center'
+				? (box ?? new THREE.Box3().setFromObject(model.scene)).getCenter(new THREE.Vector3())
+				: null;
 		const inner: THREE.Mesh[] = [];
 		model.scene.traverse((object) => {
 			if ((object as THREE.Mesh).isMesh) inner.push(object as THREE.Mesh);
@@ -2989,10 +2993,10 @@ export class WorldViewer {
 	private expandArchitectureBounds(
 		box: THREE.Box3,
 		fixtures: WorldFixture[],
-		anchor: 'origin' | 'min'
+		anchor: 'origin' | 'center'
 	): void {
 		if (box.isEmpty() || !this.terrain || !fixtures.length) return;
-		const shift = anchor === 'min' ? box.min : null;
+		const shift = anchor === 'center' ? box.getCenter(new THREE.Vector3()) : null;
 		const bounds = this.architectureBounds ?? {
 			minX: Infinity,
 			minY: Infinity,
@@ -3027,12 +3031,14 @@ export class WorldViewer {
 
 	/** Put the dungeon's or city's local layout on the server rows.
 	 *
-	 * Both layouts are the client's own arrangement around its origin; the
-	 * rows are the server's positions in zone space. The layout is centred on
-	 * the rows rather than corner-aligned, so a room or a row at the edge does
-	 * not decide where the whole thing stands. The group's x mirror (set in
-	 * `show`) means the local minimum becomes the mirrored maximum: the two
-	 * centres coincide when the offset is `row centre + local centre`.
+	 * Both layouts are the client's own arrangement around its origin; the rows
+	 * are the server's positions in zone space. The plane is centred on the rows
+	 * rather than corner-aligned, so a room or a row at the edge does not decide
+	 * where the whole thing stands. A city's height uses the rows' median z (its
+	 * street datum, not the bounds' centre pulled up by the castle towers); a
+	 * dungeon's keeps the centre of its authored z. The group's x mirror (set
+	 * in `show`) means the local minimum becomes the mirrored maximum, so the
+	 * plane centres coincide when the offset is `row centre + local centre`.
 	 */
 	private alignArchitecture(spawns: WorldSpawns): boolean {
 		const bounds = this.architectureBounds;
@@ -3053,9 +3059,21 @@ export class WorldViewer {
 			maxY = Math.max(maxY, point.y);
 			maxZ = Math.max(maxZ, point.z);
 		}
+		// A city's blocks sit around their own street datum: the rows' median z
+		// is that street, while the bounds' centre is pulled up by the castle
+		// towers. Measured with a downward probe: the median puts seven rows in
+		// ten within 100 units of a floor; the centre leaves most of them above
+		// one.
+		let height: number;
+		if (this.architectureAnchor === 'center') {
+			const zs = points.map((point) => point.z).sort((a, b) => a - b);
+			height = zs[Math.floor(zs.length / 2)] - bounds.minZ;
+		} else {
+			height = (minZ + maxZ - bounds.minZ - bounds.maxZ) / 2;
+		}
 		this.groups.architecture.position.set(
 			(minX + maxX + bounds.minX + bounds.maxX) / 2,
-			(minZ + maxZ - bounds.minZ - bounds.maxZ) / 2,
+			height,
 			(minY + maxY - bounds.minY - bounds.maxY) / 2
 		);
 		return true;
