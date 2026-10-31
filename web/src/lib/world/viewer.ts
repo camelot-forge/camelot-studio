@@ -2853,8 +2853,8 @@ export class WorldViewer {
 		// One dungeon ships a few dozen chunks and the daemon exports them on
 		// demand; a small pool keeps the first load from serialising every
 		// NIF read while still leaving the daemon room to breathe.
-		const queue = (zone.architecture_catalog ?? []).filter((entry) =>
-			entry.mesh && byCatalog.get(entry.id)?.length
+		const queue = (zone.architecture_catalog ?? []).filter(
+			(entry) => entry.mesh && byCatalog.get(entry.id)?.length
 		);
 		const worker = async () => {
 			for (;;) {
@@ -2885,9 +2885,7 @@ export class WorldViewer {
 				this.expandArchitectureBounds(box, fixtures, zone.architecture_anchor ?? 'origin');
 			}
 		};
-		await Promise.all(
-			Array.from({ length: Math.min(4, queue.length) }, () => worker())
-		);
+		await Promise.all(Array.from({ length: Math.min(4, queue.length) }, () => worker()));
 	}
 
 	private async loadMesh(zoneId: number, filename: string): Promise<LoadedMesh | undefined> {
@@ -2914,9 +2912,8 @@ export class WorldViewer {
 		model.scene.updateMatrixWorld(true);
 		// A city block's geometry is centred on its own origin; `city.csv` gives
 		// the block's walkable box, so its minimum corner is the anchor.
-		const shift = anchor === 'min'
-			? (box ?? new THREE.Box3().setFromObject(model.scene)).min
-			: null;
+		const shift =
+			anchor === 'min' ? (box ?? new THREE.Box3().setFromObject(model.scene)).min : null;
 		const inner: THREE.Mesh[] = [];
 		model.scene.traverse((object) => {
 			if ((object as THREE.Mesh).isMesh) inner.push(object as THREE.Mesh);
@@ -3002,10 +2999,7 @@ export class WorldViewer {
 		const corners: [number, number][] = [];
 		for (const x of [box.min.x, box.max.x]) {
 			for (const z of [box.min.z, box.max.z]) {
-				corners.push([
-					x - (shift?.x ?? 0),
-					z - (shift?.z ?? 0)
-				]);
+				corners.push([x - (shift?.x ?? 0), z - (shift?.z ?? 0)]);
 			}
 		}
 		for (const fixture of fixtures) {
