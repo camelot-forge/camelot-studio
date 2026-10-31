@@ -32,6 +32,18 @@ import { GIZMO_AXES, axisParam, quantized, type GizmoAxis } from './gizmo';
 /** Bounds/water/jumps sit a hair above the ground so they never z-fight it. */
 const OVERLAY_LIFT = 8;
 
+/** The client's fixed city and dungeon frames (`FUN_00549436` and
+ * `FUN_0054c039`, game1127.dll): one root at `8192 * 4 - 768` (32000) on both
+ * plane axes, with a 180-degree yaw about up (`FUN_00675ca0` with the global pi
+ * at `0x009675e8`). Only the height differs: 8000 for a city, 16000 for a
+ * dungeon. The client stores those as -8000/-16000; the viewer's Y-up frame
+ * uses the positive values its server rows do. The server's rows are
+ * zone-local, hence the zone-rect subtraction. */
+const CLIENT_ORIGIN = 8192 * 4 - 768;
+const CITY_HEIGHT = 8000;
+const DUNGEON_HEIGHT = 16000;
+const CLIENT_YAW = Math.PI;
+
 /** The soft dot the row points are drawn with (one texture, shared). */
 function dotSprite(): THREE.Texture {
 	const size = 64;
@@ -333,7 +345,6 @@ export class WorldViewer {
 	private flatGround = false;
 	private framedRows = false;
 	private architectureAligned = false;
-	private architectureAnchor: 'origin' | 'center' = 'origin';
 	private architectureBounds: {
 		minX: number;
 		minY: number;
@@ -2149,15 +2160,28 @@ export class WorldViewer {
 		this.flatGround = Boolean(zone.terrain?.flat);
 		this.framedRows = false;
 		this.architectureAligned = false;
-		this.architectureAnchor = zone.architecture_anchor ?? 'origin';
-		// `dungeon.place` and `city.csv` keep the client's layout around its
-		// origin, with an x axis mirrored against the server's zone frame.
-		// Measured on the shipped zones: mirrored, most rows fall inside the
-		// architecture; as-is, they sit beside it. The group carries that
-		// mirror once.
-		this.groups.architecture.scale.x = -1;
-		this.groups.architecture.position.set(0, 0, 0);
-		this.architectureBounds = this.fixtureBounds(zone.architecture ?? []);
+		const city = zone.architecture_anchor === 'city';
+		const dungeon = zone.architecture_anchor === 'dungeon';
+		const fixed = city || dungeon;
+		// A city and a dungeon both hang their layout under the client's fixed
+		// root, whose 180-degree yaw flips both plane axes. The group carries
+		// that frame once. The fallback (no client frame) keeps the x mirror and
+		// row fitting for an architecture set without one.
+		this.groups.architecture.scale.set(fixed ? 1 : -1, 1, 1);
+		this.groups.architecture.rotation.set(0, fixed ? CLIENT_YAW : 0, 0);
+		if (fixed) {
+			const [offsetX, offsetY] = zone.info.world_rect;
+			this.groups.architecture.position.set(
+				CLIENT_ORIGIN - offsetX,
+				city ? CITY_HEIGHT : DUNGEON_HEIGHT,
+				CLIENT_ORIGIN - offsetY
+			);
+			this.architectureAligned = true;
+			this.architectureBounds = null;
+		} else {
+			this.groups.architecture.position.set(0, 0, 0);
+			this.architectureBounds = this.fixtureBounds(zone.architecture ?? []);
+		}
 		// A city or a dungeon ships its own floors; the synthetic flat ground
 		// would cut through them (Camelot's streets sat under it by 86 units).
 		// The ground stays the fallback for zones whose client layout is absent.
@@ -2849,6 +2873,8 @@ export class WorldViewer {
 	): Promise<void> {
 		const blocks = zone.architecture ?? [];
 		if (!blocks.length) return;
+		const dungeon = zone.architecture_anchor === 'dungeon';
+		const fixed = zone.architecture_anchor === 'city' || dungeon;
 		const byCatalog = new Map<number, WorldFixture[]>();
 		for (const block of blocks) {
 			const list = byCatalog.get(block.nif_id);
@@ -2876,18 +2902,21 @@ export class WorldViewer {
 				}
 				if (token !== this.token) return;
 				if (!loaded) continue;
-				loaded.model.scene.updateMatrixWorld(true);
-				const box = new THREE.Box3().setFromObject(loaded.model.scene);
 				this.instance(
 					loaded.model,
 					fixtures,
 					data,
 					this.groups.architecture,
 					false,
-					zone.architecture_anchor ?? 'origin',
-					box
+					dungeon ? 'dungeon' : 'zone'
 				);
-				this.expandArchitectureBounds(box, fixtures, zone.architecture_anchor ?? 'origin');
+				if (!fixed) {
+					loaded.model.scene.updateMatrixWorld(true);
+					this.expandArchitectureBounds(
+						new THREE.Box3().setFromObject(loaded.model.scene),
+						fixtures
+					);
+				}
 			}
 		};
 		await Promise.all(Array.from({ length: Math.min(4, queue.length) }, () => worker()));
@@ -2911,18 +2940,9 @@ export class WorldViewer {
 		data: TerrainData,
 		group: THREE.Group = this.groups.fixtures,
 		pickable = true,
-		anchor: 'origin' | 'center' = 'origin',
-		box?: THREE.Box3
+		layout: 'zone' | 'dungeon' = 'zone'
 	): void {
 		model.scene.updateMatrixWorld(true);
-		// A city block's geometry sits around its own origin in the plane;
-		// `city.csv` gives the block's walkable box, so the mesh's plane centre
-		// goes on the box centre. Its z is the city's own elevation (Camelot is
-		// built in terraces) and must be kept, not flattened onto the ground.
-		const shift =
-			anchor === 'center'
-				? (box ?? new THREE.Box3().setFromObject(model.scene)).getCenter(new THREE.Vector3())
-				: null;
 		const inner: THREE.Mesh[] = [];
 		model.scene.traverse((object) => {
 			if ((object as THREE.Mesh).isMesh) inner.push(object as THREE.Mesh);
@@ -2934,13 +2954,13 @@ export class WorldViewer {
 			const local = mesh.matrixWorld.clone();
 			for (let i = 0; i < fixtures.length; i++) {
 				const placement = fixturePlacement(data, fixtures[i]);
-				const position = shift
-					? [
-							placement.position[0] - shift.x,
-							placement.position[1],
-							placement.position[2] - shift.z
-						]
-					: placement.position;
+				// `dungeon.place` stores the NIF depth axis in Y; the viewer's
+				// scene (and the zone rows) use -Y there. The client root's 180-
+				// degree yaw then puts the child back on the server's plane.
+				const position: [number, number, number] =
+					layout === 'dungeon'
+						? [placement.position[0], placement.position[1], -placement.position[2]]
+						: placement.position;
 				matrix.compose(
 					new THREE.Vector3(...position),
 					new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), placement.yaw),
@@ -2989,14 +3009,9 @@ export class WorldViewer {
 	 * The box is the loaded model's own scene box; a fixture's yaw and scale
 	 * turn and scale it, then the placement moves it. Only x/y are grown: the
 	 * z anchor stays the placement's own z, which is the client's authored
-	 * floor height (`dungeon.place`, `city.csv`), not a roof or a pit. */
-	private expandArchitectureBounds(
-		box: THREE.Box3,
-		fixtures: WorldFixture[],
-		anchor: 'origin' | 'center'
-	): void {
+	 * floor height (`dungeon.place`), not a roof or a pit. */
+	private expandArchitectureBounds(box: THREE.Box3, fixtures: WorldFixture[]): void {
 		if (box.isEmpty() || !this.terrain || !fixtures.length) return;
-		const shift = anchor === 'center' ? box.getCenter(new THREE.Vector3()) : null;
 		const bounds = this.architectureBounds ?? {
 			minX: Infinity,
 			minY: Infinity,
@@ -3008,7 +3023,7 @@ export class WorldViewer {
 		const corners: [number, number][] = [];
 		for (const x of [box.min.x, box.max.x]) {
 			for (const z of [box.min.z, box.max.z]) {
-				corners.push([x - (shift?.x ?? 0), z - (shift?.z ?? 0)]);
+				corners.push([x, z]);
 			}
 		}
 		for (const fixture of fixtures) {
@@ -3029,16 +3044,15 @@ export class WorldViewer {
 		this.architectureBounds = bounds;
 	}
 
-	/** Put the dungeon's or city's local layout on the server rows.
+	/** Put a dungeon's local layout on the server rows.
 	 *
-	 * Both layouts are the client's own arrangement around its origin; the rows
-	 * are the server's positions in zone space. The plane is centred on the rows
-	 * rather than corner-aligned, so a room or a row at the edge does not decide
-	 * where the whole thing stands. A city's height uses the rows' median z (its
-	 * street datum, not the bounds' centre pulled up by the castle towers); a
-	 * dungeon's keeps the centre of its authored z. The group's x mirror (set
-	 * in `show`) means the local minimum becomes the mirrored maximum, so the
-	 * plane centres coincide when the offset is `row centre + local centre`.
+	 * `dungeon.place` is the client's own arrangement around its origin; the
+	 * rows are the server's positions in zone space. The layout is centred on
+	 * the rows rather than corner-aligned, so a room or a row at the edge does
+	 * not decide where the whole dungeon stands. The group's x mirror (set in
+	 * `show`) means the local minimum becomes the mirrored maximum, so the
+	 * centres coincide when the offset is `row centre + local centre`. A city
+	 * never comes here: its frame is the client's fixed one.
 	 */
 	private alignArchitecture(spawns: WorldSpawns): boolean {
 		const bounds = this.architectureBounds;
@@ -3059,18 +3073,9 @@ export class WorldViewer {
 			maxY = Math.max(maxY, point.y);
 			maxZ = Math.max(maxZ, point.z);
 		}
-		// A city's blocks sit around their own street datum: the rows' median z
-		// is that street, while the bounds' centre is pulled up by the castle
-		// towers. Measured with a downward probe: the median puts seven rows in
-		// ten within 100 units of a floor; the centre leaves most of them above
-		// one.
-		let height: number;
-		if (this.architectureAnchor === 'center') {
-			const zs = points.map((point) => point.z).sort((a, b) => a - b);
-			height = zs[Math.floor(zs.length / 2)] - bounds.minZ;
-		} else {
-			height = (minZ + maxZ - bounds.minZ - bounds.maxZ) / 2;
-		}
+		// A dungeon's placement z is the authored floor, so its centre over the
+		// rows is the datum. Cities never take this path (fixed client origin).
+		const height = (minZ + maxZ - bounds.minZ - bounds.maxZ) / 2;
 		this.groups.architecture.position.set(
 			(minX + maxX + bounds.minX + bounds.maxX) / 2,
 			height,

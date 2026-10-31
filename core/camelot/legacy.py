@@ -440,6 +440,14 @@ class _Reader:
             b.flags = self.u16()
             b.vertex_mode = self.u32()    # <= 20.0.0.5
             b.lighting_mode = self.u32()
+        elif tname == "NiPalette":
+            # 4.2.x: unknown byte, entry count, then RGBA bytes. The reader
+            # keeps the raw entries; the glTF export has no palette use.
+            b.unknown = self.u8()
+            b.num_entries = self.u32()
+            self._need(b.num_entries * 4)
+            b.palette = self.buf[self.pos:self.pos + b.num_entries * 4]
+            self.pos += b.num_entries * 4
         elif tname == "NiTexturingProperty":
             self.objectnet(b)
             b.flags = self.u16()          # <= 10.0.1.2
@@ -490,7 +498,9 @@ class _Reader:
                 self.u8()                 # unknown 3 bytes
             for _ in range(8):
                 self.u8()                 # unknown 8 bytes
-            self.u32()                    # unknown int (seen in DAoC 4.2.x)
+            if 0x0A010000 <= self.version <= 0x0A020000:
+                self.u32()                # ATextureRenderData unknown int
+            b.palette = self.ref()        # NiPalette for 8-bit pixels
             b.num_mipmaps = self.u32()
             b.bytes_per_pixel = self.u32()
             b.mipmaps = [(self.u32(), self.u32(), self.u32())

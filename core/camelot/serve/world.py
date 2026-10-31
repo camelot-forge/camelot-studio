@@ -40,7 +40,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from .. import clientfs, creatures, nifutil, serverrows
-from ..dxt import dds_rgba
+from ..dxt import dds_rgba, encode_a8r8g8b8
 from ..gamedata import SlotTexture
 from ..glb import pack_glb
 from ..gltf import export_gltf
@@ -78,8 +78,9 @@ from .models import (
 #: would keep serving files built by an older exporter. Bumped to 7 when the
 #: zone meshes went back to the figures' axis rotation (the reflection the
 #: previous bump introduced turned every building 180 deg round — the cached
-#: glbs are rebuilt).
-_WORLD_EXPORT_VERSION = "9"
+#: glbs are rebuilt), then to 10 for the embedded city sheets that make
+#: `cam35` exportable and textured.
+_WORLD_EXPORT_VERSION = "10"
 
 #: Bump when the creature export changes shape. Creature figures share the
 #: world cache directory, so they carry their own exporter marker.
@@ -402,9 +403,12 @@ def _dungeon_architecture(
         zone: Zone) -> tuple[list[WorldCatalogEntry], list[WorldFixture]]:
     """The chunks `dungeon.place` places, as a non-editable render set.
 
-    `dungeon.place` carries the client's own local layout. The viewer mirrors
-    and centres it on the server rows (measured on the shipped dungeons); the
-    editable list stays `fixtures.csv`, which a dungeon does not have.
+    The client attaches every row to one fixed dungeon root: translation
+    (32000, 32000, -16000) with a 180-degree yaw (`FUN_0054c039`). The rows
+    themselves keep their own translation and axis-angle rotation, so the
+    viewer applies that root once (`architecture_anchor == "dungeon"`) instead
+    of fitting the layout to the server rows. The editable list stays
+    `fixtures.csv`, which a dungeon does not have.
     """
     chunks = zone.dungeon_chunks()
     catalog: list[WorldCatalogEntry] = []
@@ -429,13 +433,13 @@ def _dungeon_architecture(
 
 def _city_architecture(
         zone: Zone) -> tuple[list[WorldCatalogEntry], list[WorldFixture]]:
-    """The blocks `city.csv` names, with the `.nhd` box as the anchor.
+    """The blocks `city.csv` names, placed by their own NIF coordinates.
 
     A city has no `fixtures.csv`: `city.csv` names the block meshes and each
-    `camNN.nhd` carries the box the client walks on. The payload exposes that
-    box's centre; the viewer anchors the mesh's own plane centre there
-    (`architecture_anchor == "center"`), because the NIF geometry is centred on
-    its own origin while the block is not.
+    NIF already holds its position in the client's fixed city frame. The
+    `camNN.nhd` beside it is the block's walkable height grid, not a placement
+    anchor, so no row coordinate comes from it. The viewer applies the client's
+    fixed translation and 180-degree yaw once (`architecture_anchor == "city"`).
     """
     catalog: list[WorldCatalogEntry] = []
     fixtures: list[WorldFixture] = []
@@ -448,9 +452,9 @@ def _city_architecture(
         ))
         fixtures.append(WorldFixture(
             id=1_000_000 + index, nif_id=index, name=stem,
-            x=block.x + block.width / 2, y=block.y + block.height / 2, z=0,
-            angle=0, scale=100, radius=0, collide=0, animate=False,
-            ground=False, flip=False, cave=False, unique_id=index,
+            x=0, y=0, z=0, angle=0, scale=100,
+            radius=0, collide=0, animate=False, ground=False, flip=False,
+            cave=False, unique_id=index,
         ))
     return catalog, fixtures
 
@@ -550,9 +554,10 @@ def zone_payload(world: World, zone_id: int) -> WorldZoneInfo:
         patches = None
         if zone.kind == "dungeon":
             architecture_catalog, architecture = _dungeon_architecture(zone)
+            architecture_anchor = "dungeon"
         else:
             architecture_catalog, architecture = _city_architecture(zone)
-            architecture_anchor = "center"
+            architecture_anchor = "city"
         if flat:
             warnings.append(_flat_zone_warning(zone, bool(architecture)))
     else:
@@ -892,29 +897,80 @@ def _export_zone_mesh(zone: Zone, path: str) -> bytes:
     return pack_glb(gltf, bin_bytes)
 
 
+def _internal_texture_dds(blocks: list, source) -> bytes | None:
+    """An embedded `NiPixelData` as an uncompressed A8R8G8B8 DDS.
+
+    4.x city blocks keep palettised wall sheets inside the NIF: the pixel
+    block holds 8-bit indices and a `NiPalette` reference (or straight RGB24
+    pixels). The viewer reads DDS, so decode the first mip level here.
+    """
+    ref = getattr(source, "internal_texture", None)
+    if not isinstance(ref, int) or not 0 <= ref < len(blocks):
+        return None
+    pixels = blocks[ref]
+    if type(pixels).__name__ != "NiPixelData" or not getattr(pixels, "mipmaps", None):
+        return None
+    width, height, offset = pixels.mipmaps[0]
+    count = width * height
+    raw = getattr(pixels, "pixels", b"") or b""
+    if width <= 0 or height <= 0 or len(raw) < offset + count * pixels.bytes_per_pixel:
+        return None
+    rgba = bytearray(count * 4)
+    if pixels.pixel_format == 2 and pixels.bytes_per_pixel == 1:
+        palette_ref = getattr(pixels, "palette", None)
+        if not isinstance(palette_ref, int) or not 0 <= palette_ref < len(blocks):
+            return None
+        palette = getattr(blocks[palette_ref], "palette", b"") or b""
+        if len(palette) < 256 * 4:
+            return None
+        for i, index in enumerate(raw[offset:offset + count]):
+            rgba[i * 4:i * 4 + 4] = palette[index * 4:index * 4 + 4]
+    elif pixels.pixel_format in (0, 1) and pixels.bytes_per_pixel in (3, 4):
+        stride = pixels.bytes_per_pixel
+        source_bytes = raw[offset:offset + count * stride]
+        for i in range(count):
+            base = i * stride
+            rgba[i * 4:i * 4 + 4] = (source_bytes[base:base + 3]
+                                     + (b"\xff" if stride == 3 else source_bytes[base + 3:base + 4]))
+    else:
+        return None
+    return encode_a8r8g8b8(width, height, bytes(rgba))
+
+
 def _zone_textures(zone: Zone, document) -> list[SlotTexture]:
     """Every sheet the NIF names, resolved by stem and embedded by shape.
 
     A name the client ships as TGA/BMP (no DDS) is skipped: the viewer's
     texture path reads DDS, and a broken sheet is worse than none (the mesh
-    renders with its material colour instead).
+    renders with its material colour instead). A block with an embedded
+    `NiPixelData` (4.x cities) gets a synthetic sheet name, carried on the
+    source block so the shape mapping can find it.
     """
     out: list[SlotTexture] = []
     seen: set[str] = set()
-    for block in document.blocks:
+    for index, block in enumerate(document.blocks):
         if type(block).__name__ != "NiSourceTexture":
             continue
         file_name = getattr(block, "file_name", None)
-        if not file_name:
+        if file_name:
+            key = file_name.decode("latin1").lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            sheet = zone.object_texture(key)
+            if sheet is None or not sheet.casefold().endswith(".dds"):
+                continue
+            out.append(SlotTexture(key, os.path.basename(sheet), Path(sheet).read_bytes()))
             continue
-        key = file_name.decode("latin1").lower()
+        key = f"embedded-{index}.dds"
         if key in seen:
             continue
         seen.add(key)
-        sheet = zone.object_texture(key)
-        if sheet is None or not sheet.casefold().endswith(".dds"):
+        data = _internal_texture_dds(document.blocks, block)
+        if data is None:
             continue
-        out.append(SlotTexture(key, os.path.basename(sheet), Path(sheet).read_bytes()))
+        block.embedded_name = key
+        out.append(SlotTexture(key, key, data))
     return out
 
 

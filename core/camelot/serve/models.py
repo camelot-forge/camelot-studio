@@ -252,10 +252,10 @@ class WorldZoneInfo(BaseModel):
     #: not `fixtures.csv` rows.
     architecture: list[WorldFixture] = []
     architecture_catalog: list[WorldCatalogEntry] = []
-    #: `origin` keeps the mesh's own origin (dungeon chunks); `center` puts its
-    #: plane centre on the placement (city blocks are separate meshes whose
-    #: geometry sits around its own origin).
-    architecture_anchor: Literal["origin", "center"] = "origin"
+    #: `origin` keeps the mesh's own placement with no client frame; `city`
+    #: and `dungeon` use the client's fixed frame for that zone type, whose
+    #: root translation and 180-degree yaw the viewer applies once.
+    architecture_anchor: Literal["origin", "city", "dungeon"] = "origin"
     bounds: list[WorldBound] = []
     water: list[WorldWater] = []
     jumps: list[WorldJump] = []

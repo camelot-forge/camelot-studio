@@ -111,6 +111,22 @@ class TestBooleans:
         assert _Reader(struct.pack("<I", 1), old, "t").bool_() is True
 
 
+class TestNiPalette:
+    def test_palette_entries_are_consumed(self):
+        entries = bytes.fromhex("0000ff9b 939bff93".replace(" ", ""))
+        payload = b"\x00" + struct.pack("<I", 2) + entries
+        r = _Reader(payload, 0x04020200, "t.nif")
+        block = r.block("NiPalette")
+        assert block.num_entries == 2
+        assert block.palette == entries
+        assert r.pos == len(payload)
+
+    def test_truncated_palette_is_refused(self):
+        payload = b"\x00" + struct.pack("<I", 2) + b"\x00\x00\x00"
+        with pytest.raises(LegacyFormatError):
+            _Reader(payload, 0x04020200, "t.nif").block("NiPalette")
+
+
 class TestKeygroup:
     def make(self, buf):
         return _Reader(buf, 0x04020200, "t")
