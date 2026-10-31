@@ -625,7 +625,8 @@ Measured 2026-10-11 on the OpenDAoC 1.127 client. The reader is
   on the shipped dungeons, centring the mirrored layout on the server rows puts
   most mobs inside a chunk, while the unmirrored layout leaves them outside.
   The studio renders the chunks, non-editable, with that mirror and the rows
-  as the anchor; `fixtures.csv` (absent in a dungeon) stays the editable list.
+  as the anchor; the client's own floors carry the ground, and `fixtures.csv`
+  (absent in a dungeon) stays the editable list.
 - **`city.csv` + `.nhd`**: `city.csv` rows are `index, filename`; each block's
   `.nhd` sits loose beside its `.npk` and holds `NHD`, a version, the file
   name, a cell size, a box in cells, then the cell data. The box × cell size is
