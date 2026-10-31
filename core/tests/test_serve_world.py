@@ -196,7 +196,7 @@ def test_a_dungeon_zone_places_its_chunks(world):  # noqa: F811
 
 def test_a_city_zone_places_its_blocks(world):  # noqa: F811
     """zone003 is a city: the blocks come from `city.csv` + `.nhd`, anchored
-    on their minimum corner and centred on the rows by the viewer."""
+    on their plane centre and centred on the rows by the viewer."""
     client = client_for(world)
     response = client.get("/api/v1/world/zone/3")
     assert response.status_code == 200
@@ -204,9 +204,9 @@ def test_a_city_zone_places_its_blocks(world):  # noqa: F811
     assert zone["info"]["kind"] == "city"
     assert zone["fixtures"] == []
     assert zone["catalog"] == []
-    assert zone["architecture_anchor"] == "min"
+    assert zone["architecture_anchor"] == "center"
     assert [(block["name"], block["x"], block["y"])
-            for block in zone["architecture"]] == [("cam01", -1344.0, -1344.0)]
+            for block in zone["architecture"]] == [("cam01", 224.0, -224.0)]
     assert [entry["filename"] for entry in zone["architecture_catalog"]] == [
         "cam01.nif"]
     assert zone["terrain"]["width"] == 8
